@@ -68,53 +68,77 @@
                 </div>
             </div>
 
-            <!-- VÍNCULO DE PARTES (Extraído del Directorio de Contactos) -->
-            <div class="md:col-span-2 p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-4">
-                <h4 class="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2 mb-2">
-                    <i data-lucide="users" class="w-4 h-4 text-slate-500"></i> Vinculación de Partes
-                </h4>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div>
-                        <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Demandante (Cliente)</label>
-                        <select name="id_cliente" required class="w-full border border-slate-300 rounded-md p-2 text-sm bg-white focus:border-blue-500 outline-none text-slate-700">
-                            <option value="">-- Seleccione Cliente --</option>
-                            {% for c in contactos %}
-                                {% if c.tipo == 'Cliente' %}
-                                <option value="{{ c.id }}">{{ c.nombre }} ({{ c.id }})</option>
-                                {% endif %}
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Demandado (Deudor)</label>
-                        <select name="id_demandado" required class="w-full border border-slate-300 rounded-md p-2 text-sm bg-white focus:border-blue-500 outline-none text-slate-700">
-                            <option value="">-- Seleccione Contraparte --</option>
-                            {% for c in contactos %}
-                                {% if c.tipo == 'Contraparte' %}
-                                <option value="{{ c.id }}">{{ c.nombre }} ({{ c.id }})</option>
-                                {% endif %}
-                            {% endfor %}
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-<!-- NUEVA SECCIÓN: DATOS DEL INMUEBLE (PH) -->
-<div class="mb-6 bg-green-50 p-4 rounded-lg border border-green-100">
-    <h3 class="text-sm font-bold text-green-800 mb-4 flex items-center gap-2">
-        <i data-lucide="home" class="w-4 h-4"></i> DATOS DEL INMUEBLE (PROPIEDAD HORIZONTAL)
-    </h3>
-    <div class="grid grid-cols-2 gap-4">
+            <!-- BLOQUE 1: PARTES INTERVINIENTES (LITISCONSORCIO) -->
+<div class="bg-blue-50/50 p-5 rounded-lg border border-blue-100 mb-6">
+    <h3 class="font-semibold text-blue-800 mb-4">1. Vinculación de Partes</h3>
+    
+    <div class="grid grid-cols-2 gap-6">
+        <!-- DEMANDANTES -->
         <div>
-            <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Conjunto Residencial *</label>
-            <input type="text" name="conjunto" required placeholder="Ej: Mirador de la Villa" class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-green-500 outline-none">
+            <label class="block text-sm font-bold text-gray-700 mb-2">Demandante(s) / Cliente(s)</label>
+            <!-- Buscador Inteligente (Requiere que le pases la lista desde Jinja2) -->
+            <select name="demandantes_existentes" multiple class="w-full px-3 py-2 border rounded-md mb-2" title="Mantén presionado Ctrl para seleccionar varios">
+                {% for contacto in contactos_clientes %}
+                    <option value="{{ contacto.identificacion }}">{{ contacto.identificacion }} - {{ contacto.nombre }}</option>
+                {% endfor %}
+            </select>
+            
+            <div id="contenedor-nuevos-demandantes" class="space-y-2 mt-2"></div>
+            
+            <button type="button" onclick="agregarFila('demandantes')" class="mt-2 text-sm text-blue-600 font-semibold hover:underline flex items-center gap-1">
+                ➕ Registrar nuevo demandante al vuelo
+            </button>
         </div>
+
+        <!-- DEMANDADOS -->
         <div>
-            <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Torre y Apto *</label>
-            <input type="text" name="apto" required placeholder="Ej: Torre 1 Apto 302" class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-green-500 outline-none">
+            <label class="block text-sm font-bold text-gray-700 mb-2">Demandado(s) / Contraparte(s)</label>
+            <select name="demandados_existentes" multiple class="w-full px-3 py-2 border rounded-md mb-2">
+                {% for contacto in contactos_contrapartes %}
+                    <option value="{{ contacto.identificacion }}">{{ contacto.identificacion }} - {{ contacto.nombre }}</option>
+                {% endfor %}
+            </select>
+            
+            <div id="contenedor-nuevos-demandados" class="space-y-2 mt-2"></div>
+            
+            <button type="button" onclick="agregarFila('demandados')" class="mt-2 text-sm text-blue-600 font-semibold hover:underline flex items-center gap-1">
+                ➕ Registrar nuevo demandado al vuelo
+            </button>
         </div>
     </div>
 </div>
+
+<!-- BLOQUE 2: INMUEBLE EXACTO -->
+<div class="bg-green-50/50 p-5 rounded-lg border border-green-100 mb-6">
+    <h3 class="font-semibold text-green-800 mb-4">2. Propiedad Involucrada (Asignada al primer demandado)</h3>
+    <div class="grid grid-cols-2 gap-4">
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Conjunto Residencial</label>
+            <input type="text" name="conjunto" required placeholder="Ej: Mirador de la Villa" class="w-full px-4 py-2 border rounded-md uppercase">
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Nomenclatura Exacta</label>
+            <input type="text" name="apto" required placeholder="Ej: 25 202" class="w-full px-4 py-2 border rounded-md uppercase">
+        </div>
+    </div>
+</div>
+
+<!-- SCRIPT PARA AÑADIR FILAS DINÁMICAS (Lógica Streamlit adaptada) -->
+<script>
+    function agregarFila(tipo) {
+        const contenedor = document.getElementById(`contenedor-nuevos-${tipo}`);
+        const prefijo = tipo === 'demandantes' ? 'nuevo_dem' : 'nuevo_ddo';
+        
+        const html = `
+            <div class="flex gap-2 items-center bg-white p-2 border rounded">
+                <input type="text" name="${prefijo}_id" placeholder="Cédula/NIT" class="w-1/3 px-2 py-1 border rounded text-sm" required>
+                <input type="text" name="${prefijo}_nombre" placeholder="Nombre completo" class="w-2/3 px-2 py-1 border rounded text-sm uppercase" required>
+                <button type="button" onclick="this.parentElement.remove()" class="text-red-500 font-bold px-2">X</button>
+            </div>
+        `;
+        contenedor.insertAdjacentHTML('beforeend', html);
+    }
+</script>
 
             <!-- FINANZAS Y MEDIDAS -->
             <div>

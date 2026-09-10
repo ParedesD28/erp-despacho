@@ -14,35 +14,77 @@
         </h2>
         
         <form action="/crear_expediente_transaccional" method="POST" class="space-y-8">
-            <!-- BLOQUE 1: DEUDOR -->
-            <div class="bg-blue-50/50 p-5 rounded-lg border border-blue-100">
-                <h3 class="font-semibold text-blue-800 mb-4 flex items-center gap-2"><i data-lucide="user" class="w-5 h-5"></i> 1. Datos del Deudor / Contraparte</h3>
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Cédula / NIT</label>
-                        <input type="text" name="cedula_deudor" required class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Nombre Completo</label>
-                        <input type="text" name="nombre_deudor" required class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
-                    </div>
-                </div>
-            </div>
+            <!-- BLOQUE 1: PARTES INTERVINIENTES (LITISCONSORCIO) -->
+<div class="bg-blue-50/50 p-5 rounded-lg border border-blue-100 mb-6">
+    <h3 class="font-semibold text-blue-800 mb-4">1. Vinculación de Partes</h3>
+    
+    <div class="grid grid-cols-2 gap-6">
+        <!-- DEMANDANTES -->
+        <div>
+            <label class="block text-sm font-bold text-gray-700 mb-2">Demandante(s) / Cliente(s)</label>
+            <!-- Buscador Inteligente (Requiere que le pases la lista desde Jinja2) -->
+            <select name="demandantes_existentes" multiple class="w-full px-3 py-2 border rounded-md mb-2" title="Mantén presionado Ctrl para seleccionar varios">
+                {% for contacto in contactos_clientes %}
+                    <option value="{{ contacto.identificacion }}">{{ contacto.identificacion }} - {{ contacto.nombre }}</option>
+                {% endfor %}
+            </select>
+            
+            <div id="contenedor-nuevos-demandantes" class="space-y-2 mt-2"></div>
+            
+            <button type="button" onclick="agregarFila('demandantes')" class="mt-2 text-sm text-blue-600 font-semibold hover:underline flex items-center gap-1">
+                ➕ Registrar nuevo demandante al vuelo
+            </button>
+        </div>
 
-            <!-- BLOQUE 2: INMUEBLE -->
-            <div class="bg-green-50/50 p-5 rounded-lg border border-green-100">
-                <h3 class="font-semibold text-green-800 mb-4 flex items-center gap-2"><i data-lucide="home" class="w-5 h-5"></i> 2. Propiedad Involucrada (PH)</h3>
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Conjunto Residencial</label>
-                        <input type="text" name="conjunto" required class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-green-500 outline-none">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Torre y Apto (Nomenclatura)</label>
-                        <input type="text" name="apto" required placeholder="Ej: Torre 2 Apto 401" class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-green-500 outline-none">
-                    </div>
-                </div>
+        <!-- DEMANDADOS -->
+        <div>
+            <label class="block text-sm font-bold text-gray-700 mb-2">Demandado(s) / Contraparte(s)</label>
+            <select name="demandados_existentes" multiple class="w-full px-3 py-2 border rounded-md mb-2">
+                {% for contacto in contactos_contrapartes %}
+                    <option value="{{ contacto.identificacion }}">{{ contacto.identificacion }} - {{ contacto.nombre }}</option>
+                {% endfor %}
+            </select>
+            
+            <div id="contenedor-nuevos-demandados" class="space-y-2 mt-2"></div>
+            
+            <button type="button" onclick="agregarFila('demandados')" class="mt-2 text-sm text-blue-600 font-semibold hover:underline flex items-center gap-1">
+                ➕ Registrar nuevo demandado al vuelo
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- BLOQUE 2: INMUEBLE EXACTO -->
+<div class="bg-green-50/50 p-5 rounded-lg border border-green-100 mb-6">
+    <h3 class="font-semibold text-green-800 mb-4">2. Propiedad Involucrada (Asignada al primer demandado)</h3>
+    <div class="grid grid-cols-2 gap-4">
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Conjunto Residencial</label>
+            <input type="text" name="conjunto" required placeholder="Ej: Mirador de la Villa" class="w-full px-4 py-2 border rounded-md uppercase">
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Nomenclatura Exacta</label>
+            <input type="text" name="apto" required placeholder="Ej: 25 202" class="w-full px-4 py-2 border rounded-md uppercase">
+        </div>
+    </div>
+</div>
+
+<!-- SCRIPT PARA AÑADIR FILAS DINÁMICAS (Lógica Streamlit adaptada) -->
+<script>
+    function agregarFila(tipo) {
+        const contenedor = document.getElementById(`contenedor-nuevos-${tipo}`);
+        const prefijo = tipo === 'demandantes' ? 'nuevo_dem' : 'nuevo_ddo';
+        
+        const html = `
+            <div class="flex gap-2 items-center bg-white p-2 border rounded">
+                <input type="text" name="${prefijo}_id" placeholder="Cédula/NIT" class="w-1/3 px-2 py-1 border rounded text-sm" required>
+                <input type="text" name="${prefijo}_nombre" placeholder="Nombre completo" class="w-2/3 px-2 py-1 border rounded text-sm uppercase" required>
+                <button type="button" onclick="this.parentElement.remove()" class="text-red-500 font-bold px-2">X</button>
             </div>
+        `;
+        contenedor.insertAdjacentHTML('beforeend', html);
+    }
+</script>
 
             <!-- BLOQUE 3: PROCESO -->
             <div class="bg-purple-50/50 p-5 rounded-lg border border-purple-100">
