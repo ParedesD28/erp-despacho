@@ -1143,19 +1143,29 @@ async def guardar_proceso(
     except Exception as e:
         print(f"❌ Error guardando proceso: {e}")
         
-    return RedirectResponse(url="/procesos", status_code=303)
-@app.get("/nuevo_expediente")
-def vista_nuevo_expediente(request: Request):
-    # Dibuja el formulario en pantalla
-    return templates.TemplateResponse(request=request, name="nuevo_expediente.html", context={})
+   from typing import List
+import re
 
-@app.post("/crear_expediente_transaccional")
-def crear_expediente_transaccional(
+def limpiar_identificacion(texto: str) -> str:
+    """Rescatada del código antiguo: limpia puntos y comas de la cédula"""
+    if not texto: return ""
+    return re.sub(r'[.,\s]', '', str(texto)).strip().upper()
+
+@app.post("/crear_expediente_completo")
+def crear_expediente_completo(
     request: Request,
-    cedula_deudor: str = Form(...),
-    nombre_deudor: str = Form(...),
+    # Capturamos múltiples selecciones (Litisconsorcio)
+    demandantes_existentes: List[str] = Form(default=[]),
+    nuevo_dem_id: List[str] = Form(default=[]),
+    nuevo_dem_nombre: List[str] = Form(default=[]),
+    
+    demandados_existentes: List[str] = Form(default=[]),
+    nuevo_ddo_id: List[str] = Form(default=[]),
+    nuevo_ddo_nombre: List[str] = Form(default=[]),
+    
+    # Datos del Inmueble y Proceso
     conjunto: str = Form(...),
-    apto: str = Form(...),
+    apto: str = Form(...),  # Aquí viajará el "25 202"
     naturaleza: str = Form(...),
     radicado_rama: str = Form(...)
 ):
@@ -1163,38 +1173,68 @@ def crear_expediente_transaccional(
         with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
             with conn.cursor() as cur:
                 
-                # 1. Guardar Contacto y atrapar su ID
-                cur.execute("""
-                    INSERT INTO contactos (identificacion, nombre, tipo, ciudad) 
-                    VALUES (%s, %s, 'Contraparte', 'PEREIRA') 
-                    RETURNING id;
-                """, (cedula_deudor, nombre_deudor.upper()))
-                contacto_id = cur.fetchone()[0]
+                # --- 1. PROCESAR DEMANDANTES ---
+                ids_demandantes = list(demandantes_existentes)
+                for c_id, c_nom in zip(nuevo_dem_id, nuevo_dem_nombre):
+                    id_limpio = limpiar_identificacion(c_id)
+                    cur.execute("""
+                        INSERT INTO contactos (identificacion, nombre, tipo, ciudad) 
+                        VALUES (%s, %s, 'Cliente', 'PEREIRA') 
+                        ON CONFLICT DO NOTHING;
+                    """, (id_limpio, c_nom.strip().upper()))
+                    ids_demandantes.append(id_limpio)
                 
-                # 2. Guardar Inmueble amarrado al Contacto y atrapar su ID
+                # --- 2. PROCESAR DEMANDADOS ---
+                ids_demandados = list(demandados_existentes)
+                nombres_demandados_nuevos = [] # Para el campo 'demandado' de la tabla procesos
+                
+                for d_id, d_nom in zip(nuevo_ddo_id, nuevo_ddo_nombre):
+                    id_limpio = limpiar_identificacion(d_id)
+                    nombre_limpio = d_nom.strip().upper()
+                    cur.execute("""
+                        INSERT INTO contactos (identificacion, nombre, tipo, ciudad) 
+                        VALUES (%s, %s, 'Contraparte', 'PEREIRA') 
+                        ON CONFLICT DO NOTHING;
+                    """, (id_limpio, nombre_limpio))
+                    ids_demandados.append(id_limpio)
+                    nombres_demandados_nuevos.append(nombre_limpio)
+                
+                # Rescatamos la lógica antigua de concatenación
+                id_cliente_final = " | ".join(ids_demandantes)
+                id_demandado_final = " | ".join(ids_demandados)
+                
+                # --- 3. CREAR EL INMUEBLE (El eslabón perdido) ---
+                # Asumimos que el Inmueble le pertenece al PRIMER demandado de la lista
+                deudor_principal_cedula = ids_demandados[0]
+                
+                # Buscamos el ID interno (Primary Key) de ese deudor
+                cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (deudor_principal_cedula,))
+                resultado_contacto = cur.fetchone()
+                contacto_id_interno = resultado_contacto[0] if resultado_contacto else None
+                
+                # Guardamos el Inmueble relacionalmente sin dañar el formato "25 202"
                 cur.execute("""
                     INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) 
-                    VALUES (%s, %s, %s) 
-                    RETURNING id;
-                """, (contacto_id, conjunto.upper(), apto.upper()))
-                inmueble_id = cur.fetchone()[0]
+                    VALUES (%s, %s, %s) RETURNING id;
+                """, (contacto_id_interno, conjunto.strip().upper(), apto.strip().upper()))
+                nuevo_inmueble_id = cur.fetchone()[0]
                 
-                # 3. Crear Radicado Interno Automático (Ej: EXP-001)
+                # --- 4. CREAR EL PROCESO ---
                 cur.execute("SELECT nextval('radicado_seq')")
-                numero_seq = cur.fetchone()[0]
-                radicado_interno = f"EXP-{numero_seq:04d}"
+                radicado_interno = f"EXP-{cur.fetchone()[0]:04d}"
                 
-                # 4. Guardar Proceso amarrado al Inmueble
                 cur.execute("""
-                    INSERT INTO procesos (radicado_interno, radicado_rama, naturaleza, inmueble_id, estado) 
-                    VALUES (%s, %s, %s, %s, 'Activo')
-                """, (radicado_interno, radicado_rama, naturaleza, inmueble_id))
+                    INSERT INTO procesos (
+                        radicado_interno, radicado_rama, naturaleza, 
+                        id_cliente, id_demandado, estado, inmueble_id
+                    ) VALUES (%s, %s, %s, %s, %s, 'Activo', %s)
+                """, (radicado_interno, radicado_rama, naturaleza, id_cliente_final, id_demandado_final, nuevo_inmueble_id))
                 
-            # Todo salió bien, confirmamos la transacción
+            # Sellamos la base de datos
             conn.commit()
             
-        return HTMLResponse(f"<h1 style='color:green; font-family:sans-serif;'>✅ Expediente {radicado_interno} creado exitosamente y enlazado.</h1> <a href='/nuevo_expediente'>Volver</a>")
+        return HTMLResponse(f"✅ Proceso {radicado_interno} creado exitosamente con sus partes e inmueble.")
         
     except Exception as e:
-        print(f"Error en transacción: {e}")
-        return HTMLResponse("❌ Hubo un error al procesar la información. Intente de nuevo.")
+        print(f"Error: {e}")
+        return HTMLResponse("❌ Error al procesar el expediente.")
