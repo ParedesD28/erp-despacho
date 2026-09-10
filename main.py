@@ -1,3 +1,5 @@
+import psycopg2
+from psycopg2.extras import RealDictCursor # Asegúrate de tener esto arriba del todo
 from typing import List
 import re
 import json
@@ -1066,47 +1068,36 @@ async def guardar_contacto(
 # ==============================================================================
 # --- MÓDULO DE PROCESOS JUDICIALES ---
 # ==============================================================================
-@app.get("/procesos")
+
+@app.get("/procesos") # O el nombre que tenga tu ruta para abrir esta pantalla
 def vista_procesos(request: Request):
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    cur = conn.cursor()
-    
-    # 1. Cargar lista de contactos para los menús desplegables (Cliente y Demandado)
-    cur.execute("SELECT identificacion, nombre, tipo FROM contactos ORDER BY nombre ASC")
-    todos_contactos = [{"id": r[0], "nombre": r[1], "tipo": r[2]} for r in cur.fetchall()]
-    
-    # 2. Cargar historial de procesos existentes para la lista lateral
-    cur.execute("SELECT radicado_interno, radicado_rama, demandado, etapa_actual, juzgado FROM procesos ORDER BY radicado_interno DESC")
-    lista_procesos = [{"interno": r[0], "rama": r[1], "demandado": r[2], "etapa": r[3], "juzgado": r[4]} for r in cur.fetchall()]
-    
-    # 3. LÓGICA DEL CONSECUTIVO AUTOMÁTICO (EXP-XXXX)
-    cur.execute("SELECT radicado_interno FROM procesos")
-    todos_radicados = cur.fetchall()
-    max_num = 0
-    for r in todos_radicados:
-        try:
-            # Extraemos el número después del "EXP-"
-            num = int(r[0].split("-")[1])
-            if num > max_num:
-                max_num = num
-        except:
-            pass
-            
-    # Sumamos 1 al mayor número encontrado (Formato de 4 ceros: EXP-0001)
-    siguiente_radicado = f"EXP-{max_num + 1:04d}"
-    
-    cur.close()
-    conn.close()
-    
-    return templates.TemplateResponse(
-        request=request, 
-        name="procesos.html", 
-        context={
-            "siguiente_radicado": siguiente_radicado,
-            "contactos": todos_contactos,
-            "lista_procesos": lista_procesos
-        }
-    )
+    try:
+        with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # 1. Traer Clientes
+                cur.execute("SELECT identificacion, nombre FROM contactos WHERE tipo = 'Cliente' ORDER BY nombre ASC")
+                clientes = cur.fetchall()
+                
+                # 2. Traer Contrapartes
+                cur.execute("SELECT identificacion, nombre FROM contactos WHERE tipo = 'Contraparte' ORDER BY nombre ASC")
+                contrapartes = cur.fetchall()
+
+                # 3. Traer Abogados (Para el nuevo campo que faltaba)
+                cur.execute("SELECT id, nombre FROM abogados ORDER BY nombre ASC")
+                abogados = cur.fetchall()
+                
+        return templates.TemplateResponse(
+            "procesos.html", 
+            {
+                "request": request, 
+                "contactos_clientes": clientes, 
+                "contactos_contrapartes": contrapartes,
+                "abogados": abogados
+            }
+        )
+    except Exception as e:
+        print(f"Error cargando datos de Neon: {e}")
+        return templates.TemplateResponse("procesos.html", {"request": request, "contactos_clientes": [], "contactos_contrapartes": [], "abogados": []})
 
 @app.post("/procesos/guardar")
 async def guardar_proceso(
@@ -1153,86 +1144,68 @@ def limpiar_identificacion(texto: str) -> str:
 @app.post("/crear_expediente_completo")
 def crear_expediente_completo(
     request: Request,
-    # Capturamos múltiples selecciones (Litisconsorcio)
     demandantes_existentes: List[str] = Form(default=[]),
     nuevo_dem_id: List[str] = Form(default=[]),
     nuevo_dem_nombre: List[str] = Form(default=[]),
-    
     demandados_existentes: List[str] = Form(default=[]),
     nuevo_ddo_id: List[str] = Form(default=[]),
     nuevo_ddo_nombre: List[str] = Form(default=[]),
     
-    # Datos del Inmueble y Proceso
     conjunto: str = Form(...),
-    apto: str = Form(...),  # Aquí viajará el "25 202"
+    apto: str = Form(...),
     naturaleza: str = Form(...),
-    radicado_rama: str = Form(...)
+    radicado_rama: str = Form(...),
+    
+    # --- LOS CAMPOS NUEVOS QUE FALTABAN ---
+    juzgado: str = Form(...),
+    pretensiones: float = Form(0.0),
+    abogado_id: int = Form(...),
+    medidas_cautelares: str = Form("")
 ):
     try:
         with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
             with conn.cursor() as cur:
                 
-                # --- 1. PROCESAR DEMANDANTES ---
+                # 1. PROCESAR DEMANDANTES
                 ids_demandantes = list(demandantes_existentes)
                 for c_id, c_nom in zip(nuevo_dem_id, nuevo_dem_nombre):
                     id_limpio = limpiar_identificacion(c_id)
-                    cur.execute("""
-                        INSERT INTO contactos (identificacion, nombre, tipo, ciudad) 
-                        VALUES (%s, %s, 'Cliente', 'PEREIRA') 
-                        ON CONFLICT DO NOTHING;
-                    """, (id_limpio, c_nom.strip().upper()))
+                    cur.execute("INSERT INTO contactos (identificacion, nombre, tipo, ciudad) VALUES (%s, %s, 'Cliente', 'PEREIRA') ON CONFLICT DO NOTHING;", (id_limpio, c_nom.strip().upper()))
                     ids_demandantes.append(id_limpio)
                 
-                # --- 2. PROCESAR DEMANDADOS ---
+                # 2. PROCESAR DEMANDADOS
                 ids_demandados = list(demandados_existentes)
-                nombres_demandados_nuevos = [] # Para el campo 'demandado' de la tabla procesos
-                
                 for d_id, d_nom in zip(nuevo_ddo_id, nuevo_ddo_nombre):
                     id_limpio = limpiar_identificacion(d_id)
-                    nombre_limpio = d_nom.strip().upper()
-                    cur.execute("""
-                        INSERT INTO contactos (identificacion, nombre, tipo, ciudad) 
-                        VALUES (%s, %s, 'Contraparte', 'PEREIRA') 
-                        ON CONFLICT DO NOTHING;
-                    """, (id_limpio, nombre_limpio))
+                    cur.execute("INSERT INTO contactos (identificacion, nombre, tipo, ciudad) VALUES (%s, %s, 'Contraparte', 'PEREIRA') ON CONFLICT DO NOTHING;", (id_limpio, d_nom.strip().upper()))
                     ids_demandados.append(id_limpio)
-                    nombres_demandados_nuevos.append(nombre_limpio)
                 
-                # Rescatamos la lógica antigua de concatenación
                 id_cliente_final = " | ".join(ids_demandantes)
                 id_demandado_final = " | ".join(ids_demandados)
                 
-                # --- 3. CREAR EL INMUEBLE (El eslabón perdido) ---
-                # Asumimos que el Inmueble le pertenece al PRIMER demandado de la lista
+                # 3. CREAR EL INMUEBLE (Asignado al primer demandado)
                 deudor_principal_cedula = ids_demandados[0]
-                
-                # Buscamos el ID interno (Primary Key) de ese deudor
                 cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (deudor_principal_cedula,))
                 resultado_contacto = cur.fetchone()
                 contacto_id_interno = resultado_contacto[0] if resultado_contacto else None
                 
-                # Guardamos el Inmueble relacionalmente sin dañar el formato "25 202"
-                cur.execute("""
-                    INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) 
-                    VALUES (%s, %s, %s) RETURNING id;
-                """, (contacto_id_interno, conjunto.strip().upper(), apto.strip().upper()))
+                cur.execute("INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) VALUES (%s, %s, %s) RETURNING id;", (contacto_id_interno, conjunto.strip().upper(), apto.strip().upper()))
                 nuevo_inmueble_id = cur.fetchone()[0]
                 
-                # --- 4. CREAR EL PROCESO ---
+                # 4. CREAR EL PROCESO (Ahora con todos los campos)
                 cur.execute("SELECT nextval('radicado_seq')")
                 radicado_interno = f"EXP-{cur.fetchone()[0]:04d}"
                 
                 cur.execute("""
                     INSERT INTO procesos (
-                        radicado_interno, radicado_rama, naturaleza, 
-                        id_cliente, id_demandado, estado, inmueble_id
-                    ) VALUES (%s, %s, %s, %s, %s, 'Activo', %s)
-                """, (radicado_interno, radicado_rama, naturaleza, id_cliente_final, id_demandado_final, nuevo_inmueble_id))
+                        radicado_interno, radicado_rama, naturaleza, juzgado, 
+                        id_cliente, id_demandado, estado, pretensiones, 
+                        medidas_cautelares, abogado_id, inmueble_id
+                    ) VALUES (%s, %s, %s, %s, %s, %s, 'Activo', %s, %s, %s, %s)
+                """, (radicado_interno, radicado_rama, naturaleza, juzgado, id_cliente_final, id_demandado_final, pretensiones, medidas_cautelares, abogado_id, nuevo_inmueble_id))
                 
-            # Sellamos la base de datos
             conn.commit()
-            
-        return HTMLResponse(f"✅ Proceso {radicado_interno} creado exitosamente con sus partes e inmueble.")
+        return RedirectResponse(url="/procesos", status_code=303)
         
     except Exception as e:
         print(f"Error: {e}")
