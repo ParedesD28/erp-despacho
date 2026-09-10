@@ -1,172 +1,117 @@
 {% extends "base.html" %}
 
 {% block contenido %}
+<!-- LIBRERÍAS DEL BUSCADOR INTELIGENTE (Tom Select) -->
+<link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.default.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
+<style>
+    .ts-control { border-radius: 0.375rem; border-color: #e5e7eb; padding: 0.5rem 0.75rem; }
+    .ts-control.focus { border-color: #0d9488; box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.2); }
+</style>
+
 <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm">
-    <h2 class="text-xl font-semibold text-slate-800">Gestión de Procesos Judiciales</h2>
+    <h2 class="text-xl font-semibold text-slate-800">Radicación de Expedientes</h2>
 </header>
 
-<div class="p-8 grid grid-cols-1 xl:grid-cols-12 gap-8 items-start h-[calc(100vh-4rem)] overflow-y-auto">
-    
-    <!-- COLUMNA IZQUIERDA: LISTA DE EXPEDIENTES -->
-    <div class="xl:col-span-4 bg-white rounded-xl shadow-sm border border-slate-200 p-6 sticky top-0 h-[calc(100vh-8rem)] overflow-y-auto">
-        <h3 class="text-md font-bold text-slate-800 mb-4 flex items-center gap-2">
-            <i data-lucide="folder-open" class="w-5 h-5 text-blue-600"></i> Expedientes Activos
-        </h3>
+<div class="p-8 h-[calc(100vh-4rem)] overflow-y-auto">
+    <!-- FORMULARIO A PANTALLA COMPLETA -->
+    <div class="max-w-5xl mx-auto bg-white p-8 rounded-xl shadow-sm border border-slate-200">
         
-        <div class="space-y-4">
-            {% for p in lista_procesos %}
-            <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 shadow-sm relative overflow-hidden group hover:border-blue-300 transition-colors cursor-pointer">
-                <div class="absolute left-0 top-0 bottom-0 w-1 bg-blue-500"></div>
-                <div class="flex justify-between items-start mb-1">
-                    <span class="text-xs font-bold px-2 py-1 bg-blue-100 text-blue-800 rounded">{{ p.interno }}</span>
-                    <span class="text-[10px] font-mono text-slate-500 bg-slate-200 px-1.5 py-0.5 rounded">{{ p.rama[-5:] }}</span> <!-- Últimos 5 dígitos -->
-                </div>
-                <p class="text-sm font-bold text-slate-800 mt-2 truncate" title="{{ p.demandado }}">{{ p.demandado }}</p>
-                <p class="text-[10px] text-slate-500 uppercase truncate mt-1"><i data-lucide="scale" class="inline w-3 h-3 mb-0.5"></i> {{ p.juzgado }}</p>
-            </div>
-            {% else %}
-            <p class="text-sm text-slate-400 text-center py-4">No hay procesos registrados.</p>
-            {% endfor %}
-        </div>
-    </div>
-
-    <!-- COLUMNA DERECHA: FORMULARIO DE CREACIÓN -->
-    <div class="xl:col-span-8 bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-        
-        <h3 class="text-md font-bold text-emerald-700 mb-6 flex items-center gap-2 border-b border-slate-100 pb-4">
-            <i data-lucide="gavel" class="w-5 h-5"></i> Radicar Nuevo Expediente
-        </h3>
-        
-        <form method="POST" action="/procesos/guardar" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <form method="POST" action="/crear_expediente_completo" class="space-y-6">
             
-            <!-- DATOS DE IDENTIFICACIÓN DEL PROCESO -->
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Consecutivo Interno</label>
-                <!-- 🔥 Este campo está en readonly para proteger el consecutivo automático -->
-                <input type="text" name="radicado_interno" value="{{ siguiente_radicado }}" readonly class="w-full border border-slate-200 rounded-md p-2.5 text-sm bg-slate-100 outline-none text-blue-700 font-bold cursor-not-allowed text-center tracking-widest shadow-inner">
-            </div>
-            
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Radicado Rama Judicial (23 Digitos) <span class="text-red-500">*</span></label>
-                <input type="text" name="radicado_rama" required placeholder="Ej: 66001400300220260012300" minlength="23" maxlength="23" class="w-full border border-slate-300 rounded-md p-2.5 text-sm bg-slate-50 focus:border-blue-500 outline-none text-slate-700 font-mono">
-            </div>
-
-            <!-- JUZGADO Y NATURALEZA -->
-            <div class="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- DATOS BÁSICOS -->
+            <div class="grid grid-cols-2 gap-6">
                 <div>
-                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Juzgado de Conocimiento <span class="text-red-500">*</span></label>
-                    <input type="text" name="juzgado" required placeholder="Ej: JUZGADO PRIMERO CIVIL MUNICIPAL..." class="w-full border border-slate-300 rounded-md p-2.5 text-sm bg-slate-50 focus:border-blue-500 outline-none text-slate-700 uppercase">
+                    <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Radicado Rama Judicial *</label>
+                    <input type="text" name="radicado_rama" value="EN REPARTO" required class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-teal-500 outline-none uppercase font-mono">
                 </div>
                 <div>
-                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Naturaleza <span class="text-red-500">*</span></label>
-                    <select name="naturaleza" required class="w-full border border-slate-300 rounded-md p-2.5 text-sm bg-slate-50 focus:border-blue-500 outline-none text-slate-700 uppercase">
+                    <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Naturaleza *</label>
+                    <select name="naturaleza" required class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-teal-500 outline-none uppercase">
                         <option value="EJECUTIVO SINGULAR">Ejecutivo Singular</option>
                         <option value="EJECUTIVO HIPOTECARIO">Ejecutivo Hipotecario</option>
                         <option value="CIVIL: VERBAL">Civil: Verbal</option>
-                        <option value="CIVIL: VERBAL SUMARIO">Civil: Verbal Sumario</option>
                     </select>
                 </div>
             </div>
 
-            <!-- BLOQUE 1: PARTES INTERVINIENTES (LITISCONSORCIO) -->
-<div class="bg-blue-50/50 p-5 rounded-lg border border-blue-100 mb-6">
-    <h3 class="font-semibold text-blue-800 mb-4">1. Vinculación de Partes</h3>
-    
-    <div class="grid grid-cols-2 gap-6">
-        <!-- DEMANDANTES -->
-        <div>
-            <label class="block text-sm font-bold text-gray-700 mb-2">Demandante(s) / Cliente(s)</label>
-            <!-- Buscador Inteligente (Requiere que le pases la lista desde Jinja2) -->
-            <select name="demandantes_existentes" multiple class="w-full px-3 py-2 border rounded-md mb-2" title="Mantén presionado Ctrl para seleccionar varios">
-                {% for contacto in contactos_clientes %}
-                    <option value="{{ contacto.identificacion }}">{{ contacto.identificacion }} - {{ contacto.nombre }}</option>
-                {% endfor %}
-            </select>
-            
-            <div id="contenedor-nuevos-demandantes" class="space-y-2 mt-2"></div>
-            
-            <button type="button" onclick="agregarFila('demandantes')" class="mt-2 text-sm text-blue-600 font-semibold hover:underline flex items-center gap-1">
-                ➕ Registrar nuevo demandante al vuelo
-            </button>
-        </div>
+            <!-- VINCULACIÓN DE PARTES (CON BUSCADOR) -->
+            <div class="bg-blue-50/50 p-5 rounded-lg border border-blue-100">
+                <h3 class="font-semibold text-blue-800 mb-4 flex items-center gap-2"><i data-lucide="users" class="w-5 h-5"></i> 1. Vinculación de Partes</h3>
+                
+                <div class="grid grid-cols-2 gap-6">
+                    <!-- DEMANDANTES -->
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-2">Demandante(s) / Cliente(s)</label>
+                        <select id="select-demandantes" name="demandantes_existentes" multiple placeholder="Buscar por nombre o cédula..." autocomplete="off">
+                            {% for cliente in contactos_clientes %}
+                                <option value="{{ cliente.identificacion }}">{{ cliente.identificacion }} - {{ cliente.nombre }}</option>
+                            {% endfor %}
+                        </select>
+                        
+                        <div id="contenedor-nuevos-demandantes" class="space-y-2 mt-3"></div>
+                        <button type="button" onclick="agregarFila('demandantes')" class="mt-2 text-sm text-blue-600 font-semibold hover:underline flex items-center gap-1">
+                            ➕ Crear nuevo demandante al vuelo
+                        </button>
+                    </div>
 
-        <!-- DEMANDADOS -->
-        <div>
-            <label class="block text-sm font-bold text-gray-700 mb-2">Demandado(s) / Contraparte(s)</label>
-            <select name="demandados_existentes" multiple class="w-full px-3 py-2 border rounded-md mb-2">
-                {% for contacto in contactos_contrapartes %}
-                    <option value="{{ contacto.identificacion }}">{{ contacto.identificacion }} - {{ contacto.nombre }}</option>
-                {% endfor %}
-            </select>
-            
-            <div id="contenedor-nuevos-demandados" class="space-y-2 mt-2"></div>
-            
-            <button type="button" onclick="agregarFila('demandados')" class="mt-2 text-sm text-blue-600 font-semibold hover:underline flex items-center gap-1">
-                ➕ Registrar nuevo demandado al vuelo
-            </button>
-        </div>
-    </div>
-</div>
-
-<!-- BLOQUE 2: INMUEBLE EXACTO -->
-<div class="bg-green-50/50 p-5 rounded-lg border border-green-100 mb-6">
-    <h3 class="font-semibold text-green-800 mb-4">2. Propiedad Involucrada (Asignada al primer demandado)</h3>
-    <div class="grid grid-cols-2 gap-4">
-        <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Conjunto Residencial</label>
-            <input type="text" name="conjunto" required placeholder="Ej: Mirador de la Villa" class="w-full px-4 py-2 border rounded-md uppercase">
-        </div>
-        <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Nomenclatura Exacta</label>
-            <input type="text" name="apto" required placeholder="Ej: 25 202" class="w-full px-4 py-2 border rounded-md uppercase">
-        </div>
-    </div>
-</div>
-
-<!-- SCRIPT PARA AÑADIR FILAS DINÁMICAS (Lógica Streamlit adaptada) -->
-<script>
-    function agregarFila(tipo) {
-        const contenedor = document.getElementById(`contenedor-nuevos-${tipo}`);
-        const prefijo = tipo === 'demandantes' ? 'nuevo_dem' : 'nuevo_ddo';
-        
-        const html = `
-            <div class="flex gap-2 items-center bg-white p-2 border rounded">
-                <input type="text" name="${prefijo}_id" placeholder="Cédula/NIT" class="w-1/3 px-2 py-1 border rounded text-sm" required>
-                <input type="text" name="${prefijo}_nombre" placeholder="Nombre completo" class="w-2/3 px-2 py-1 border rounded text-sm uppercase" required>
-                <button type="button" onclick="this.parentElement.remove()" class="text-red-500 font-bold px-2">X</button>
-            </div>
-        `;
-        contenedor.insertAdjacentHTML('beforeend', html);
-    }
-</script>
-
-            <!-- FINANZAS Y MEDIDAS -->
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Pretensiones (Capital) $ <span class="text-red-500">*</span></label>
-                <input type="number" step="0.01" name="pretensiones" required placeholder="Ej: 1524238.00" class="w-full border border-slate-300 rounded-md p-2.5 text-sm bg-slate-50 focus:border-blue-500 outline-none text-slate-700 font-mono">
-            </div>
-            
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Abogado Asignado (ID) <span class="text-red-500">*</span></label>
-                <select name="abogado_id" required class="w-full border border-slate-300 rounded-md p-2.5 text-sm bg-slate-50 focus:border-blue-500 outline-none text-slate-700">
-                    <option value="1">1 - Abogado Principal</option>
-                    <option value="2">2 - Abogado Junior</option>
-                    <option value="3">3 - Abogado Externo</option>
-                </select>
+                    <!-- DEMANDADOS -->
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-2">Demandado(s) / Contraparte(s)</label>
+                        <select id="select-demandados" name="demandados_existentes" multiple placeholder="Buscar por nombre o cédula..." autocomplete="off">
+                            {% for contraparte in contactos_contrapartes %}
+                                <option value="{{ contraparte.identificacion }}">{{ contraparte.identificacion }} - {{ contraparte.nombre }}</option>
+                            {% endfor %}
+                        </select>
+                        
+                        <div id="contenedor-nuevos-demandados" class="space-y-2 mt-3"></div>
+                        <button type="button" onclick="agregarFila('demandados')" class="mt-2 text-sm text-blue-600 font-semibold hover:underline flex items-center gap-1">
+                            ➕ Crear nuevo demandado al vuelo
+                        </button>
+                    </div>
+                </div>
             </div>
 
-            <div class="md:col-span-2">
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Medidas Cautelares</label>
-                <textarea name="medidas_cautelares" rows="2" placeholder="Ej: CUENTAS BANCARIAS | ESTABLECIMIENTO DE COMERCIO..." class="w-full border border-slate-300 rounded-md p-3 text-sm bg-slate-50 focus:border-blue-500 outline-none text-slate-700 uppercase"></textarea>
+            <!-- INMUEBLE -->
+            <div class="bg-green-50/50 p-5 rounded-lg border border-green-100">
+                <h3 class="font-semibold text-green-800 mb-4">2. Propiedad Involucrada</h3>
+                <div class="grid grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Conjunto Residencial</label>
+                        <input type="text" name="conjunto" required placeholder="Ej: Mirador de la Villa" class="w-full px-4 py-2 border rounded-md uppercase">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Nomenclatura Exacta</label>
+                        <input type="text" name="apto" required placeholder="Ej: 25 202" class="w-full px-4 py-2 border rounded-md uppercase">
+                    </div>
+                </div>
             </div>
 
-            <!-- BOTÓN GUARDAR -->
-            <div class="md:col-span-2 flex justify-end mt-2 pt-6 border-t border-slate-100">
-                <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-8 rounded-md transition-colors shadow-md flex items-center gap-2">
-                    <i data-lucide="check-circle" class="w-4 h-4"></i> Radicar Proceso
+            <div class="flex justify-end pt-4">
+                <button type="submit" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-8 rounded-lg shadow-md transition-colors flex items-center gap-2">
+                    <i data-lucide="check-circle" class="w-5 h-5"></i> Radicar Proceso Completo
                 </button>
             </div>
         </form>
     </div>
 </div>
+
+<script>
+    // Iniciar Buscadores
+    new TomSelect("#select-demandantes",{ plugins: ['remove_button'], create: false, sortField: { field: "text", direction: "asc" }});
+    new TomSelect("#select-demandados",{ plugins: ['remove_button'], create: false, sortField: { field: "text", direction: "asc" }});
+
+    // Añadir filas al vuelo
+    function agregarFila(tipo) {
+        const contenedor = document.getElementById(`contenedor-nuevos-${tipo}`);
+        const prefijo = tipo === 'demandantes' ? 'nuevo_dem' : 'nuevo_ddo';
+        const html = `
+            <div class="flex gap-2 items-center bg-white p-2 border rounded shadow-sm">
+                <input type="text" name="${prefijo}_id" placeholder="Cédula/NIT" class="w-1/3 px-2 py-1.5 border rounded text-sm outline-none focus:border-teal-500" required>
+                <input type="text" name="${prefijo}_nombre" placeholder="Nombre completo" class="w-2/3 px-2 py-1.5 border rounded text-sm uppercase outline-none focus:border-teal-500" required>
+                <button type="button" onclick="this.parentElement.remove()" class="text-red-500 font-bold px-3 py-1 hover:bg-red-50 rounded">X</button>
+            </div>`;
+        contenedor.insertAdjacentHTML('beforeend', html);
+    }
+</script>
 {% endblock %}
