@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+pandas
+openpyxl
+xlrd
+psycopg2-binary
+jinja2
+python-dotenv
+bcrypt
+requests
