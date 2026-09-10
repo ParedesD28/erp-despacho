@@ -1144,3 +1144,57 @@ async def guardar_proceso(
         print(f"❌ Error guardando proceso: {e}")
         
     return RedirectResponse(url="/procesos", status_code=303)
+@app.get("/nuevo_expediente")
+def vista_nuevo_expediente(request: Request):
+    # Dibuja el formulario en pantalla
+    return templates.TemplateResponse(request=request, name="nuevo_expediente.html", context={})
+
+@app.post("/crear_expediente_transaccional")
+def crear_expediente_transaccional(
+    request: Request,
+    cedula_deudor: str = Form(...),
+    nombre_deudor: str = Form(...),
+    conjunto: str = Form(...),
+    apto: str = Form(...),
+    naturaleza: str = Form(...),
+    radicado_rama: str = Form(...)
+):
+    try:
+        with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
+            with conn.cursor() as cur:
+                
+                # 1. Guardar Contacto y atrapar su ID
+                cur.execute("""
+                    INSERT INTO contactos (identificacion, nombre, tipo, ciudad) 
+                    VALUES (%s, %s, 'Contraparte', 'PEREIRA') 
+                    RETURNING id;
+                """, (cedula_deudor, nombre_deudor.upper()))
+                contacto_id = cur.fetchone()[0]
+                
+                # 2. Guardar Inmueble amarrado al Contacto y atrapar su ID
+                cur.execute("""
+                    INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) 
+                    VALUES (%s, %s, %s) 
+                    RETURNING id;
+                """, (contacto_id, conjunto.upper(), apto.upper()))
+                inmueble_id = cur.fetchone()[0]
+                
+                # 3. Crear Radicado Interno Automático (Ej: EXP-001)
+                cur.execute("SELECT nextval('radicado_seq')")
+                numero_seq = cur.fetchone()[0]
+                radicado_interno = f"EXP-{numero_seq:04d}"
+                
+                # 4. Guardar Proceso amarrado al Inmueble
+                cur.execute("""
+                    INSERT INTO procesos (radicado_interno, radicado_rama, naturaleza, inmueble_id, estado) 
+                    VALUES (%s, %s, %s, %s, 'Activo')
+                """, (radicado_interno, radicado_rama, naturaleza, inmueble_id))
+                
+            # Todo salió bien, confirmamos la transacción
+            conn.commit()
+            
+        return HTMLResponse(f"<h1 style='color:green; font-family:sans-serif;'>✅ Expediente {radicado_interno} creado exitosamente y enlazado.</h1> <a href='/nuevo_expediente'>Volver</a>")
+        
+    except Exception as e:
+        print(f"Error en transacción: {e}")
+        return HTMLResponse("❌ Hubo un error al procesar la información. Intente de nuevo.")
