@@ -1,3 +1,5 @@
+from typing import List
+import re
 import json
 from fastapi import FastAPI, Request, Form, Depends, HTTPException, status, UploadFile, File
 import io
@@ -1143,9 +1145,6 @@ async def guardar_proceso(
     except Exception as e:
         print(f"❌ Error guardando proceso: {e}")
         
-   from typing import List
-import re
-
 def limpiar_identificacion(texto: str) -> str:
     """Rescatada del código antiguo: limpia puntos y comas de la cédula"""
     if not texto: return ""
