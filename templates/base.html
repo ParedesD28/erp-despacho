@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Despacho Digital</title>
+    <!-- Traemos Tailwind y los iconos profesionales (Lucide) -->
+    <script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans flex h-screen overflow-hidden">
+    
+    <!-- PANEL DE NAVEGACIÓN LATERAL -->
+    <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col shadow-xl z-10">
+        <div class="h-16 flex items-center px-6 border-b border-slate-800">
+            <h1 class="text-white font-bold text-lg tracking-wide">Firma Digital</h1>
+        </div>
+        <nav class="flex-1 px-4 py-6 space-y-2">
+            <!-- 1. Dashboard -->
+            <a href="/" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
+                <i data-lucide="layout-dashboard" class="w-5 h-5"></i> Dashboard
+            </a>
+            
+            <!-- 2. Expedientes -->
+            <a href="/expedientes" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
+                <i data-lucide="folder-open" class="w-5 h-5"></i> Expedientes
+            </a>
+            
+            <!-- 3. CRM CARTERA (EL BOTÓN NUEVO) -->
+            <a href="/crm" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
+                <i data-lucide="contact-2" class="w-5 h-5"></i> CRM Cartera
+            </a>
+            
+            <!-- 4. Vencimientos -->
+            <a href="/vencimientos" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
+                <i data-lucide="calendar-clock" class="w-5 h-5"></i> Vencimientos
+            </a>
+            
+            <!-- 5. Informes -->
+            <a href="/informes" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
+                <i data-lucide="bar-chart-2" class="w-5 h-5"></i> Informes
+            </a>
+            
+            <!-- 6. Liquidador PH -->
+            <a href="/liquidador" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
+                <i data-lucide="calculator" class="w-5 h-5"></i> Liquidador PH
+            </a>
+
+            <!-- NUEVO: DIRECTORIO DE CONTACTOS -->
+            <a href="/contactos" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
+                <i data-lucide="book-user" class="w-5 h-5"></i> Directorio
+            </a>
+
+            <!-- NUEVO: PROCESOS JUDICIALES -->
+            <a href="/procesos" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
+                <i data-lucide="gavel" class="w-5 h-5"></i> Expedientes
+            </a>
+            <!-- Botón de Cerrar Sesión -->
+            <a href="/logout" class="flex items-center gap-3 px-4 py-3 mt-8 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-lg transition-colors font-medium border border-transparent hover:border-red-100">
+                <i data-lucide="log-out" class="w-5 h-5"></i>
+                <span>Cerrar Sesión</span>
+            </a>
+        </nav>
+    </aside>
+    
+     <!-- ÁREA CENTRAL DINÁMICA -->
+    <main class="flex-1 flex flex-col h-screen bg-slate-50 overflow-y-auto">
+        {% block contenido %}
+        {% endblock %}
+    </main>
+    
+    <script>
+        // Inicializamos los iconos
+        lucide.createIcons();
+    </script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm">
+    <h2 class="text-xl font-semibold text-slate-800">Directorio de Expedientes</h2>
+</header>
+
+<div class="p-8">
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+        <table class="w-full text-left text-sm text-slate-600">
+            <thead class="bg-slate-100 border-b border-slate-200 text-slate-700">
+                <tr>
+                    <th class="px-6 py-4 font-bold">Radicado Interno</th>
+                    <th class="px-6 py-4 font-bold">Demandante</th>
+                    <th class="px-6 py-4 font-bold">Juzgado</th>
+                    <th class="px-6 py-4 font-bold">Abogado Asignado</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                <!-- Este ciclo dibuja tu DataFrame de Pandas -->
+                {% for proceso in procesos %}
+                <tr class="hover:bg-slate-50 transition-colors">
+                    <td class="px-6 py-4 font-medium text-blue-600">{{ proceso.radicado_interno }}</td>
+                    <td class="px-6 py-4">{{ proceso.demandante_db }}</td>
+                    <td class="px-6 py-4">{{ proceso.juzgado }}</td>
+                    <td class="px-6 py-4">
+                        <span class="bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-medium">
+                            {{ proceso.abogado_asignado }}
+                        </span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
