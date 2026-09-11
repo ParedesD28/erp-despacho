@@ -3,30 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    
-    <!-- 1. DIRECTIVAS DE INGENIERÍA: Forzar al navegador a descargar la página fresca SIEMPRE -->
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
-    
     <title>Acceso Restringido - Despacho Digital</title>
     
-    <!-- 2. MOTOR DE DISEÑO (Tailwind CSS) -->
+    <!-- 1. EL PINTOR ENTRA PRIMERO Y SOLO -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- 3. CONFIGURACIÓN EXPLÍCITA (Evita que el navegador aborte el script) -->
-    <script>
-        tailwind.config = {
-            corePlugins: {
-                preflight: true,
-            }
-        }
-    </script>
-    
-    <!-- 4. ÍCONOS -->
-    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
-<body class="bg-slate-900 h-screen flex items-center justify-center font-sans selection:bg-teal-500 selection:text-white">
+<body class="bg-slate-900 h-screen flex items-center justify-center font-sans">
     
     <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden">
         
@@ -43,7 +25,6 @@
         <div class="p-8">
             <form action="/login" method="POST" class="space-y-6">
                 
-                <!-- Mensaje de error -->
                 {% if error %}
                 <div class="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-center gap-2 border border-red-200">
                     <i data-lucide="alert-circle" class="w-5 h-5"></i> 
@@ -51,7 +32,6 @@
                 </div>
                 {% endif %}
 
-                <!-- Campo de Correo -->
                 <div>
                     <label class="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
                         <i data-lucide="mail" class="w-4 h-4 text-slate-400"></i> Correo Corporativo
@@ -60,7 +40,6 @@
                            class="w-full px-4 py-3 rounded-lg bg-slate-50 border border-slate-200 focus:border-teal-500 focus:ring-2 focus:ring-teal-200 outline-none transition-all text-slate-700">
                 </div>
 
-                <!-- Campo de Contraseña -->
                 <div>
                     <label class="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
                         <i data-lucide="lock" class="w-4 h-4 text-slate-400"></i> Contraseña
@@ -69,22 +48,29 @@
                            class="w-full px-4 py-3 rounded-lg bg-slate-50 border border-slate-200 focus:border-teal-500 focus:ring-2 focus:ring-teal-200 outline-none transition-all text-slate-700">
                 </div>
 
-                <!-- Botón de Ingreso -->
                 <button type="submit" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 px-4 rounded-lg shadow-lg hover:shadow-xl transition-all flex justify-center items-center gap-2 mt-2">
                     Ingresar al Sistema <i data-lucide="arrow-right" class="w-5 h-5"></i>
                 </button>
             </form>
         </div>
         
-        <!-- Footer -->
         <div class="bg-slate-50 py-4 text-center text-xs text-slate-500 border-t border-slate-100">
             &copy; 2026 LegalTech ERP. Todos los derechos reservados.
         </div>
     </div>
 
-    <!-- Script para renderizar los íconos -->
+    <!-- 2. LOS ÍCONOS ENTRAN AL FINAL (Diferidos) -->
+    <script src="https://unpkg.com/lucide@latest" defer></script>
     <script>
-        lucide.createIcons();
+        // Le damos una orden estricta al navegador: 
+        // "Espera a que todo cargue, dale 50 milisegundos a Tailwind para pintar, y luego sí pon los íconos".
+        document.addEventListener("DOMContentLoaded", function() {
+            setTimeout(function() {
+                if (typeof lucide !== 'undefined') {
+                    lucide.createIcons();
+                }
+            }, 50);
+        });
     </script>
 </body>
 </html>
