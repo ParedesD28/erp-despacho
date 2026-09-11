@@ -60,37 +60,42 @@ def vista_login(request: Request):
     # 🔥 CORRECCIÓN: Sintaxis moderna obligatoria de FastAPI
     return templates.TemplateResponse(request=request, name="login.html", context={})
 
+from fastapi.responses import RedirectResponse # Asegúrate de tener esto en tus imports arriba
+
 @app.post("/login")
 def procesar_login(request: Request, email: str = Form(...), password: str = Form(...)):
     try:
         with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
-            with conn.cursor() as cur:
-                # Validamos las credenciales contra tu tabla real en Neon
-                cur.execute("SELECT id, nombre, rol FROM abogados WHERE email = %s AND password = %s", (email, password))
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Buscamos al abogado por su correo
+                cur.execute("SELECT * FROM abogados WHERE email = %s", (email,))
                 usuario = cur.fetchone()
-                
-        if usuario:
-            # ¡Credenciales correctas! Preparamos la entrada al Liquidador
-            respuesta = RedirectResponse(url="/liquidador", status_code=303)
-            
-            # 🔥 LA MAGIA INVISIBLE: Creamos la cookie segura HttpOnly
-            respuesta.set_cookie(
-                key="token_erp",
-                value=str(usuario[0]), # Guardamos su ID de abogado
-                httponly=True,         # Nadie en el Frontend puede verla ni robarla
-                max_age=28800,         # Expira en 8 horas exactas
-                samesite="lax"
-            )
-            return respuesta
-        else:
-            # 🔥 CORRECCIÓN AQUÍ TAMBIÉN
-            return templates.TemplateResponse(request=request, name="login.html", context={"error": "Credenciales incorrectas o usuario no existe."})
-            
-    except Exception as e:
-        print(f"❌ Error en Login: {e}")
-        # 🔥 Y CORRECCIÓN AQUÍ
-        return templates.TemplateResponse(request=request, name="login.html", context={"error": "Error de conexión con la base de datos."})
 
+                # Aquí deberías tener tu función verificar_password (o la validación que uses)
+                # Si el usuario existe y la contraseña coincide:
+                if usuario and verificar_password(password, usuario['password']):
+                    
+                    # 🚀 ¡AQUÍ ESTÁ LA MAGIA! Lo enviamos al Dashboard
+                    response = RedirectResponse(url="/dashboard", status_code=303)
+                    
+                    # (Opcional: Si usas cookies para mantener la sesión, aquí las asignas)
+                    # response.set_cookie(key="usuario_id", value=str(usuario['id']))
+                    
+                    return response
+                else:
+                    # Si falla, recargamos el login enviando el mensaje de error
+                    return templates.TemplateResponse(
+                        request=request,
+                        name="login.html",
+                        context={"request": request, "error": "Credenciales incorrectas. Intenta nuevamente."}
+                    )
+    except Exception as e:
+        print(f"Error en login: {e}")
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={"request": request, "error": "Error interno del servidor al intentar ingresar."}
+        )
 @app.get("/logout")
 def cerrar_sesion():
     # Destruye la cookie y lo devuelve a la calle
