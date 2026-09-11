@@ -72,9 +72,14 @@
                 <h3 class="font-semibold text-green-800 mb-4 flex items-center gap-2"><i data-lucide="home" class="w-5 h-5"></i> 3. Propiedad Involucrada (Asignada al primer demandado)</h3>
                 <div class="grid grid-cols-2 gap-6">
                     <div>
-                        <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Conjunto Residencial</label>
-                        <input type="text" name="conjunto" required placeholder="Ej: Mirador de la Villa" class="w-full px-4 py-2 border rounded-md uppercase">
-                    </div>
+    <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Conjunto Residencial</label>
+    <select id="select-conjunto" name="conjunto" required placeholder="Seleccione el conjunto..." class="w-full">
+        <option value="">Buscar conjunto en la BD...</option>
+        {% for cliente in contactos_clientes %}
+            <option value="{{ cliente.nombre }}">{{ cliente.nombre }}</option>
+        {% endfor %}
+    </select>
+</div>
                     <div>
                         <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Nomenclatura Exacta</label>
                         <input type="text" name="apto" required placeholder="Ej: 25 202" class="w-full px-4 py-2 border rounded-md uppercase">
@@ -118,7 +123,8 @@
     // Inicializar los Buscadores Inteligentes
     new TomSelect("#select-demandantes",{ plugins: ['remove_button'], create: false, sortField: { field: "text", direction: "asc" }});
     new TomSelect("#select-demandados",{ plugins: ['remove_button'], create: false, sortField: { field: "text", direction: "asc" }});
-
+    new TomSelect("#select-conjunto",{ create: false, sortField: { field: "text", direction: "asc" }});
+    
     // Lógica para añadir filas dinámicas
     function agregarFila(tipo) {
         const contenedor = document.getElementById(`contenedor-nuevos-${tipo}`);
