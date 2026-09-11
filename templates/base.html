@@ -10,61 +10,94 @@
 </head>
 <body class="bg-slate-50 text-slate-900 font-sans flex h-screen overflow-hidden">
     
-    <!-- PANEL DE NAVEGACIÓN LATERAL -->
-    <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col shadow-xl z-10">
+    <!-- PANEL DE NAVEGACIÓN LATERAL INTELIGENTE -->
+    <!-- Clases clave: w-20 por defecto, hover:w-64 para expandirse. 'group' permite controlar los elementos internos -->
+    <aside class="group w-20 hover:w-64 transition-all duration-300 ease-in-out bg-slate-900 text-slate-300 flex flex-col shadow-2xl z-20 relative overflow-hidden">
+        
+        <!-- Logo Header -->
         <div class="h-16 flex items-center px-6 border-b border-slate-800">
-            <h1 class="text-white font-bold text-lg tracking-wide">Firma Digital</h1>
+            <i data-lucide="scale" class="w-7 h-7 text-blue-500 flex-shrink-0"></i>
+            <h1 class="text-white font-bold text-lg tracking-wide ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap">Firma Digital</h1>
         </div>
-        <nav class="flex-1 px-4 py-6 space-y-2">
+        
+        <!-- Navegación -->
+        <nav class="flex-1 px-3 py-6 space-y-2 overflow-x-hidden">
+            {% set path = request.url.path %}
+            
             <!-- 1. Dashboard -->
-            <a href="/" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
-                <i data-lucide="layout-dashboard" class="w-5 h-5"></i> Dashboard
+            <a href="/" class="flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if path == '/' %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
+                <i data-lucide="layout-dashboard" class="w-5 h-5 flex-shrink-0"></i> 
+                <span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Dashboard</span>
             </a>
             
             <!-- 2. Expedientes -->
-            <a href="/expedientes" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
-                <i data-lucide="folder-open" class="w-5 h-5"></i> Expedientes
+            <a href="/expedientes" class="flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/expedientes' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
+                <i data-lucide="folder-open" class="w-5 h-5 flex-shrink-0"></i> 
+                <span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Expedientes</span>
             </a>
             
-            <!-- 3. CRM CARTERA (EL BOTÓN NUEVO) -->
-            <a href="/crm" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
-                <i data-lucide="contact-2" class="w-5 h-5"></i> CRM Cartera
+            <!-- 3. CRM Cartera -->
+            <a href="/crm" class="flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/crm' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
+                <i data-lucide="contact-2" class="w-5 h-5 flex-shrink-0"></i> 
+                <span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">CRM Cartera</span>
             </a>
             
             <!-- 4. Vencimientos -->
-            <a href="/vencimientos" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
-                <i data-lucide="calendar-clock" class="w-5 h-5"></i> Vencimientos
+            <a href="/vencimientos" class="flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/vencimientos' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
+                <i data-lucide="calendar-clock" class="w-5 h-5 flex-shrink-0"></i> 
+                <span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Vencimientos</span>
             </a>
             
             <!-- 5. Informes -->
-            <a href="/informes" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
-                <i data-lucide="bar-chart-2" class="w-5 h-5"></i> Informes
+            <a href="/informes" class="flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/informes' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
+                <i data-lucide="bar-chart-2" class="w-5 h-5 flex-shrink-0"></i> 
+                <span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Informes</span>
             </a>
             
             <!-- 6. Liquidador PH -->
-            <a href="/liquidador" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
-                <i data-lucide="calculator" class="w-5 h-5"></i> Liquidador PH
+            <a href="/liquidador" class="flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/liquidador' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
+                <i data-lucide="calculator" class="w-5 h-5 flex-shrink-0"></i> 
+                <span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Liquidador PH</span>
             </a>
-
-            <!-- NUEVO: DIRECTORIO DE CONTACTOS -->
-            <a href="/contactos" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
-                <i data-lucide="book-user" class="w-5 h-5"></i> Directorio
+            
+            <!-- NUEVO: Directorio -->
+            <a href="/contactos" class="flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/contactos' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
+                <i data-lucide="book-user" class="w-5 h-5 flex-shrink-0"></i> 
+                <span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Directorio</span>
             </a>
-
-            <!-- NUEVO: PROCESOS JUDICIALES -->
-            <a href="/procesos" class="flex items-center gap-3 px-3 py-2 hover:bg-slate-800 hover:text-white rounded-md font-medium transition-colors">
-                <i data-lucide="gavel" class="w-5 h-5"></i> Radicar Proceso
+            
+            <!-- NUEVO: Radicar Proceso -->
+            <a href="/procesos" class="flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/procesos' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
+                <i data-lucide="gavel" class="w-5 h-5 flex-shrink-0"></i> 
+                <span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Radicar Proceso</span>
             </a>
+            
             <!-- Botón de Cerrar Sesión -->
-            <a href="/logout" class="flex items-center gap-3 px-4 py-3 mt-8 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-lg transition-colors font-medium border border-transparent hover:border-red-100">
-                <i data-lucide="log-out" class="w-5 h-5"></i>
-                <span>Cerrar Sesión</span>
+            <a href="/logout" class="flex items-center px-3 py-3 mt-8 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-lg transition-colors font-medium border border-transparent hover:border-red-100 whitespace-nowrap">
+                <i data-lucide="log-out" class="w-5 h-5 flex-shrink-0"></i> 
+                <span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Cerrar Sesión</span>
             </a>
         </nav>
     </aside>
     
-     <!-- ÁREA CENTRAL DINÁMICA -->
-    <main class="flex-1 flex flex-col h-screen bg-slate-50 overflow-y-auto">
+    <!-- ÁREA CENTRAL DINÁMICA -->
+    <main class="flex-1 flex flex-col h-screen bg-slate-50 overflow-y-auto relative">
+        
+        <!-- SISTEMA DE NOTIFICACIONES (TOASTS) -->
+        {% if request and request.query_params.mensaje %}
+        <div id="toast-success" class="absolute top-5 right-5 z-50 flex items-center w-full max-w-xs p-4 space-x-3 text-emerald-800 bg-emerald-50 rounded-lg shadow-lg border border-emerald-200 transition-opacity duration-500">
+            <i data-lucide="check-circle" class="w-5 h-5 text-emerald-500 flex-shrink-0"></i>
+            <div class="text-sm font-bold">{{ request.query_params.mensaje }}</div>
+        </div>
+        {% endif %}
+
+        {% if request and request.query_params.error %}
+        <div id="toast-error" class="absolute top-5 right-5 z-50 flex items-center w-full max-w-xs p-4 space-x-3 text-red-800 bg-red-50 rounded-lg shadow-lg border border-red-200 transition-opacity duration-500">
+            <i data-lucide="alert-triangle" class="w-5 h-5 text-red-500 flex-shrink-0"></i>
+            <div class="text-sm font-bold">{{ request.query_params.error }}</div>
+        </div>
+        {% endif %}
+
         {% block contenido %}
         {% endblock %}
     </main>
@@ -72,6 +105,21 @@
     <script>
         // Inicializamos los iconos
         lucide.createIcons();
+
+        // Lógica para desaparecer los Toasts después de 3 segundos
+        setTimeout(() => {
+            const toastSuccess = document.getElementById('toast-success');
+            if (toastSuccess) {
+                toastSuccess.style.opacity = '0';
+                setTimeout(() => toastSuccess.remove(), 500); // Dar tiempo a la transición
+            }
+            
+            const toastError = document.getElementById('toast-error');
+            if (toastError) {
+                toastError.style.opacity = '0';
+                setTimeout(() => toastError.remove(), 500); // Dar tiempo a la transición
+            }
+        }, 3500);
     </script>
 </body>
 </html>
