@@ -1068,7 +1068,6 @@ async def guardar_contacto(
 # ==============================================================================
 # --- MÓDULO DE PROCESOS JUDICIALES ---
 # ==============================================================================
-
 @app.get("/procesos") # O el nombre que tenga tu ruta para abrir esta pantalla
 def vista_procesos(request: Request):
     try:
