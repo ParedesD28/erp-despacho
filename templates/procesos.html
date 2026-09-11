@@ -18,23 +18,37 @@
         
         <form method="POST" action="/crear_expediente_completo" class="space-y-6">
             
-            <!-- 1. IDENTIFICACIÓN BÁSICA Y JUZGADO -->
-            <div class="col-span-2 md:col-span-3 bg-slate-50 p-3 rounded border border-slate-200 mt-2">
-    <label class="block text-xs font-semibold text-slate-600 uppercase mb-2">Juzgado de Conocimiento</label>
-    <div class="grid grid-cols-3 gap-3">
-        <!-- 1. Número -->
-        <input type="number" name="juzgado_numero" min="1" max="100" placeholder="N° (Ej: 1)" required class="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-teal-500 outline-none bg-white">
-        
-        <!-- 2. Especialidad -->
-        <select name="juzgado_tipo" required class="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-teal-500 outline-none uppercase text-sm bg-white">
-            <option value="CIVIL MUNICIPAL">Civil Municipal</option>
-            <option value="CIVIL DEL CIRCUITO">Civil del Circuito</option>
-            <option value="DE PEQUEÑAS CAUSAS">De Pequeñas Causas</option>
-            <option value="PROMISCUO MUNICIPAL">Promiscuo Municipal</option>
-        </select>
-        
-        <!-- 3. Ciudad -->
-        <input type="text" name="juzgado_ciudad" value="PEREIRA" required class="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-teal-500 outline-none uppercase bg-white">
+            <div class="bg-gray-50 p-5 rounded-lg border border-gray-200">
+    <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2"><i data-lucide="folder" class="w-5 h-5"></i> 1. Identificación y Juzgado</h3>
+    
+    <!-- Fila 1: Radicado y Naturaleza -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+        <div>
+            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Radicado Rama Judicial *</label>
+            <input type="text" name="radicado_rama" value="EN REPARTO" required class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-teal-500 outline-none uppercase font-mono">
+        </div>
+        <div>
+            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Naturaleza *</label>
+            <select name="naturaleza" required class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-teal-500 outline-none uppercase">
+                <option value="EJECUTIVO SINGULAR">Ejecutivo Singular</option>
+                <option value="EJECUTIVO HIPOTECARIO">Ejecutivo Hipotecario</option>
+                <option value="CIVIL: VERBAL">Civil: Verbal</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Fila 2: Juzgado (Las 3 columnas que arreglamos) -->
+    <div class="bg-white p-3 rounded border border-slate-200">
+        <label class="block text-xs font-semibold text-slate-600 uppercase mb-2">Juzgado de Conocimiento</label>
+        <div class="grid grid-cols-3 gap-3">
+            <input type="number" name="juzgado_numero" min="1" max="100" placeholder="N° (Ej: 1)" required class="w-full px-3 py-2 border rounded-md outline-none">
+            <select name="juzgado_tipo" required class="w-full px-3 py-2 border rounded-md outline-none uppercase text-sm">
+                <option value="CIVIL MUNICIPAL">Civil Municipal</option>
+                <option value="CIVIL DEL CIRCUITO">Civil del Circuito</option>
+                <option value="DE PEQUEÑAS CAUSAS">De Pequeñas Causas</option>
+            </select>
+            <input type="text" name="juzgado_ciudad" value="PEREIRA" required class="w-full px-3 py-2 border rounded-md outline-none uppercase">
+        </div>
     </div>
 </div>
 
@@ -69,16 +83,16 @@
 
             <!-- 3. INMUEBLE -->
             <div class="bg-green-50/50 p-5 rounded-lg border border-green-100">
-                <h3 class="font-semibold text-green-800 mb-4 flex items-center gap-2"><i data-lucide="home" class="w-5 h-5"></i> 3. Propiedad Involucrada (Asignada al primer demandado)</h3>
-                <div class="grid grid-cols-2 gap-6">
-                    <div>
-    <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Conjunto Residencial</label>
-    <select id="select-conjunto" name="conjunto" required placeholder="Seleccione el conjunto..." class="w-full">
-        <option value="">Buscar conjunto en la BD...</option>
-        {% for cliente in contactos_clientes %}
-            <option value="{{ cliente.nombre }}">{{ cliente.nombre }}</option>
-        {% endfor %}
-    </select>
+    <h3 class="font-semibold text-green-800 mb-4 flex items-center gap-2"><i data-lucide="home" class="w-5 h-5"></i> 3. Propiedad Involucrada</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+        <div class="text-sm text-green-700 bg-green-100/50 p-3 rounded border border-green-200">
+            <i data-lucide="info" class="w-4 h-4 inline mb-0.5"></i> El Conjunto Residencial se asignará automáticamente usando el <strong>Demandante</strong> seleccionado arriba.
+        </div>
+        <div>
+            <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Nomenclatura Exacta (Torre/Apto)</label>
+            <input type="text" name="apto" required placeholder="Ej: 25 202" class="w-full px-4 py-2 border rounded-md uppercase">
+        </div>
+    </div>
 </div>
                     <div>
                         <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Nomenclatura Exacta</label>
