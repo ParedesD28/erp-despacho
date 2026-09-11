@@ -1068,7 +1068,7 @@ async def guardar_contacto(
 # ==============================================================================
 # --- MÓDULO DE PROCESOS JUDICIALES ---
 # ==============================================================================
-@app.get("/procesos") # O el nombre que tenga tu ruta para abrir esta pantalla
+@app.get("/procesos")
 def vista_procesos(request: Request):
     try:
         with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
@@ -1086,8 +1086,9 @@ def vista_procesos(request: Request):
                 abogados = cur.fetchall()
                 
         return templates.TemplateResponse(
-            "procesos.html", 
-            {
+            request=request,             # <--- ESTO ES LO NUEVO
+            name="procesos.html",        # <--- ESTO ES LO NUEVO
+            context={
                 "request": request, 
                 "contactos_clientes": clientes, 
                 "contactos_contrapartes": contrapartes,
@@ -1096,8 +1097,17 @@ def vista_procesos(request: Request):
         )
     except Exception as e:
         print(f"Error cargando datos de Neon: {e}")
-        return templates.TemplateResponse("procesos.html", {"request": request, "contactos_clientes": [], "contactos_contrapartes": [], "abogados": []})
-
+        # También lo corregimos en caso de que haya un error de base de datos
+        return templates.TemplateResponse(
+            request=request, 
+            name="procesos.html", 
+            context={
+                "request": request, 
+                "contactos_clientes": [], 
+                "contactos_contrapartes": [], 
+                "abogados": []
+            }
+        )
 @app.post("/procesos/guardar")
 async def guardar_proceso(
     request: Request,
