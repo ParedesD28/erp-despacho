@@ -1370,7 +1370,7 @@ async def crear_expediente_completo(
                 nuevo_inmueble_id = cur.fetchone()
                 nuevo_inmueble_id = nuevo_inmueble_id['id'] if isinstance(nuevo_inmueble_id, dict) else nuevo_inmueble_id[0]
                 
-                # --- PASO 4: EL PROCESO ---
+               # --- PASO 4: EL PROCESO ---
                 cur.execute("SELECT radicado_interno FROM procesos ORDER BY radicado_interno DESC LIMIT 1")
                 ultimo_rad = cur.fetchone()
                 ultimo_rad_val = ultimo_rad['radicado_interno'] if isinstance(ultimo_rad, dict) else (ultimo_rad[0] if ultimo_rad else None)
@@ -1378,15 +1378,21 @@ async def crear_expediente_completo(
                 sig_num = int(ultimo_rad_val.split("-")[1]) + 1 if (ultimo_rad_val and "-" in ultimo_rad_val) else 1
                 radicado_interno = f"EXP-{sig_num:04d}"
                 
+                # 1. Rescatamos los nombres reales de los deudores consultando sus cédulas
+                cur.execute("SELECT nombre FROM contactos WHERE identificacion = ANY(%s)", (ids_demandados,))
+                nombres_res = cur.fetchall()
+                nombres_demandados = " | ".join([r['nombre'] if isinstance(r, dict) else r[0] for r in nombres_res]) if nombres_res else "SIN NOMBRE"
+
+                # 2. Insertamos con las columnas mapeadas correctamente
                 cur.execute("""
                     INSERT INTO procesos (
                         radicado_interno, radicado_rama, naturaleza, juzgado, 
-                        etapa_actual, id_cliente, demandado, estado, pretensiones, 
+                        etapa_actual, id_cliente, demandado, id_demandado, estado, pretensiones, 
                         medidas_cautelares, abogado_id, inmueble_id
-                    ) VALUES (%s, %s, %s, %s, '1. Presentación de la demanda', %s, %s, 'Activo', %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, '1. Presentación de la demanda', %s, %s, %s, 'Activo', %s, %s, %s, %s)
                 """, (
                     radicado_interno, radicado_rama, naturaleza, juzgado_final, 
-                    id_cliente_final, id_demandado_final, pretensiones, 
+                    id_cliente_final, nombres_demandados, id_demandado_final, pretensiones, 
                     medidas_cautelares, abogado_id, nuevo_inmueble_id
                 ))
 
