@@ -1290,7 +1290,6 @@ async def guardar_proceso(
     finally:
         db_pool.putconn(conn)
 
-
 @app.post("/crear_expediente_completo")
 async def crear_expediente_completo(
     request: Request,
@@ -1299,54 +1298,85 @@ async def crear_expediente_completo(
     juzgado_numero: str = Form(...),
     juzgado_tipo: str = Form(...),
     juzgado_ciudad: str = Form(...),
-    # Fíjate que aquí YA NO ESTÁ la palabra "conjunto", el Chef ya no la pide.
     apto: str = Form(...),
-    demandados_existentes: str = Form(...),
+    
+    # 1. Hacemos opcionales las listas desplegables (Form(None))
+    demandados_existentes: str = Form(None),
     demandantes_existentes: str = Form(None),
+    
+    # 2. Recuperamos las cajitas de creación "Al Vuelo"
+    nuevo_dem_id: List[str] = Form(default=[]),
+    nuevo_dem_nombre: List[str] = Form(default=[]),
+    nuevo_ddo_id: List[str] = Form(default=[]),
+    nuevo_ddo_nombre: List[str] = Form(default=[]),
+    
     pretensiones: float = Form(0.0),
     abogado_id: int = Form(...),
-    medidas_cautelares: str = Form("")
+    medidas_cautelares: str = Form("") # Soporta vacíos para prejurídicos
 ):
-    """Ruta del Wizard: Crea el inmueble deduciendo el Conjunto y amarra todo en cascada"""
     juzgado_final = f"JUZGADO {juzgado_numero} {juzgado_tipo} DE {juzgado_ciudad.upper()}"
     conn = db_pool.getconn()
     
     try:
-        with conn: # Transacción ACID blindada
+        with conn: # Transacción ACID
             with conn.cursor() as cur:
                 
-                # --- PASO 1: EL INMUEBLE ---
+                # --- PASO 1: PROCESAR DEMANDANTES (Existentes + Nuevos) ---
+                ids_demandantes = [c.strip() for c in demandantes_existentes.split(",")] if demandantes_existentes else []
                 
-                # A. Trabajo de detective: Buscar el nombre del Conjunto usando la cédula del Demandante
-                id_conjunto = [c.strip() for c in demandantes_existentes.split(",")][0]
-                cur.execute("SELECT nombre FROM contactos WHERE identificacion = %s", (id_conjunto,))
+                # Guardamos a los que creaste "Al Vuelo"
+                for c_id, c_nom in zip(nuevo_dem_id, nuevo_dem_nombre):
+                    if c_id and c_nom:
+                        c_id_limpio = c_id.strip().upper()
+                        cur.execute("INSERT INTO contactos (identificacion, nombre, tipo, ciudad) VALUES (%s, %s, 'Cliente', 'PEREIRA') ON CONFLICT DO NOTHING;", (c_id_limpio, c_nom.strip().upper()))
+                        ids_demandantes.append(c_id_limpio)
+                        
+                if not ids_demandantes:
+                    raise Exception("Debes especificar al menos un demandante.")
+                
+                # --- PASO 2: PROCESAR DEMANDADOS (Existentes + Nuevos) ---
+                ids_demandados = [c.strip() for c in demandados_existentes.split(",")] if demandados_existentes else []
+                
+                # Guardamos a Erika Viviana (o cualquier otro) creado "Al Vuelo"
+                for d_id, d_nom in zip(nuevo_ddo_id, nuevo_ddo_nombre):
+                    if d_id and d_nom:
+                        d_id_limpio = d_id.strip().upper()
+                        cur.execute("INSERT INTO contactos (identificacion, nombre, tipo, ciudad) VALUES (%s, %s, 'Contraparte', 'PEREIRA') ON CONFLICT DO NOTHING;", (d_id_limpio, d_nom.strip().upper()))
+                        ids_demandados.append(d_id_limpio)
+                        
+                if not ids_demandados:
+                    raise Exception("Debes especificar al menos un demandado.")
+
+                # Consolidamos los IDs separados por " | " para la tabla procesos
+                id_cliente_final = " | ".join(ids_demandantes)
+                id_demandado_final = " | ".join(ids_demandados)
+
+                # --- PASO 3: EL INMUEBLE ---
+                # Buscamos el nombre del Conjunto usando la cédula del primer demandante
+                cur.execute("SELECT nombre FROM contactos WHERE identificacion = %s", (ids_demandantes[0],))
                 res_nombre = cur.fetchone()
                 nombre_conjunto = res_nombre['nombre'] if isinstance(res_nombre, dict) else (res_nombre[0] if res_nombre else "SIN NOMBRE")
 
-                # B. Extraer al deudor principal
-                deudor_principal = [c.strip() for c in demandados_existentes.split(",")][0]
-                cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (deudor_principal,))
+                # Buscamos el ID interno del primer demandado para amarrarle el apto
+                cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (ids_demandados[0],))
                 res_contacto = cur.fetchone()
                 contacto_id = res_contacto['id'] if isinstance(res_contacto, dict) else (res_contacto[0] if res_contacto else None)
                 
-                # C. Crear el inmueble usando el nombre que el detective averiguó
+                # Nace el Inmueble
                 cur.execute("""
                     INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) 
-                    VALUES (%s, %s, %s) 
-                    RETURNING id;
+                    VALUES (%s, %s, %s) RETURNING id;
                 """, (contacto_id, nombre_conjunto, apto.upper()))
                 nuevo_inmueble_id = cur.fetchone()
                 nuevo_inmueble_id = nuevo_inmueble_id['id'] if isinstance(nuevo_inmueble_id, dict) else nuevo_inmueble_id[0]
                 
-                # --- PASO 2: EL PROCESO ---
+                # --- PASO 4: EL PROCESO ---
                 cur.execute("SELECT radicado_interno FROM procesos ORDER BY radicado_interno DESC LIMIT 1")
                 ultimo_rad = cur.fetchone()
                 ultimo_rad_val = ultimo_rad['radicado_interno'] if isinstance(ultimo_rad, dict) else (ultimo_rad[0] if ultimo_rad else None)
                 
                 sig_num = int(ultimo_rad_val.split("-")[1]) + 1 if (ultimo_rad_val and "-" in ultimo_rad_val) else 1
                 radicado_interno = f"EXP-{sig_num:04d}"
-                
-                id_cliente_val = demandantes_existentes if demandantes_existentes else "SIN ASIGNAR"
                 
                 cur.execute("""
                     INSERT INTO procesos (
@@ -1356,17 +1386,17 @@ async def crear_expediente_completo(
                     ) VALUES (%s, %s, %s, %s, '1. Presentación de la demanda', %s, %s, 'Activo', %s, %s, %s, %s)
                 """, (
                     radicado_interno, radicado_rama, naturaleza, juzgado_final, 
-                    id_cliente_val, demandados_existentes, pretensiones, 
+                    id_cliente_final, id_demandado_final, pretensiones, 
                     medidas_cautelares, abogado_id, nuevo_inmueble_id
                 ))
 
-                # --- PASO 3: TRAZABILIDAD ---
+                # --- PASO 5: TRAZABILIDAD ---
                 cur.execute("""
                     INSERT INTO actuaciones (radicado_interno, fecha, etapa, descripcion, usuario, tipificacion_sugerida)
                     VALUES (%s, CURRENT_DATE, 'Inicio', 'Presentación inicial de la demanda', 'Sistema', 'Radicación')
                 """, (radicado_interno,))
 
-        return RedirectResponse(url="/expedientes?mensaje=Expediente+completo+creado+con+exito", status_code=303)
+        return RedirectResponse(url="/expedientes?mensaje=Expediente+creado+exitosamente", status_code=303)
         
     except Exception as e:
         print(f"❌ Error en la cascada transaccional: {e}")
