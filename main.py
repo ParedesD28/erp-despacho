@@ -1197,26 +1197,29 @@ async def guardar_contacto(
 # ==============================================================================
 # --- MÓDULO DE PROCESOS JUDICIALES ---
 # ==============================================================================
+
 @app.get("/procesos")
 def vista_procesos(request: Request):
+    # Usamos el Pool de conexiones para no saturar Neon
+    conn = db_pool.getconn()
     try:
-        with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # 1. Traer Clientes
-                cur.execute("SELECT identificacion, nombre FROM contactos WHERE tipo = 'Cliente' ORDER BY nombre ASC")
-                clientes = cur.fetchall()
-                
-                # 2. Traer Contrapartes
-                cur.execute("SELECT identificacion, nombre FROM contactos WHERE tipo = 'Contraparte' ORDER BY nombre ASC")
-                contrapartes = cur.fetchall()
+        # Importante: Asegúrate de tener 'from psycopg2.extras import RealDictCursor' en tus imports
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # 1. Traer Clientes
+            cur.execute("SELECT identificacion, nombre FROM contactos WHERE tipo = 'Cliente' ORDER BY nombre ASC")
+            clientes = cur.fetchall()
+            
+            # 2. Traer Contrapartes
+            cur.execute("SELECT identificacion, nombre FROM contactos WHERE tipo = 'Contraparte' ORDER BY nombre ASC")
+            contrapartes = cur.fetchall()
 
-                # 3. Traer Abogados (Para el nuevo campo que faltaba)
-                cur.execute("SELECT id, nombre FROM abogados ORDER BY nombre ASC")
-                abogados = cur.fetchall()
-                
+            # 3. Traer Abogados
+            cur.execute("SELECT id, nombre FROM abogados ORDER BY nombre ASC")
+            abogados = cur.fetchall()
+            
         return templates.TemplateResponse(
-            request=request,             # <--- ESTO ES LO NUEVO
-            name="procesos.html",        # <--- ESTO ES LO NUEVO
+            request=request, 
+            name="procesos.html", 
             context={
                 "request": request, 
                 "contactos_clientes": clientes, 
@@ -1225,8 +1228,7 @@ def vista_procesos(request: Request):
             }
         )
     except Exception as e:
-        print(f"Error cargando datos de Neon: {e}")
-        # También lo corregimos en caso de que haya un error de base de datos
+        print(f"❌ Error cargando datos de Neon: {e}")
         return templates.TemplateResponse(
             request=request, 
             name="procesos.html", 
@@ -1237,114 +1239,130 @@ def vista_procesos(request: Request):
                 "abogados": []
             }
         )
+    finally:
+        # Siempre devolvemos la conexión al pool
+        db_pool.putconn(conn)
+
+
 @app.post("/procesos/guardar")
 async def guardar_proceso(
     request: Request,
     radicado_interno: str = Form(...),
     radicado_rama: str = Form(...),
     naturaleza: str = Form(...),
-    juzgado: str = Form(...),
+    juzgado_numero: str = Form(...),
+    juzgado_tipo: str = Form(...),
+    juzgado_ciudad: str = Form(...),
     id_cliente: str = Form(...),
     id_demandado: str = Form(...),
-    pretensiones: float = Form(...),
+    pretensiones: float = Form(0.0),
     medidas_cautelares: str = Form(""),
     abogado_id: int = Form(...)
 ):
+    """Ruta clásica: Guarda proceso sin amarrar inmueble todavía"""
+    juzgado_final = f"JUZGADO {juzgado_numero} {juzgado_tipo} DE {juzgado_ciudad.upper()}"
+    conn = db_pool.getconn()
+    
     try:
-        with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
+        with conn: # Transacción ACID
             with conn.cursor() as cur:
-                # 1. Buscar el nombre real del demandado cruzando con su cédula
                 cur.execute("SELECT nombre FROM contactos WHERE identificacion = %s", (id_demandado,))
                 res_dem = cur.fetchone()
                 nombre_demandado = res_dem[0] if res_dem else "SIN NOMBRE"
                 
-                # 2. Guardar el nuevo proceso
                 cur.execute("""
                     INSERT INTO procesos (
                         radicado_interno, radicado_rama, naturaleza, juzgado, 
                         etapa_actual, id_cliente, demandado, id_demandado, 
                         estado, pretensiones, medidas_cautelares, abogado_id
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, '1. Presentación de la demanda', %s, %s, %s, 'Activo', %s, %s, %s)
                 """, (
-                    radicado_interno, radicado_rama, naturaleza, juzgado, 
-                    "1. Presentación de la demanda", id_cliente, nombre_demandado, id_demandado, 
-                    "Activo", pretensiones, medidas_cautelares, abogado_id
+                    radicado_interno, radicado_rama, naturaleza, juzgado_final, 
+                    id_cliente, nombre_demandado, id_demandado, 
+                    pretensiones, medidas_cautelares, abogado_id
                 ))
-            conn.commit()
-    except Exception as e:
-        print(f"❌ Error guardando proceso: {e}")
+        return RedirectResponse(url="/expedientes?mensaje=Proceso+guardado+con+exito", status_code=303)
         
-def limpiar_identificacion(texto: str) -> str:
-    """Rescatada del código antiguo: limpia puntos y comas de la cédula"""
-    if not texto: return ""
-    return re.sub(r'[.,\s]', '', str(texto)).strip().upper()
+    except Exception as e:
+        print(f"❌ Error guardando proceso clásico: {e}")
+        return RedirectResponse(url="/procesos?error=Fallo+al+guardar", status_code=303)
+        
+    finally:
+        db_pool.putconn(conn)
+
 
 @app.post("/crear_expediente_completo")
-def crear_expediente_completo(
+async def crear_expediente_completo(
     request: Request,
-    demandantes_existentes: List[str] = Form(default=[]),
-    nuevo_dem_id: List[str] = Form(default=[]),
-    nuevo_dem_nombre: List[str] = Form(default=[]),
-    demandados_existentes: List[str] = Form(default=[]),
-    nuevo_ddo_id: List[str] = Form(default=[]),
-    nuevo_ddo_nombre: List[str] = Form(default=[]),
-    
+    radicado_rama: str = Form(...),
+    naturaleza: str = Form(...),
+    juzgado_numero: str = Form(...),
+    juzgado_tipo: str = Form(...),
+    juzgado_ciudad: str = Form(...),
     conjunto: str = Form(...),
     apto: str = Form(...),
-    naturaleza: str = Form(...),
-    radicado_rama: str = Form(...),
-    
-    # --- LOS CAMPOS NUEVOS QUE FALTABAN ---
-    juzgado: str = Form(...),
+    demandados_existentes: str = Form(...),
+    demandantes_existentes: str = Form(None),
     pretensiones: float = Form(0.0),
     abogado_id: int = Form(...),
     medidas_cautelares: str = Form("")
 ):
+    """Ruta del Wizard: Crea el inmueble y amarra todo en cascada"""
+    juzgado_final = f"JUZGADO {juzgado_numero} {juzgado_tipo} DE {juzgado_ciudad.upper()}"
+    conn = db_pool.getconn()
+    
     try:
-        with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
+        with conn: # Transacción ACID blindada
             with conn.cursor() as cur:
                 
-                # 1. PROCESAR DEMANDANTES
-                ids_demandantes = list(demandantes_existentes)
-                for c_id, c_nom in zip(nuevo_dem_id, nuevo_dem_nombre):
-                    id_limpio = limpiar_identificacion(c_id)
-                    cur.execute("INSERT INTO contactos (identificacion, nombre, tipo, ciudad) VALUES (%s, %s, 'Cliente', 'PEREIRA') ON CONFLICT DO NOTHING;", (id_limpio, c_nom.strip().upper()))
-                    ids_demandantes.append(id_limpio)
+                # --- PASO 1: EL INMUEBLE ---
+                deudor_principal = [c.strip() for c in demandados_existentes.split(",")][0]
                 
-                # 2. PROCESAR DEMANDADOS
-                ids_demandados = list(demandados_existentes)
-                for d_id, d_nom in zip(nuevo_ddo_id, nuevo_ddo_nombre):
-                    id_limpio = limpiar_identificacion(d_id)
-                    cur.execute("INSERT INTO contactos (identificacion, nombre, tipo, ciudad) VALUES (%s, %s, 'Contraparte', 'PEREIRA') ON CONFLICT DO NOTHING;", (id_limpio, d_nom.strip().upper()))
-                    ids_demandados.append(id_limpio)
+                cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (deudor_principal,))
+                res_contacto = cur.fetchone()
+                contacto_id = res_contacto['id'] if isinstance(res_contacto, dict) else (res_contacto[0] if res_contacto else None)
                 
-                id_cliente_final = " | ".join(ids_demandantes)
-                id_demandado_final = " | ".join(ids_demandados)
+                cur.execute("""
+                    INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) 
+                    VALUES (%s, %s, %s) 
+                    RETURNING id;
+                """, (contacto_id, conjunto, apto.upper()))
+                nuevo_inmueble_id = cur.fetchone()
+                nuevo_inmueble_id = nuevo_inmueble_id['id'] if isinstance(nuevo_inmueble_id, dict) else nuevo_inmueble_id[0]
                 
-                # 3. CREAR EL INMUEBLE (Asignado al primer demandado)
-                deudor_principal_cedula = ids_demandados[0]
-                cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (deudor_principal_cedula,))
-                resultado_contacto = cur.fetchone()
-                contacto_id_interno = resultado_contacto[0] if resultado_contacto else None
+                # --- PASO 2: EL PROCESO ---
+                cur.execute("SELECT radicado_interno FROM procesos ORDER BY radicado_interno DESC LIMIT 1")
+                ultimo_rad = cur.fetchone()
+                ultimo_rad_val = ultimo_rad['radicado_interno'] if isinstance(ultimo_rad, dict) else (ultimo_rad[0] if ultimo_rad else None)
                 
-                cur.execute("INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) VALUES (%s, %s, %s) RETURNING id;", (contacto_id_interno, conjunto.strip().upper(), apto.strip().upper()))
-                nuevo_inmueble_id = cur.fetchone()[0]
+                sig_num = int(ultimo_rad_val.split("-")[1]) + 1 if (ultimo_rad_val and "-" in ultimo_rad_val) else 1
+                radicado_interno = f"EXP-{sig_num:04d}"
                 
-                # 4. CREAR EL PROCESO (Ahora con todos los campos)
-                cur.execute("SELECT nextval('radicado_seq')")
-                radicado_interno = f"EXP-{cur.fetchone()[0]:04d}"
+                id_cliente_val = demandantes_existentes if demandantes_existentes else "SIN ASIGNAR"
                 
                 cur.execute("""
                     INSERT INTO procesos (
                         radicado_interno, radicado_rama, naturaleza, juzgado, 
-                        id_cliente, id_demandado, estado, pretensiones, 
+                        etapa_actual, id_cliente, demandado, estado, pretensiones, 
                         medidas_cautelares, abogado_id, inmueble_id
-                    ) VALUES (%s, %s, %s, %s, %s, %s, 'Activo', %s, %s, %s, %s)
-                """, (radicado_interno, radicado_rama, naturaleza, juzgado, id_cliente_final, id_demandado_final, pretensiones, medidas_cautelares, abogado_id, nuevo_inmueble_id))
-                
-            conn.commit()
-        return RedirectResponse(url="/procesos", status_code=303)
+                    ) VALUES (%s, %s, %s, %s, '1. Presentación de la demanda', %s, %s, 'Activo', %s, %s, %s, %s)
+                """, (
+                    radicado_interno, radicado_rama, naturaleza, juzgado_final, 
+                    id_cliente_val, demandados_existentes, pretensiones, 
+                    medidas_cautelares, abogado_id, nuevo_inmueble_id
+                ))
+
+                # --- PASO 3: TRAZABILIDAD ---
+                cur.execute("""
+                    INSERT INTO actuaciones (radicado_interno, fecha, etapa, descripcion, usuario, tipificacion_sugerida)
+                    VALUES (%s, CURRENT_DATE, 'Inicio', 'Presentación inicial de la demanda', 'Sistema', 'Radicación')
+                """, (radicado_interno,))
+
+        return RedirectResponse(url="/expedientes?mensaje=Expediente+completo+creado+con+exito", status_code=303)
         
     except Exception as e:
-        print(f"Error: {e}")
-        return HTMLResponse("❌ Error al procesar el expediente.")
+        print(f"❌ Error en la cascada transaccional: {e}")
+        return RedirectResponse(url="/procesos?error=Fallo+al+guardar+expediente", status_code=303)
+        
+    finally:
+        db_pool.putconn(conn)
