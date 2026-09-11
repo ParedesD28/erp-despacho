@@ -52,50 +52,58 @@ async def validador_general_seguridad(request: Request, call_next):
 # ==============================================================================
 # --- RUTAS DE LOGIN Y LOGOUT ---
 # ==============================================================================
-@app.get("/login")
-def vista_login(request: Request):
-    # Si el abogado ya inició sesión antes, lo dejamos pasar directo al sistema
-    if request.cookies.get("token_erp"):
-        return RedirectResponse(url="/liquidador", status_code=303)
-    # 🔥 CORRECCIÓN: Sintaxis moderna obligatoria de FastAPI
-    return templates.TemplateResponse(request=request, name="login.html", context={})
+# --- FUNCIÓN DE SEGURIDAD PARA CONTRASEÑAS ---
+def verificar_password(password_plana, password_hash):
+    try:
+        import bcrypt
+        # Si la contraseña está encriptada (como las de tu antiguo sistema)
+        if password_hash and str(password_hash).startswith('$2'):
+            return bcrypt.checkpw(password_plana.encode('utf-8'), password_hash.encode('utf-8'))
+    except ImportError:
+        pass # Si no tienes bcrypt instalado, ignoramos el error
+    
+    # Si la contraseña está normal
+    return password_plana == password_hash
 
-from fastapi.responses import RedirectResponse # Asegúrate de tener esto en tus imports arriba
 
+# --- MOTOR DE LOGIN ---
 @app.post("/login")
 def procesar_login(request: Request, email: str = Form(...), password: str = Form(...)):
     try:
         with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Buscamos al abogado por su correo
+                # Buscamos al usuario en Neon
                 cur.execute("SELECT * FROM abogados WHERE email = %s", (email,))
                 usuario = cur.fetchone()
 
-                # Aquí deberías tener tu función verificar_password (o la validación que uses)
-                # Si el usuario existe y la contraseña coincide:
+                # Validamos que el usuario exista y la contraseña sea correcta
                 if usuario and verificar_password(password, usuario['password']):
-                    
-                    # 🚀 ¡AQUÍ ESTÁ LA MAGIA! Lo enviamos al Dashboard
-                    response = RedirectResponse(url="/dashboard", status_code=303)
-                    
-                    # (Opcional: Si usas cookies para mantener la sesión, aquí las asignas)
-                    # response.set_cookie(key="usuario_id", value=str(usuario['id']))
-                    
-                    return response
+                    # ¡ÉXITO! Lo enviamos volando al Dashboard
+                    return RedirectResponse(url="/dashboard", status_code=303)
                 else:
-                    # Si falla, recargamos el login enviando el mensaje de error
+                    # FALLÓ: Lo devolvemos al login con mensaje de error
                     return templates.TemplateResponse(
                         request=request,
                         name="login.html",
-                        context={"request": request, "error": "Credenciales incorrectas. Intenta nuevamente."}
+                        context={"request": request, "error": "Credenciales incorrectas. Revisa tu correo y contraseña."}
                     )
     except Exception as e:
-        print(f"Error en login: {e}")
+        print(f"Error fatal en login: {e}")
         return templates.TemplateResponse(
             request=request,
             name="login.html",
-            context={"request": request, "error": "Error interno del servidor al intentar ingresar."}
+            context={"request": request, "error": f"Error interno: {str(e)}"}
         )
+
+# --- RUTA DEL DASHBOARD ---
+@app.get("/dashboard")
+def vista_dashboard(request: Request):
+    # Esta es la ruta que recibe al usuario después de loguearse exitosamente
+    return templates.TemplateResponse(
+        request=request, 
+        name="dashboard.html", 
+        context={"request": request}
+    )
 @app.get("/logout")
 def cerrar_sesion():
     # Destruye la cookie y lo devuelve a la calle
