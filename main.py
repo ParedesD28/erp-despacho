@@ -10,6 +10,7 @@ from openpyxl.styles import Font, Alignment, PatternFill
 from fastapi.responses import StreamingResponse, HTMLResponse
 import os
 import psycopg2
+from psycopg2 import pool
 import pandas as pd
 import bcrypt
 import requests
@@ -25,6 +26,103 @@ from fastapi.responses import RedirectResponse
 # 🔥 ESTAS SON LAS DOS LÍNEAS QUE FALTAN O QUEDARON ABAJO:
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
+
+# --- 1. SEGURIDAD Y RENDIMIENTO (CONNECTION POOL) ---
+# Creamos un pool de conexiones para reciclar recursos y no tumbar a Neon
+try:
+    db_pool = psycopg2.pool.SimpleConnectionPool(
+        1, 20, # Mínimo 1 conexión, máximo 20 simultáneas
+        os.getenv("DATABASE_URL")
+    )
+except Exception as e:
+    print(f"Error creando el pool de conexiones: {e}")
+
+# --- 2. RUTA TRANSSACIONAL EN CASCADA (NUEVO PROCESO) ---
+@app.post("/crear_proceso_cascada")
+async def crear_proceso_cascada(
+    request: Request,
+    radicado_interno: str = Form(...),
+    radicado_rama: str = Form(...),
+    naturaleza: str = Form(...),
+    juzgado: str = Form(...),
+    demandante_nombre: str = Form(...),
+    demandante_cedula: str = Form(...),
+    demandado_cedulas: str = Form(...), # Ej: "1088123 | 900123"
+    demandado_nombres: str = Form(...), # Ej: "Juan Perez | Luz Carina"
+    conjunto_residencial: str = Form(...),
+    nomenclatura_apto: str = Form(...)
+):
+    # Obtenemos una conexión libre del Pool
+    conn = db_pool.getconn()
+    
+    try:
+        # El bloque "with" asegura que todo sea una Transacción (ACID)
+        # Si algo falla en la línea 50, se deshacen los pasos anteriores (Rollback)
+        with conn:
+            with conn.cursor() as cur:
+                
+                # PASO 1: Litisconsorcio (Extraemos al Deudor Principal para el Inmueble)
+                cedulas_list = [c.strip() for c in demandado_cedulas.split("|")]
+                nombres_list = [n.strip() for n in demandado_nombres.split("|")]
+                deudor_principal_cedula = cedulas_list[0]
+                deudor_principal_nombre = nombres_list[0]
+
+                # Creamos o verificamos al Demandante (Conjunto)
+                cur.execute("""
+                    INSERT INTO contactos (identificacion, nombre, tipo, ciudad) 
+                    VALUES (%s, %s, 'Cliente', 'PEREIRA') 
+                    ON CONFLICT (identificacion) DO NOTHING;
+                """, (demandante_cedula, demandante_nombre))
+
+                # Creamos al Deudor Principal y atrapamos su ID interno
+                cur.execute("""
+                    INSERT INTO contactos (identificacion, nombre, tipo, ciudad) 
+                    VALUES (%s, %s, 'Contraparte', 'PEREIRA')
+                    ON CONFLICT (identificacion) DO UPDATE SET nombre = EXCLUDED.nombre
+                    RETURNING id;
+                """, (deudor_principal_cedula, deudor_principal_nombre))
+                
+                resultado_contacto = cur.fetchone()
+                if resultado_contacto:
+                    contacto_id = resultado_contacto[0]
+                else:
+                    # Si no devolvió ID porque no hubo cambios, lo buscamos
+                    cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (deudor_principal_cedula,))
+                    contacto_id = cur.fetchone()[0]
+
+                # PASO 2: Nace el Inmueble atado al Deudor Principal
+                cur.execute("""
+                    INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) 
+                    VALUES (%s, %s, %s) 
+                    RETURNING id;
+                """, (contacto_id, conjunto_residencial, nomenclatura_apto))
+                inmueble_id = cur.fetchone()[0]
+
+                # PASO 3: Nace el Proceso atado al Inmueble (y persiguiendo a todos los deudores)
+                cur.execute("""
+                    INSERT INTO procesos (radicado_interno, radicado_rama, naturaleza, juzgado, 
+                                          estado, id_demandado, demandado, inmueble_id) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (radicado_interno, radicado_rama, naturaleza, juzgado, 
+                      'Activo', demandado_cedulas, demandado_nombres, inmueble_id))
+                
+                # PASO 4: Auditoría Inmutable
+                cur.execute("""
+                    INSERT INTO actuaciones (radicado_interno, fecha, etapa, descripcion, usuario, tipificacion_sugerida)
+                    VALUES (%s, CURRENT_DATE, 'Inicio', 'Presentación inicial de la demanda', 'Sistema', 'Radicación')
+                """, (radicado_interno,))
+
+        # Si el código llega aquí sin errores, hace el commit automáticamente
+        return RedirectResponse(url="/expedientes?mensaje=Proceso+creado+exitosamente", status_code=303)
+        
+    except Exception as e:
+        # En caso de error, el "with conn" hace un rollback automático de los datos a medias
+        print(f"❌ Error en la cascada transaccional: {e}")
+        return RedirectResponse(url="/expedientes?error=Fallo+la+creacion", status_code=303)
+        
+    finally:
+        # SIEMPRE devolvemos la conexión al Pool para que no se agoten
+        db_pool.putconn(conn)
 
 # ==============================================================================
 # --- EL GUARDIA DE SEGURIDAD GLOBAL (MIDDLEWARE) ---
