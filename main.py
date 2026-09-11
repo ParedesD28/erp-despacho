@@ -1299,7 +1299,7 @@ async def crear_expediente_completo(
     juzgado_numero: str = Form(...),
     juzgado_tipo: str = Form(...),
     juzgado_ciudad: str = Form(...),
-    conjunto: str = Form(...),
+    # Fíjate que aquí YA NO ESTÁ la palabra "conjunto", el Chef ya no la pide.
     apto: str = Form(...),
     demandados_existentes: str = Form(...),
     demandantes_existentes: str = Form(None),
@@ -1307,7 +1307,7 @@ async def crear_expediente_completo(
     abogado_id: int = Form(...),
     medidas_cautelares: str = Form("")
 ):
-    """Ruta del Wizard: Crea el inmueble y amarra todo en cascada"""
+    """Ruta del Wizard: Crea el inmueble deduciendo el Conjunto y amarra todo en cascada"""
     juzgado_final = f"JUZGADO {juzgado_numero} {juzgado_tipo} DE {juzgado_ciudad.upper()}"
     conn = db_pool.getconn()
     
@@ -1316,17 +1316,25 @@ async def crear_expediente_completo(
             with conn.cursor() as cur:
                 
                 # --- PASO 1: EL INMUEBLE ---
-                deudor_principal = [c.strip() for c in demandados_existentes.split(",")][0]
                 
+                # A. Trabajo de detective: Buscar el nombre del Conjunto usando la cédula del Demandante
+                id_conjunto = [c.strip() for c in demandantes_existentes.split(",")][0]
+                cur.execute("SELECT nombre FROM contactos WHERE identificacion = %s", (id_conjunto,))
+                res_nombre = cur.fetchone()
+                nombre_conjunto = res_nombre['nombre'] if isinstance(res_nombre, dict) else (res_nombre[0] if res_nombre else "SIN NOMBRE")
+
+                # B. Extraer al deudor principal
+                deudor_principal = [c.strip() for c in demandados_existentes.split(",")][0]
                 cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (deudor_principal,))
                 res_contacto = cur.fetchone()
                 contacto_id = res_contacto['id'] if isinstance(res_contacto, dict) else (res_contacto[0] if res_contacto else None)
                 
+                # C. Crear el inmueble usando el nombre que el detective averiguó
                 cur.execute("""
                     INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) 
                     VALUES (%s, %s, %s) 
                     RETURNING id;
-                """, (contacto_id, conjunto, apto.upper()))
+                """, (contacto_id, nombre_conjunto, apto.upper()))
                 nuevo_inmueble_id = cur.fetchone()
                 nuevo_inmueble_id = nuevo_inmueble_id['id'] if isinstance(nuevo_inmueble_id, dict) else nuevo_inmueble_id[0]
                 
