@@ -76,6 +76,7 @@ def vista_login(request: Request):
     )
 
 # --- 2. MOTOR DE LOGIN (EL QUE PROCESA LA CONTRASEÑA) ---
+# --- 2. MOTOR DE LOGIN (EL QUE PROCESA LA CONTRASEÑA) ---
 @app.post("/login")
 def procesar_login(request: Request, email: str = Form(...), password: str = Form(...)):
     try:
@@ -87,8 +88,15 @@ def procesar_login(request: Request, email: str = Form(...), password: str = For
 
                 # Validamos que el usuario exista y la contraseña sea correcta
                 if usuario and verificar_password(password, usuario['password']):
-                    # ¡ÉXITO! Lo enviamos volando al Dashboard
-                    return RedirectResponse(url="/dashboard", status_code=303)
+                    
+                    # ¡ÉXITO! Preparamos el viaje al Dashboard
+                    respuesta = RedirectResponse(url="/dashboard", status_code=303)
+                    
+                    # 🚀 AQUÍ ESTÁ LA MAGIA: Le ponemos la manilla "VIP" (Cookie)
+                    # Guardamos el ID del usuario en la cookie 'token_erp'
+                    respuesta.set_cookie(key="token_erp", value=str(usuario['id']))
+                    
+                    return respuesta
                 else:
                     # FALLÓ: Lo devolvemos al login con mensaje de error
                     return templates.TemplateResponse(
@@ -103,7 +111,6 @@ def procesar_login(request: Request, email: str = Form(...), password: str = For
             name="login.html",
             context={"request": request, "error": f"Error interno: {str(e)}"}
         )
-
 # --- 3. RUTA DEL DASHBOARD ---
 @app.get("/dashboard")
 def vista_dashboard(request: Request):
