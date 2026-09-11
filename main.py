@@ -52,6 +52,7 @@ async def validador_general_seguridad(request: Request, call_next):
 # ==============================================================================
 # --- RUTAS DE LOGIN Y LOGOUT ---
 # ==============================================================================
+
 # --- FUNCIÓN DE SEGURIDAD PARA CONTRASEÑAS ---
 def verificar_password(password_plana, password_hash):
     try:
@@ -65,8 +66,16 @@ def verificar_password(password_plana, password_hash):
     # Si la contraseña está normal
     return password_plana == password_hash
 
+# --- 1. RUTA PARA DIBUJAR LA PANTALLA (LA QUE FALTABA) ---
+@app.get("/login")
+def vista_login(request: Request):
+    return templates.TemplateResponse(
+        request=request, 
+        name="login.html", 
+        context={"request": request}
+    )
 
-# --- MOTOR DE LOGIN ---
+# --- 2. MOTOR DE LOGIN (EL QUE PROCESA LA CONTRASEÑA) ---
 @app.post("/login")
 def procesar_login(request: Request, email: str = Form(...), password: str = Form(...)):
     try:
@@ -95,7 +104,7 @@ def procesar_login(request: Request, email: str = Form(...), password: str = For
             context={"request": request, "error": f"Error interno: {str(e)}"}
         )
 
-# --- RUTA DEL DASHBOARD ---
+# --- 3. RUTA DEL DASHBOARD ---
 @app.get("/dashboard")
 def vista_dashboard(request: Request):
     # Esta es la ruta que recibe al usuario después de loguearse exitosamente
@@ -104,9 +113,11 @@ def vista_dashboard(request: Request):
         name="dashboard.html", 
         context={"request": request}
     )
+
+# --- 4. RUTA DE LOGOUT ---
 @app.get("/logout")
 def cerrar_sesion():
-    # Destruye la cookie y lo devuelve a la calle
+    # Destruye la cookie (si la hay) y lo devuelve a la calle
     respuesta = RedirectResponse(url="/login", status_code=303)
     respuesta.delete_cookie("token_erp")
     return respuesta
