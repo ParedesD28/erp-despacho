@@ -21,7 +21,7 @@ from fastapi import FastAPI, Request, Form
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse, HTMLResponse, Response
 
 # 🔥 ESTAS SON LAS DOS LÍNEAS QUE FALTAN O QUEDARON ABAJO:
 app = FastAPI()
