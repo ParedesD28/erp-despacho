@@ -941,6 +941,33 @@ async def exportar_excel(request: Request, inmueble_id: int = Form(...), tipo_ta
         headers={"Content-Disposition": f"attachment; filename=Liquidacion_{inm_info[2].replace(' ', '_')}.xlsx"}
     )
 
+@app.get("/liquidador/plantilla")
+def descargar_plantilla_liquidador():
+    # 1. Estructura exacta requerida para la carga contable
+    datos_ejemplo = {
+        "Desde": ["01/01/2025", "01/02/2025"],
+        "Hasta": ["31/01/2025", "28/02/2025"],
+        "ORDINARIAS": [250000, 250000],
+        "EXTRAORDINARIAS": [0, 50000]
+    }
+    
+    df = pd.DataFrame(datos_ejemplo)
+    
+    # 2. Generar el Excel en memoria
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Cuotas")
+    output.seek(0)
+    
+    # 3. Retornar el archivo para descarga directa
+    headers = {
+        "Content-Disposition": "attachment; filename=formato_cuotas_ph.xlsx"
+    }
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers
+    )
 # ==============================================================================
 # --- RUTA 5: CARGA MASIVA RELACIONAL (CON TRAZABILIDAD EXTREMA) ---
 # ==============================================================================
