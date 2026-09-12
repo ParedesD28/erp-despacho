@@ -1,19 +1,16 @@
 {% extends "base.html" %}
 
 {% block contenido %}
-<!-- LIBRERÍAS DEL BUSCADOR INTELIGENTE (Tom Select) -->
-<link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.default.css" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
-<style>
-    .ts-control { border-radius: 0.375rem; border-color: #e5e7eb; padding: 0.5rem 0.75rem; }
-    .ts-control.focus { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2); }
-</style>
+<!-- 1. IDENTIFICACIÓN AUTOMÁTICA DEL INMUEBLE -->
+<input type="hidden" name="inmueble_id" value="{{ parametros.inmueble_id }}">
 
-<header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm">
-    <h2 class="text-xl font-semibold text-slate-800">Liquidador Financiero - Propiedad Horizontal</h2>
-</header>
-
-<div class="p-8 flex flex-col gap-6">
+<div class="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg flex items-center gap-3 mb-6">
+    <i data-lucide="check-circle" class="w-6 h-6 text-blue-600"></i>
+    <div>
+        <p class="text-sm font-bold uppercase tracking-wide">Liquidación Sincronizada</p>
+        <p class="text-xs text-blue-700">Este liquidador está conectado automáticamente al expediente y al deudor (incluyendo codeudores).</p>
+    </div>
+</div>
     
     <!-- 1. BARRA DE CONFIGURACIÓN HORIZONTAL -->
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
