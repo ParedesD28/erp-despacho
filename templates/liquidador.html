@@ -25,10 +25,10 @@
                        placeholder="🔍 Ej: Torre 1 Apto 101" autocomplete="off" oninput="sincronizarLiquidador()">
                        
                 <datalist id="opciones_liquidador">
-                    {% for i in inmuebles %}
-                    <option data-id="{{ i.id }}" value="{{ i.conjunto_residencial }} - {{ i.torre_apto }}"></option>
-                    {% endfor %}
-                </datalist>
+                {% for i in inmuebles %}
+                <option data-id="{{ i.id }}" value="Exp: {{ i.expediente }} | {{ i.nombre }} | CC: {{ i.cedula }} | {{ i.conjunto_residencial }} {{ i.torre_apto }}"></option>
+                {% endfor %}
+            </datalist>
             </div>
 
             <!-- Tipo de Tasa -->
