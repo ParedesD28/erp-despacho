@@ -260,17 +260,14 @@ def cerrar_sesion():
 # ==============================================================================
 # --- FUNCIÓN MAESTRA PARA CARGAR INMUEBLES (USADA POR TODO EL ERP) ---
 # ==============================================================================
-# ==============================================================================
-# --- FUNCIÓN MAESTRA PARA CARGAR INMUEBLES (USADA POR TODO EL ERP) ---
-# ==============================================================================
 def cargar_inmuebles_ph():
     try:
         conn = psycopg2.connect(os.getenv("DATABASE_URL"))
         cur = conn.cursor()
         
-        # 💡 MEGA-CONSULTA INFALIBLE: Cruzamos directamente por el inmueble_id
+        # 💡 MEGA-CONSULTA: Trae al dueño principal Y a los codeudores usando la tabla puente
         cur.execute("""
-            SELECT 
+            SELECT DISTINCT
                 i.id, 
                 i.conjunto_residencial, 
                 i.torre_apto,
@@ -278,8 +275,9 @@ def cargar_inmuebles_ph():
                 c.nombre,
                 COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente
             FROM inmuebles_ph i
-            JOIN contactos c ON i.contacto_id = c.id
             LEFT JOIN procesos p ON p.inmueble_id = i.id
+            LEFT JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
+            LEFT JOIN contactos c ON (c.identificacion = pl.identificacion_demandado OR c.id = i.contacto_id)
             ORDER BY p.radicado_interno DESC, c.nombre ASC
         """)
         
@@ -296,7 +294,7 @@ def cargar_inmuebles_ph():
         conn.close()
         return lista
     except Exception as e:
-        print(f"❌ Error cargando inmuebles: {e}")
+        print(f"❌ Error cargando inmuebles globales: {e}")
         return []
 
 # Silenciamos la queja de Pandas para mantener la consola limpia
@@ -340,20 +338,36 @@ def obtener_nombres_demandantes(id_cliente_str, conn):
 
 # 1. TU FUNCIÓN EXACTA (Adaptada a FastAPI)
 def cargar_procesos_general():
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    # Inyectamos p.demandado y p.id_demandado en la consulta
-    query = '''SELECT p.radicado_interno, p.juzgado, p.etapa_actual, 
-               p.demandado, p.id_demandado,
-               c.nombre AS demandante_db, a.nombre AS abogado_asignado 
-               FROM procesos p 
-               LEFT JOIN clientes c ON p.id_cliente = c.identificacion 
-               LEFT JOIN abogados a ON p.abogado_id = a.id'''
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    
-    # Limpiamos los datos vacíos (NaN) antes de enviarlos al HTML
-    df = df.fillna("")
-    return df.to_dict(orient="records")
+    try:
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        
+        # 💡 TRUCO SQL: Agrupamos a los deudores con STRING_AGG solo para la vista
+        query = '''
+            SELECT 
+                p.radicado_interno, p.radicado_rama, p.naturaleza, p.juzgado, p.etapa_actual, p.estado,
+                p.pretensiones, p.medidas_cautelares, p.id_cliente, 
+                c_dem.nombre AS demandante_db, 
+                a.nombre AS abogado_asignado,
+                STRING_AGG(c_ddo.nombre, ' | ') AS demandado,
+                STRING_AGG(pl.identificacion_demandado, ' | ') AS id_demandado
+            FROM procesos p 
+            LEFT JOIN contactos c_dem ON p.id_cliente = c_dem.identificacion 
+            LEFT JOIN abogados a ON p.abogado_id = a.id
+            LEFT JOIN procesos_litisconsorcio pl ON p.radicado_interno = pl.radicado_interno
+            LEFT JOIN contactos c_ddo ON pl.identificacion_demandado = c_ddo.identificacion
+            GROUP BY 
+                p.radicado_interno, p.radicado_rama, p.naturaleza, p.juzgado, p.etapa_actual, p.estado, 
+                p.pretensiones, p.medidas_cautelares, p.id_cliente, c_dem.nombre, a.nombre
+            ORDER BY p.radicado_interno DESC
+        '''
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        
+        df = df.fillna("")
+        return df.to_dict(orient="records")
+    except Exception as e:
+        print(f"❌ Error cargando procesos generales: {e}")
+        return []
 
 # 2. LA RUTA (El reemplazo de tu botón de Streamlit)
 @app.get("/expedientes")
