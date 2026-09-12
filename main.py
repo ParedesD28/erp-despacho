@@ -1,32 +1,58 @@
-import psycopg2
-from psycopg2.extras import RealDictCursor # Asegúrate de tener esto arriba del todo
-from typing import List
-import re
-import json
-from fastapi import FastAPI, Request, Form, Depends, HTTPException, status, UploadFile, File
-import io
-import openpyxl
-from openpyxl.styles import Font, Alignment, PatternFill
-from fastapi.responses import StreamingResponse, HTMLResponse
 import os
 import psycopg2
+from psycopg2.extras import RealDictCursor
 from psycopg2 import pool
 import pandas as pd
 import bcrypt
 import requests
 import calendar
 import warnings
-from datetime import date, datetime
-from fastapi import FastAPI, Request, Form
+import io
+import re
+import json
+from typing import List
+from datetime import date, datetime, timedelta
+from fastapi import FastAPI, Request, Form, Depends, HTTPException, status, UploadFile, File
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from dotenv import load_dotenv
 from fastapi.responses import RedirectResponse, StreamingResponse, HTMLResponse, Response
+from dotenv import load_dotenv
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill
 
-# 🔥 ESTAS SON LAS DOS LÍNEAS QUE FALTAN O QUEDARON ABAJO:
+warnings.filterwarnings('ignore', message='.*SQLAlchemy connectable.*')
+load_dotenv()
+
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
+# ==============================================================================
+# --- MOTOR DE REGLAS DE TÉRMINOS JUDICIALES ---
+# ==============================================================================
+mapa_subetapas = {
+    "1. Presentación de la demanda": {"Radicación": 30, "Requerimiento por DT": 25, "Impulso o memorial": 30, "Observación": 0},
+    "2. Inadmisión": {"Auto de inadmisión": 5, "Subsanación": 30, "Requerimiento por DT": 25, "Impulso o memorial": 30, "Observación": 0},
+    "3. Admisión": {"Solicitud de oficios": 15, "Requerimiento por DT": 25, "Impulso o memorial": 30, "Observación": 0},
+    "4. Medidas Cautelares": {"Gestión de medidas cautelares": 15, "Requerimiento por DT": 25, "Impulso o memorial": 30, "Observación": 0},
+    "5. Notificación": {"Envío de notificación": 10, "Envío de informe a despacho": 30, "Requerimiento por DT": 25, "Impulso o memorial": 30, "Observación": 0},
+    "6. Excepciones": {"Traslado": 10, "Contestación a excepciones": 30, "Requerimiento por DT": 25, "Impulso o memorial": 30, "Observación": 0},
+    "7. Sentencia": {"Requerimiento por DT": 25, "Impulso o memorial": 30, "Observación": 0},
+    "8. Desistimiento tácito": {"Impulso o memorial": 30, "Observación": 0},
+    "Auto de Trámite / General": {"Revisión": 10, "Observación": 0},
+    "Terminación del Proceso": {"Archivo": 0, "Observación": 0}
+}
+
+def sumar_dias_habiles(fecha_inicial: date, dias: int) -> date:
+    """Suma días hábiles saltándose fines de semana"""
+    fecha_actual = fecha_inicial
+    dias_agregados = 0
+    while dias_agregados < dias:
+        fecha_actual += timedelta(days=1)
+        if fecha_actual.weekday() < 5: # 0 a 4 son Lunes a Viernes
+            dias_agregados += 1
+    return fecha_actual
+
+# ... (DEJA INTACTO TODO TU CÓDIGO DEL MEDIO DE AQUÍ EN ADELANTE) ...
 # --- 1. SEGURIDAD Y RENDIMIENTO (CONNECTION POOL) ---
 # Creamos un pool de conexiones para reciclar recursos y no tumbar a Neon
 try:
@@ -1447,3 +1473,50 @@ async def crear_expediente_completo(
         
     finally:
         db_pool.putconn(conn)
+        # ==============================================================================
+# --- MÓDULO: REGISTRO DE ACTUACIONES PROCESALES (NUEVA ACTUACIÓN) ---
+# ==============================================================================
+@app.post("/actuacion/nueva")
+def guardar_nueva_actuacion(
+    request: Request,
+    radicado_interno: str = Form(...),
+    fecha: str = Form(...),
+    etapa: str = Form(...),
+    sub_etapa: str = Form(...),
+    descripcion: str = Form("")
+):
+    try:
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        with conn:
+            with conn.cursor() as cur:
+                # 1. Si había un vencimiento pendiente, lo marcamos como completado
+                if sub_etapa != "Observación":
+                    cur.execute("UPDATE vencimientos SET estado='Completado' WHERE radicado_interno=%s AND estado='Pendiente'", (radicado_interno,))
+
+                # 2. Guardar la nueva actuación en la base de datos de Neon
+                detalle_completo = f"{sub_etapa}: {descripcion}" if descripcion else sub_etapa
+                cur.execute("""
+                    INSERT INTO actuaciones (radicado_interno, fecha, etapa, descripcion, usuario)
+                    VALUES (%s, %s, %s, %s, 'Abogado Manual')
+                """, (radicado_interno, fecha, etapa, detalle_completo))
+                
+                # 3. Actualizar la etapa general del proceso en el panel de control
+                cur.execute("UPDATE procesos SET etapa_actual=%s WHERE radicado_interno=%s", (etapa, radicado_interno))
+                
+                # 4. Magia Pura: Calcular y generar la alarma automática si aplica
+                dias_alarma = mapa_subetapas.get(etapa, {}).get(sub_etapa, 0)
+                if dias_alarma > 0:
+                    f_limite = sumar_dias_habiles(date.fromisoformat(fecha), dias_alarma)
+                    cur.execute("""
+                        INSERT INTO vencimientos (radicado_interno, titulo, fecha_vencimiento, estado, observaciones)
+                        VALUES (%s, %s, %s, 'Pendiente', %s)
+                    """, (radicado_interno, sub_etapa, f_limite, descripcion))
+                    
+        conn.close()
+        
+        # Recargamos la pantalla del expediente inyectando una alerta de éxito flotante
+        return RedirectResponse(url=f"/expediente/{radicado_interno}?mensaje=Actuacion+registrada+exitosamente", status_code=303)
+        
+    except Exception as e:
+        print(f"❌ Error guardando actuación: {e}")
+        return RedirectResponse(url=f"/expediente/{radicado_interno}?error=Fallo+al+guardar+la+actuacion", status_code=303)
