@@ -223,38 +223,42 @@
 </div>
 
 <script>
-    // 1. Sincroniza el nombre que el usuario escribe con el ID secreto para el servidor
-    function sincronizarLiquidador() {
-        const input = document.getElementById('input_inmueble_liq').value;
-        const hidden = document.getElementById('hidden_inmueble_id');
-        const options = document.getElementById('opciones_liquidador').options;
-
-        hidden.value = ''; 
-        for(let i = 0; i < options.length; i++) {
-            if(options[i].value === input) {
-                hidden.value = options[i].getAttribute('data-id');
-                break;
-            }
-        }
-    }
-
     document.addEventListener("DOMContentLoaded", function() {
-        // 2. Si el usuario llegó desde el botón azul del CRM, auto-llena el buscador visualmente
-        const hiddenId = document.getElementById('hidden_inmueble_id').value;
-        if(hiddenId) {
-            const options = document.getElementById('opciones_liquidador').options;
-            for(let i = 0; i < options.length; i++) {
-                if(options[i].getAttribute('data-id') === hiddenId) {
-                    document.getElementById('input_inmueble_liq').value = options[i].value;
+        // Asegúrate de que los IDs coincidan con tu HTML
+        const buscador = document.getElementById('buscador_inmueble');
+        const inputOculto = document.getElementById('inmueble_id_real');
+        const formulario = document.getElementById('form_liquidador');
+        
+        // Obtenemos el ID del datalist que usa el input
+        const datalistId = buscador.getAttribute('list');
+        
+        // 1. Extraer el ID real cuando el usuario selecciona una opción
+        buscador.addEventListener('input', function() {
+            const opciones = document.getElementById(datalistId).options;
+            inputOculto.value = ""; // Limpiar por defecto si borra el texto
+            
+            for (let i = 0; i < opciones.length; i++) {
+                if (opciones[i].value === this.value) {
+                    // Extraemos el número exacto, sin importar qué texto haya
+                    inputOculto.value = opciones[i].getAttribute('data-id');
                     break;
                 }
             }
-        }
+        });
 
-        // 3. Autocompletar la fecha de corte actual (tu script original)
-        let inputFecha = document.querySelector('input[name="fecha_corte"]');
-        if(inputFecha && !inputFecha.value.includes("-")) {
-            inputFecha.value = new Date().toISOString().split('T')[0];
+        // 2. Auto-cálculo si venimos desde el botón del CRM
+        const urlParams = new URLSearchParams(window.location.search);
+        const autoInmueble = urlParams.get('inmueble_id');
+        
+        if (autoInmueble) {
+            const opciones = Array.from(document.getElementById(datalistId).options);
+            const opcionCorrecta = opciones.find(opt => opt.getAttribute('data-id') === autoInmueble);
+            
+            if (opcionCorrecta) {
+                buscador.value = opcionCorrecta.value; 
+                inputOculto.value = autoInmueble;      
+                setTimeout(() => { formulario.submit(); }, 500);
+            }
         }
     });
 </script>
