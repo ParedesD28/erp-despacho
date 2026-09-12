@@ -1427,11 +1427,9 @@ async def crear_expediente_completo(
     juzgado_ciudad: str = Form(...),
     apto: str = Form(...),
     
-    # 1. Hacemos opcionales las listas desplegables (Form(None))
     demandados_existentes: str = Form(None),
     demandantes_existentes: str = Form(None),
     
-    # 2. Recuperamos las cajitas de creación "Al Vuelo"
     nuevo_dem_id: List[str] = Form(default=[]),
     nuevo_dem_nombre: List[str] = Form(default=[]),
     nuevo_ddo_id: List[str] = Form(default=[]),
@@ -1439,19 +1437,18 @@ async def crear_expediente_completo(
     
     pretensiones: float = Form(0.0),
     abogado_id: int = Form(...),
-    medidas_cautelares: str = Form("") # Soporta vacíos para prejurídicos
+    medidas_cautelares: str = Form("")
 ):
     juzgado_final = f"JUZGADO {juzgado_numero} {juzgado_tipo} DE {juzgado_ciudad.upper()}"
     conn = db_pool.getconn()
     
     try:
-        with conn: # Transacción ACID
+        with conn: # Transacción ACID (Cero pérdida de datos)
             with conn.cursor() as cur:
                 
-                # --- PASO 1: PROCESAR DEMANDANTES (Existentes + Nuevos) ---
+                # --- PASO 1: PROCESAR DEMANDANTES ---
                 ids_demandantes = [c.strip() for c in demandantes_existentes.split(",")] if demandantes_existentes else []
                 
-                # Guardamos a los que creaste "Al Vuelo"
                 for c_id, c_nom in zip(nuevo_dem_id, nuevo_dem_nombre):
                     if c_id and c_nom:
                         c_id_limpio = c_id.strip().upper()
@@ -1461,10 +1458,9 @@ async def crear_expediente_completo(
                 if not ids_demandantes:
                     raise Exception("Debes especificar al menos un demandante.")
                 
-                # --- PASO 2: PROCESAR DEMANDADOS (Existentes + Nuevos) ---
+                # --- PASO 2: PROCESAR DEMANDADOS ---
                 ids_demandados = [c.strip() for c in demandados_existentes.split(",")] if demandados_existentes else []
                 
-                # Guardamos a Erika Viviana (o cualquier otro) creado "Al Vuelo"
                 for d_id, d_nom in zip(nuevo_ddo_id, nuevo_ddo_nombre):
                     if d_id and d_nom:
                         d_id_limpio = d_id.strip().upper()
@@ -1474,22 +1470,15 @@ async def crear_expediente_completo(
                 if not ids_demandados:
                     raise Exception("Debes especificar al menos un demandado.")
 
-                # Consolidamos los IDs separados por " | " para la tabla procesos
-                id_cliente_final = " | ".join(ids_demandantes)
-                id_demandado_final = " | ".join(ids_demandados)
-
                 # --- PASO 3: EL INMUEBLE ---
-                # Buscamos el nombre del Conjunto usando la cédula del primer demandante
                 cur.execute("SELECT nombre FROM contactos WHERE identificacion = %s", (ids_demandantes[0],))
                 res_nombre = cur.fetchone()
                 nombre_conjunto = res_nombre['nombre'] if isinstance(res_nombre, dict) else (res_nombre[0] if res_nombre else "SIN NOMBRE")
 
-                # Buscamos el ID interno del primer demandado para amarrarle el apto
                 cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (ids_demandados[0],))
                 res_contacto = cur.fetchone()
                 contacto_id = res_contacto['id'] if isinstance(res_contacto, dict) else (res_contacto[0] if res_contacto else None)
                 
-                # Nace el Inmueble
                 cur.execute("""
                     INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) 
                     VALUES (%s, %s, %s) RETURNING id;
@@ -1497,7 +1486,7 @@ async def crear_expediente_completo(
                 nuevo_inmueble_id = cur.fetchone()
                 nuevo_inmueble_id = nuevo_inmueble_id['id'] if isinstance(nuevo_inmueble_id, dict) else nuevo_inmueble_id[0]
                 
-               # --- PASO 4: EL PROCESO ---
+                # --- PASO 4: EL PROCESO (LÓGICA LIMPIA) ---
                 cur.execute("SELECT radicado_interno FROM procesos ORDER BY radicado_interno DESC LIMIT 1")
                 ultimo_rad = cur.fetchone()
                 ultimo_rad_val = ultimo_rad['radicado_interno'] if isinstance(ultimo_rad, dict) else (ultimo_rad[0] if ultimo_rad else None)
@@ -1505,12 +1494,14 @@ async def crear_expediente_completo(
                 sig_num = int(ultimo_rad_val.split("-")[1]) + 1 if (ultimo_rad_val and "-" in ultimo_rad_val) else 1
                 radicado_interno = f"EXP-{sig_num:04d}"
                 
-                # 1. Rescatamos los nombres reales de los deudores consultando sus cédulas
-                cur.execute("SELECT nombre FROM contactos WHERE identificacion = ANY(%s)", (ids_demandados,))
-                nombres_res = cur.fetchall()
-                nombres_demandados = " | ".join([r['nombre'] if isinstance(r, dict) else r[0] for r in nombres_res]) if nombres_res else "SIN NOMBRE"
+                # Rescatamos SOLO al deudor principal para la tabla matriz
+                demandante_principal = ids_demandantes[0]
+                demandado_principal = ids_demandados[0]
+                
+                cur.execute("SELECT nombre FROM contactos WHERE identificacion = %s", (demandado_principal,))
+                res_dem_prin = cur.fetchone()
+                nombre_demandado_principal = res_dem_prin['nombre'] if isinstance(res_dem_prin, dict) else (res_dem_prin[0] if res_dem_prin else "SIN NOMBRE")
 
-                # 2. Insertamos con las columnas mapeadas correctamente
                 cur.execute("""
                     INSERT INTO procesos (
                         radicado_interno, radicado_rama, naturaleza, juzgado, 
@@ -1519,11 +1510,20 @@ async def crear_expediente_completo(
                     ) VALUES (%s, %s, %s, %s, '1. Presentación de la demanda', %s, %s, %s, 'Activo', %s, %s, %s, %s)
                 """, (
                     radicado_interno, radicado_rama, naturaleza, juzgado_final, 
-                    id_cliente_final, nombres_demandados, id_demandado_final, pretensiones, 
+                    demandante_principal, nombre_demandado_principal, demandado_principal, pretensiones, 
                     medidas_cautelares, abogado_id, nuevo_inmueble_id
                 ))
 
-                # --- PASO 5: TRAZABILIDAD ---
+                # --- PASO 5: LA NUEVA ARQUITECTURA (TABLA LITISCONSORCIO) ---
+                # Insertamos a TODOS individualmente en la nueva tabla (vertical)
+                for index, d_id in enumerate(ids_demandados):
+                    es_principal = True if index == 0 else False
+                    cur.execute("""
+                        INSERT INTO procesos_litisconsorcio (radicado_interno, identificacion_demandado, es_principal)
+                        VALUES (%s, %s, %s)
+                    """, (radicado_interno, d_id, es_principal))
+
+                # --- PASO 6: TRAZABILIDAD ---
                 cur.execute("""
                     INSERT INTO actuaciones (radicado_interno, fecha, etapa, descripcion, usuario, tipificacion_sugerida)
                     VALUES (%s, CURRENT_DATE, 'Inicio', 'Presentación inicial de la demanda', 'Sistema', 'Radicación')
