@@ -260,12 +260,38 @@ def cerrar_sesion():
 # ==============================================================================
 # --- FUNCIÓN MAESTRA PARA CARGAR INMUEBLES (USADA POR TODO EL ERP) ---
 # ==============================================================================
+# ==============================================================================
+# --- FUNCIÓN MAESTRA PARA CARGAR INMUEBLES (USADA POR TODO EL ERP) ---
+# ==============================================================================
 def cargar_inmuebles_ph():
     try:
         conn = psycopg2.connect(os.getenv("DATABASE_URL"))
         cur = conn.cursor()
-        cur.execute("SELECT id, conjunto_residencial, torre_apto FROM inmuebles_ph ORDER BY conjunto_residencial ASC, torre_apto ASC")
-        lista = [{"id": r[0], "conjunto_residencial": r[1], "torre_apto": r[2]} for r in cur.fetchall()]
+        
+        # 💡 MEGA-CONSULTA INFALIBLE: Cruzamos directamente por el inmueble_id
+        cur.execute("""
+            SELECT 
+                i.id, 
+                i.conjunto_residencial, 
+                i.torre_apto,
+                c.identificacion,
+                c.nombre,
+                COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente
+            FROM inmuebles_ph i
+            JOIN contactos c ON i.contacto_id = c.id
+            LEFT JOIN procesos p ON p.inmueble_id = i.id
+            ORDER BY p.radicado_interno DESC, c.nombre ASC
+        """)
+        
+        lista = [{
+            "id": r[0], 
+            "conjunto_residencial": r[1], 
+            "torre_apto": r[2],
+            "cedula": r[3],
+            "nombre": r[4],
+            "expediente": r[5]
+        } for r in cur.fetchall()]
+        
         cur.close()
         conn.close()
         return lista
@@ -610,34 +636,11 @@ def vista_liquidador(
     resultados = []
     resumen = {}
     
-    # 🔥 LA SOLUCIÓN: Mega-Consulta cruzando Inmuebles, Contactos y Procesos
-    conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT 
-            i.id, 
-            i.conjunto_residencial, 
-            i.torre_apto,
-            c.identificacion,
-            c.nombre,
-            COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente
-        FROM inmuebles_ph i
-        JOIN contactos c ON i.contacto_id = c.id
-        LEFT JOIN procesos p ON c.identificacion = p.id_demandado
-        ORDER BY p.radicado_interno DESC, c.nombre ASC
-    """)
+    # 💡 Llamamos a la función maestra global que ya tiene la Mega-Consulta
+    lista_inmuebles = cargar_inmuebles_ph()
     
-    lista_inmuebles = [{
-        "id": r[0], 
-        "conjunto_residencial": r[1], 
-        "torre_apto": r[2],
-        "cedula": r[3],
-        "nombre": r[4],
-        "expediente": r[5]
-    } for r in cur.fetchall()]
-    
-    cur.close()
-    conn.close()
+    # Si el usuario llegó desde el botón azul del CRM...
+    # ... (DEJA EL RESTO DEL CÓDIGO INTACTO HACIA ABAJO) ...
     
     # Si el usuario llegó desde el botón azul del CRM
     if inmueble_id:
