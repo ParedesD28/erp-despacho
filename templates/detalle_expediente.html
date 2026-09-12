@@ -113,13 +113,20 @@
                             </div>
                             <p class="text-sm text-slate-600 leading-relaxed">{{ act.descripcion }}</p>
                             
+                            <!-- BOTONES EDITAR / ELIMINAR (AHORA FUNCIONAL) -->
                             <div class="mt-4 pt-3 border-t border-slate-200 flex justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                                 <button type="button" class="text-[11px] font-bold text-slate-500 hover:text-blue-600 flex items-center gap-1 transition-colors">
                                     <i data-lucide="edit-3" class="w-3.5 h-3.5"></i> Editar
                                 </button>
-                                <button type="button" class="text-[11px] font-bold text-slate-500 hover:text-red-600 flex items-center gap-1 transition-colors">
-                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Eliminar
-                                </button>
+                                
+                                <!-- Formulario de Eliminación Funcional -->
+                                <form method="POST" action="/actuacion/eliminar" onsubmit="return confirm('¿Estás seguro de que deseas eliminar esta actuación permanentemente?');" class="m-0 p-0">
+                                    <input type="hidden" name="actuacion_id" value="{{ act.id }}">
+                                    <input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}">
+                                    <button type="submit" class="text-[11px] font-bold text-slate-500 hover:text-red-600 flex items-center gap-1 transition-colors cursor-pointer">
+                                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Eliminar
+                                    </button>
+                                </form>
                             </div>
                         </div>
                     </div>
