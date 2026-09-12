@@ -262,10 +262,12 @@ def cerrar_sesion():
 # ==============================================================================
 def cargar_inmuebles_ph():
     try:
+        import psycopg2
+        import os
         conn = psycopg2.connect(os.getenv("DATABASE_URL"))
         cur = conn.cursor()
         
-        # 💡 MEGA-CONSULTA: Trae al dueño principal Y a los codeudores usando la tabla puente
+        # 💡 MEGA-CONSULTA CORREGIDA: Se ajustó el ORDER BY para cumplir la regla estricta de PostgreSQL
         cur.execute("""
             SELECT DISTINCT
                 i.id, 
@@ -278,7 +280,7 @@ def cargar_inmuebles_ph():
             LEFT JOIN procesos p ON p.inmueble_id = i.id
             LEFT JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
             LEFT JOIN contactos c ON (c.identificacion = pl.identificacion_demandado OR c.id = i.contacto_id)
-            ORDER BY p.radicado_interno DESC, c.nombre ASC
+            ORDER BY COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') DESC, c.nombre ASC
         """)
         
         lista = [{
