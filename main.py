@@ -308,6 +308,39 @@ def ver_expedientes(request: Request):
         name="expedientes.html", 
         context={"procesos": datos}
     )
+    # --- RUTA PARA EL CENTRO DE MANDO DEL EXPEDIENTE INDIVIDUAL ---
+@app.get("/expediente/{radicado}")
+def ver_detalle_expediente(request: Request, radicado: str):
+    try:
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        
+        # Buscamos los datos del proceso exacto usando el radicado de la URL
+        query = '''SELECT p.*, c.nombre AS demandante_db, a.nombre AS abogado_asignado 
+                   FROM procesos p 
+                   LEFT JOIN clientes c ON p.id_cliente = c.identificacion 
+                   LEFT JOIN abogados a ON p.abogado_id = a.id
+                   WHERE p.radicado_interno = %s'''
+                   
+        df = pd.read_sql_query(query, conn, params=(radicado,))
+        conn.close()
+        
+        # Si alguien escribe un radicado falso en la URL, lo devolvemos con un Toast de error
+        if df.empty:
+            return RedirectResponse(url="/expedientes?error=Expediente+no+encontrado", status_code=303)
+        
+        # Convertimos la fila de Pandas en un diccionario limpiando los nulos
+        proceso_data = df.fillna("").to_dict(orient="records")[0]
+        
+        # Renderizamos el nuevo diseño pasándole los datos del proceso
+        return templates.TemplateResponse(
+            request=request, 
+            name="detalle_expediente.html", 
+            context={"proceso": proceso_data}
+        )
+        
+    except Exception as e:
+        print(f"Error cargando el expediente {radicado}: {e}")
+        return RedirectResponse(url="/expedientes?error=Error+interno+al+cargar+el+expediente", status_code=303)
 # --- MÓDULO CRM: MONITOREO DE LA IA ---
 def cargar_gestiones_crm():
     conn = psycopg2.connect(os.getenv("DATABASE_URL"))
