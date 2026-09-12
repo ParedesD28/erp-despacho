@@ -285,14 +285,18 @@ def obtener_nombres_demandantes(id_cliente_str, conn):
 # 1. TU FUNCIÓN EXACTA (Adaptada a FastAPI)
 def cargar_procesos_general():
     conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+    # Inyectamos p.demandado y p.id_demandado en la consulta
     query = '''SELECT p.radicado_interno, p.juzgado, p.etapa_actual, 
-                      c.nombre AS demandante_db, a.nombre AS abogado_asignado 
+               p.demandado, p.id_demandado,
+               c.nombre AS demandante_db, a.nombre AS abogado_asignado 
                FROM procesos p 
                LEFT JOIN clientes c ON p.id_cliente = c.identificacion 
                LEFT JOIN abogados a ON p.abogado_id = a.id'''
     df = pd.read_sql_query(query, conn)
     conn.close()
-    # Convertimos la tabla de Pandas en un diccionario para la web
+    
+    # Limpiamos los datos vacíos (NaN) antes de enviarlos al HTML
+    df = df.fillna("")
     return df.to_dict(orient="records")
 
 # 2. LA RUTA (El reemplazo de tu botón de Streamlit)
