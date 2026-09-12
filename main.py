@@ -262,14 +262,12 @@ def cerrar_sesion():
 # ==============================================================================
 def cargar_inmuebles_ph():
     try:
-        import psycopg2
-        import os
         conn = psycopg2.connect(os.getenv("DATABASE_URL"))
         cur = conn.cursor()
         
-        # 💡 MEGA-CONSULTA CORREGIDA: Se ajustó el ORDER BY para cumplir la regla estricta de PostgreSQL
+        # 💡 CONSULTA UNION: Unifica al propietario principal y a todos los codeudores por separado
         cur.execute("""
-            SELECT DISTINCT
+            SELECT 
                 i.id, 
                 i.conjunto_residencial, 
                 i.torre_apto,
@@ -277,10 +275,24 @@ def cargar_inmuebles_ph():
                 c.nombre,
                 COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente
             FROM inmuebles_ph i
+            JOIN contactos c ON i.contacto_id = c.id
             LEFT JOIN procesos p ON p.inmueble_id = i.id
-            LEFT JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
-            LEFT JOIN contactos c ON (c.identificacion = pl.identificacion_demandado OR c.id = i.contacto_id)
-            ORDER BY COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') DESC, c.nombre ASC
+            
+            UNION
+            
+            SELECT 
+                i.id, 
+                i.conjunto_residencial, 
+                i.torre_apto,
+                c.identificacion,
+                c.nombre,
+                COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente
+            FROM inmuebles_ph i
+            JOIN procesos p ON p.inmueble_id = i.id
+            JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
+            JOIN contactos c ON c.identificacion = pl.identificacion_demandado
+            
+            ORDER BY expediente DESC, nombre ASC
         """)
         
         lista = [{
