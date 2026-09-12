@@ -340,33 +340,44 @@ def ver_detalle_expediente(request: Request, radicado: str):
     try:
         conn = psycopg2.connect(os.getenv("DATABASE_URL"))
         
-        # Buscamos los datos del proceso exacto usando el radicado de la URL
-        query = '''SELECT p.*, c.nombre AS demandante_db, a.nombre AS abogado_asignado 
-                   FROM procesos p 
-                   LEFT JOIN clientes c ON p.id_cliente = c.identificacion 
-                   LEFT JOIN abogados a ON p.abogado_id = a.id
-                   WHERE p.radicado_interno = %s'''
-                   
-        df = pd.read_sql_query(query, conn, params=(radicado,))
-        conn.close()
+        # 1. Buscar los datos del proceso
+        query_proc = '''SELECT p.*, c.nombre AS demandante_db, a.nombre AS abogado_asignado 
+                        FROM procesos p 
+                        LEFT JOIN clientes c ON p.id_cliente = c.identificacion 
+                        LEFT JOIN abogados a ON p.abogado_id = a.id
+                        WHERE p.radicado_interno = %s'''
+        df = pd.read_sql_query(query_proc, conn, params=(radicado,))
         
-        # Si alguien escribe un radicado falso en la URL, lo devolvemos con un Toast de error
         if df.empty:
+            conn.close()
             return RedirectResponse(url="/expedientes?error=Expediente+no+encontrado", status_code=303)
-        
-        # Convertimos la fila de Pandas en un diccionario limpiando los nulos
+            
         proceso_data = df.fillna("").to_dict(orient="records")[0]
         
-        # Renderizamos el nuevo diseño pasándole los datos del proceso
+        # 2. NUEVO: Buscar TODO el historial de actuaciones (El más nuevo primero)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, fecha, etapa, descripcion, usuario 
+            FROM actuaciones 
+            WHERE radicado_interno = %s 
+            ORDER BY fecha DESC, id DESC
+        """, (radicado,))
+        lista_actuaciones = cur.fetchall()
+        
+        conn.close()
+        
         return templates.TemplateResponse(
             request=request, 
             name="detalle_expediente.html", 
-            context={"proceso": proceso_data}
+            context={
+                "proceso": proceso_data,
+                "actuaciones": lista_actuaciones # Enviamos la lista al HTML
+            }
         )
         
     except Exception as e:
         print(f"Error cargando el expediente {radicado}: {e}")
-        return RedirectResponse(url="/expedientes?error=Error+interno+al+cargar+el+expediente", status_code=303)
+        return RedirectResponse(url="/expedientes?error=Error+interno", status_code=303)
 # --- MÓDULO CRM: MONITOREO DE LA IA ---
 def cargar_gestiones_crm():
     conn = psycopg2.connect(os.getenv("DATABASE_URL"))
