@@ -68,9 +68,10 @@
                     </tr>
                 </thead>
                 <tbody id="cuerpo-tabla" class="divide-y divide-slate-100">
-                    {% for p in procesos %}
-                    <tr class="hover:bg-blue-50 transition-colors fila-proceso cursor-pointer">
-                        <td class="px-6 py-4">
+    {% for p in procesos %}
+    <!-- Agregamos el onclick aquí mismo: -->
+    <tr onclick="window.location.href='/expediente/{{ p.radicado_interno }}'" class="hover:bg-blue-50 transition-colors fila-proceso cursor-pointer">
+        <td class="px-6 py-4">
                             <div class="font-bold text-blue-600">{{ p.radicado_interno }}</div>
                             <div class="text-xs font-mono text-slate-500 mt-1">{{ p.radicado_rama }}</div>
                         </td>
