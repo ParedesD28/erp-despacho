@@ -35,23 +35,11 @@
     </div>
 
     <!-- ========================================== -->
-    <!-- 2. MÉTRICAS (Fluyen naturalmente debajo)   -->
+    <!-- 2. MÉTRICAS (Orden y Jerarquía Actualizados) -->
     <!-- ========================================== -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        <!-- Tarjeta Radicado -->
-        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex items-start gap-4">
-            <div class="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100">
-                <i data-lucide="folder-key" class="w-6 h-6"></i>
-            </div>
-            <div class="overflow-hidden">
-                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Identificador</p>
-                <p class="text-lg font-black text-slate-800 truncate">{{ proceso.radicado_interno }}</p>
-                <p class="text-xs font-mono text-slate-500 mt-1.5 bg-slate-100 px-2 py-1 rounded inline-block truncate max-w-full">{{ proceso.radicado_rama | default('EN REPARTO') }}</p>
-            </div>
-        </div>
-
-        <!-- Tarjeta Juzgado -->
+        <!-- 1. Tarjeta Juzgado (Movida a la primera posición) -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex items-start gap-4">
             <div class="w-12 h-12 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0 border border-purple-100">
                 <i data-lucide="gavel" class="w-6 h-6"></i>
@@ -63,13 +51,28 @@
             </div>
         </div>
 
-        <!-- Tarjeta Cuantía -->
+        <!-- 2. Tarjeta Radicado (Centro, con Rama Judicial como principal) -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex items-start gap-4">
+            <div class="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100">
+                <i data-lucide="folder-key" class="w-6 h-6"></i>
+            </div>
+            <div class="overflow-hidden w-full">
+                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Identificador</p>
+                <!-- Rama Judicial principal y grande -->
+                <p class="text-sm md:text-base font-black text-slate-800 truncate font-mono" title="{{ proceso.radicado_rama }}">{{ proceso.radicado_rama | default('EN REPARTO') }}</p>
+                <!-- Radicado Interno secundario -->
+                <p class="text-xs font-bold text-slate-500 mt-1.5 bg-slate-100 px-2 py-1 rounded inline-block truncate max-w-full uppercase">{{ proceso.radicado_interno }}</p>
+            </div>
+        </div>
+
+        <!-- 3. Tarjeta Cuantía (Se mantiene igual) -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex items-start gap-4">
             <div class="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100">
                 <i data-lucide="circle-dollar-sign" class="w-6 h-6"></i>
             </div>
             <div class="overflow-hidden">
                 <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Pretensiones</p>
+                <!-- Formateo de número agregado si está disponible, sino texto crudo -->
                 <p class="text-xl font-black text-emerald-600 truncate">${{ proceso.pretensiones | default('0.00') }}</p>
                 <p class="text-[11px] text-slate-500 font-bold mt-1.5 truncate">Abogado: <span class="text-slate-700 uppercase">{{ proceso.abogado_asignado | default('N/A') }}</span></p>
             </div>
