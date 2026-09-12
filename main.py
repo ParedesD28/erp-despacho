@@ -1531,3 +1531,27 @@ def guardar_nueva_actuacion(
     except Exception as e:
         print(f"❌ Error guardando actuación: {e}")
         return RedirectResponse(url=f"/expediente/{radicado_interno}?error=Fallo+al+guardar+la+actuacion", status_code=303)
+# ==============================================================================
+# --- MÓDULO: ELIMINAR ACTUACIÓN PROCESAL ---
+# ==============================================================================
+@app.post("/actuacion/eliminar")
+def eliminar_actuacion(
+    request: Request,
+    actuacion_id: int = Form(...),
+    radicado_interno: str = Form(...)
+):
+    try:
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        with conn:
+            with conn.cursor() as cur:
+                # Eliminamos la actuación usando su ID único
+                cur.execute("DELETE FROM actuaciones WHERE id = %s", (actuacion_id,))
+        conn.close()
+        
+        # Recargamos el expediente con un mensaje verde de éxito
+        return RedirectResponse(url=f"/expediente/{radicado_interno}?mensaje=Actuacion+eliminada+correctamente", status_code=303)
+        
+    except Exception as e:
+        print(f"❌ Error eliminando actuación: {e}")
+        # Si falla, devolvemos un mensaje rojo
+        return RedirectResponse(url=f"/expediente/{radicado_interno}?error=Fallo+al+eliminar+la+actuacion", status_code=303)
