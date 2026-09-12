@@ -224,29 +224,55 @@
 
 <script>
     document.addEventListener("DOMContentLoaded", function() {
-        // Asegúrate de que los IDs coincidan con tu HTML
         const buscador = document.getElementById('buscador_inmueble');
         const inputOculto = document.getElementById('inmueble_id_real');
-        const formulario = document.getElementById('form_liquidador');
         
-        // Obtenemos el ID del datalist que usa el input
+        // Asegúrate de que tu etiqueta form tenga id="form_liquidador" 
+        // Ejemplo: <form id="form_liquidador" method="POST" action="/liquidador">
+        const formulario = document.getElementById('form_liquidador'); 
         const datalistId = buscador.getAttribute('list');
         
-        // 1. Extraer el ID real cuando el usuario selecciona una opción
+        // 1. EL ROBOT ASISTENTE: Intercepta el botón "Generar" antes de que choque con el servidor
+        formulario.addEventListener('submit', function(evento) {
+            const opciones = document.getElementById(datalistId).options;
+            const textoEscrito = buscador.value.toLowerCase().trim();
+            
+            // Si la caja secreta está vacía, el robot adivina qué quisiste decir
+            if (inputOculto.value === "") {
+                let encontrado = false;
+                
+                for (let i = 0; i < opciones.length; i++) {
+                    // Si escribiste una cédula o nombre y coincide con algún pedazo de la opción
+                    if (opciones[i].value.toLowerCase().includes(textoEscrito)) {
+                        inputOculto.value = opciones[i].getAttribute('data-id'); // Saca el Boleto VIP
+                        buscador.value = opciones[i].value; // Autocompleta el texto para que se vea bonito
+                        encontrado = true;
+                        break;
+                    }
+                }
+                
+                // Si escribiste algo que definitivamente no existe en la base de datos
+                if (!encontrado) {
+                    evento.preventDefault(); // Frena el pantallazo blanco del Error 422
+                    alert("⚠️ No encontré este deudor en la base de datos. Por favor, verifica el nombre o la cédula.");
+                }
+            }
+        });
+
+        // 2. Comportamiento normal (si el usuario sí le da clic a la lista desplegable)
         buscador.addEventListener('input', function() {
             const opciones = document.getElementById(datalistId).options;
-            inputOculto.value = ""; // Limpiar por defecto si borra el texto
+            inputOculto.value = ""; // Limpia por defecto al teclear
             
             for (let i = 0; i < opciones.length; i++) {
                 if (opciones[i].value === this.value) {
-                    // Extraemos el número exacto, sin importar qué texto haya
                     inputOculto.value = opciones[i].getAttribute('data-id');
                     break;
                 }
             }
         });
 
-        // 2. Auto-cálculo si venimos desde el botón del CRM
+        // 3. Auto-cálculo si venimos desde el botón del CRM
         const urlParams = new URLSearchParams(window.location.search);
         const autoInmueble = urlParams.get('inmueble_id');
         
