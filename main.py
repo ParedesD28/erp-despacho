@@ -191,6 +191,7 @@ def verificar_password(password_plana, password_hash):
     return password_plana == password_hash
 
 # --- 1. RUTA PARA DIBUJAR LA PANTALLA (LA QUE FALTABA) ---
+@app.head("/login")
 @app.get("/login")
 def vista_login(request: Request):
     return templates.TemplateResponse(
@@ -199,7 +200,6 @@ def vista_login(request: Request):
         context={"request": request}
     )
 
-# --- 2. MOTOR DE LOGIN (EL QUE PROCESA LA CONTRASEÑA) ---
 # --- 2. MOTOR DE LOGIN (EL QUE PROCESA LA CONTRASEÑA) ---
 @app.post("/login")
 def procesar_login(request: Request, email: str = Form(...), password: str = Form(...)):
