@@ -226,16 +226,15 @@
 
 <script>
     document.addEventListener("DOMContentLoaded", function() {
-        // 1. Iniciamos el buscador inteligente premium
         new TomSelect("#select_inmueble_liq", {
             create: false,
+            maxOptions: 100,
             sortField: {
                 field: "text",
                 direction: "asc"
             }
         });
 
-        // 2. Si venimos del CRM con un Inmueble preseleccionado, auto-calcular
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('inmueble_id')) {
             const formulario = document.getElementById('form_liquidador');
@@ -244,7 +243,6 @@
             }
         }
 
-        // 3. Autocompletar la fecha de corte actual
         let inputFecha = document.querySelector('input[name="fecha_corte"]');
         if(inputFecha && !inputFecha.value.includes("-")) {
             inputFecha.value = new Date().toISOString().split('T')[0];
