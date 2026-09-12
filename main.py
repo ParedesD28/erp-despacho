@@ -19,6 +19,10 @@ from fastapi.responses import RedirectResponse, StreamingResponse, HTMLResponse,
 from dotenv import load_dotenv
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill
+from fastapi import APIRouter
+from pydantic import BaseModel
+from datetime import datetime
+import os
 
 warnings.filterwarnings('ignore', message='.*SQLAlchemy connectable.*')
 load_dotenv()
@@ -1555,3 +1559,51 @@ def eliminar_actuacion(
         print(f"❌ Error eliminando actuación: {e}")
         # Si falla, devolvemos un mensaje rojo
         return RedirectResponse(url=f"/expediente/{radicado_interno}?error=Fallo+al+eliminar+la+actuacion", status_code=303)
+
+# 1. Definimos el "paquete" de datos que el bot nos enviará
+class PeticionLiquidadorBot(BaseModel):
+    inmueble_id: int
+    fecha_corte: str # Formato 'YYYY-MM-DD'
+
+# 2. Creamos la ruta de la API exclusiva para el Bot
+@app.post("/api/bot/liquidar")
+def api_bot_liquidar(peticion: PeticionLiquidadorBot):
+    try:
+        # A. Convertimos la fecha de texto a objeto fecha
+        fecha_corte_dt = datetime.strptime(peticion.fecha_corte, '%Y-%m-%d').date()
+        
+        # B. Llamamos a tu cerebro matemático que ya programamos antes
+        resultados, resumen, inm_info = motor_calculo_judicial(
+            inmueble_id=peticion.inmueble_id,
+            tipo_tasa="usura", 
+            tasa_fija=2.5,
+            honorarios_pct=23.8,
+            gastos=0.0,
+            fecha_corte=fecha_corte_dt
+        )
+        
+        # C. Extraemos el total adeudado del último mes calculado
+        gran_total = resultados[-1]['cap_int'] 
+        nombre_deudor = inm_info[2]
+        
+        # D. Lógica de generación de PDF 
+        # (Aquí usamos la misma lógica de tu ruta /liquidador/exportar/pdf, 
+        # pero guardamos el archivo en una carpeta estática en Render temporalmente)
+        nombre_pdf = f"Estado_Cuenta_{peticion.inmueble_id}.pdf"
+        ruta_guardado = f"static/pdfs/{nombre_pdf}"
+        
+        # -> [Aquí iría tu código de renderizado a PDF guardándolo en ruta_guardado] <-
+        
+        # E. Le respondemos al Bot en JSON puro
+        return {
+            "status": "success",
+            "mensaje": "Liquidación generada correctamente",
+            "datos": {
+                "deudor": nombre_deudor,
+                "total_exigible": gran_total,
+                "url_pdf": f"https://tu-app-en-render.com/static/pdfs/{nombre_pdf}"
+            }
+        }
+        
+    except Exception as e:
+        return {"status": "error", "mensaje": str(e)}
