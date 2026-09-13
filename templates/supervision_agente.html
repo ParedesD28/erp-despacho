@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<div class="p-6 md:p-8 space-y-6">
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+            <p class="text-sm font-semibold text-blue-600 uppercase tracking-wider">Agente de cobranza</p>
+            <h1 class="text-3xl font-bold text-slate-900">Supervisión del agente</h1>
+            <p class="text-slate-500 mt-1">Monitoreo de la integración y de las gestiones registradas. Esta pantalla es de solo lectura.</p>
+        </div>
+        <div class="flex items-center gap-2 px-4 py-2 rounded-xl border {% if activo %}bg-emerald-50 border-emerald-200 text-emerald-700{% else %}bg-amber-50 border-amber-200 text-amber-700{% endif %}">
+            <span class="w-2.5 h-2.5 rounded-full {% if activo %}bg-emerald-500{% else %}bg-amber-500{% endif %}"></span>
+            <span class="font-semibold">{% if activo %}Integración configurada{% else %}Revisar configuración{% endif %}</span>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+            <div class="text-sm text-slate-500">Interacciones registradas</div>
+            <div class="text-3xl font-bold text-slate-900 mt-2">{{ resumen.interacciones }}</div>
+        </div>
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+            <div class="text-sm text-slate-500">Gestiones de hoy</div>
+            <div class="text-3xl font-bold text-slate-900 mt-2">{{ resumen.hoy }}</div>
+        </div>
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+            <div class="text-sm text-slate-500">Eventos marcados como error</div>
+            <div class="text-3xl font-bold {% if resumen.errores %}text-rose-600{% else %}text-emerald-600{% endif %} mt-2">{{ resumen.errores }}</div>
+        </div>
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+            <div class="text-sm text-slate-500">Última actividad registrada</div>
+            <div class="text-lg font-bold text-slate-900 mt-2">{{ resumen.ultimo_evento or 'Sin datos' }}</div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <section class="lg:col-span-1 bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+            <div class="flex items-center gap-2 mb-5">
+                <i data-lucide="shield-check" class="w-5 h-5 text-blue-600"></i>
+                <h2 class="text-lg font-bold">Conexiones</h2>
+            </div>
+            <div class="space-y-3">
+                {% for nombre, ok in [('Neon / DATABASE_URL', estado.database), ('Clave M2M del liquidador', estado.api_key), ('URL pública del ERP', estado.base_url)] %}
+                <div class="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3">
+                    <span class="text-sm text-slate-700">{{ nombre }}</span>
+                    {% if ok %}
+                    <span class="text-emerald-600 font-semibold text-sm">OK</span>
+                    {% else %}
+                    <span class="text-rose-600 font-semibold text-sm">FALTA</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            <div class="mt-5 text-xs text-slate-400">Fuente de actividad: {{ fuente }}</div>
+        </section>
+
+        <section class="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div class="px-6 py-5 border-b border-slate-200 flex items-center justify-between">
+                <div>
+                    <h2 class="text-lg font-bold">Actividad reciente</h2>
+                    <p class="text-sm text-slate-500">Últimas 100 gestiones disponibles en Neon.</p>
+                </div>
+                <span class="text-xs font-semibold bg-slate-100 text-slate-600 px-3 py-1 rounded-full">Solo lectura</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-slate-50 text-slate-500">
+                        <tr>
+                            <th class="text-left px-5 py-3">Fecha</th>
+                            <th class="text-left px-5 py-3">Identificación</th>
+                            <th class="text-left px-5 py-3">Tipo</th>
+                            <th class="text-left px-5 py-3">Resumen</th>
+                            <th class="text-left px-5 py-3">Estado</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for e in eventos %}
+                        <tr class="hover:bg-slate-50">
+                            <td class="px-5 py-3 whitespace-nowrap">{{ e.fecha or '' }}</td>
+                            <td class="px-5 py-3 font-medium">{{ e.identificacion or '' }}</td>
+                            <td class="px-5 py-3">{{ e.tipo or '' }}</td>
+                            <td class="px-5 py-3 max-w-xl">{{ e.resumen or '' }}</td>
+                            <td class="px-5 py-3">{{ e.estado or 'Registrado' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="px-5 py-12 text-center text-slate-400">No hay actividad disponible.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}
