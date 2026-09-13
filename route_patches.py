@@ -1,10 +1,8 @@
 """Correcciones puntuales aplicadas después del registro de compat_routes."""
 from datetime import date, datetime
-import re
 
 import requests
 from fastapi import Request, HTTPException
-from fastapi.responses import RedirectResponse
 from psycopg2.extras import RealDictCursor
 import main
 
@@ -38,7 +36,6 @@ def _asegurar_tabla_tasas():
             with conn.cursor() as cur:
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS historico_tasas (
-                        id BIGSERIAL PRIMARY KEY,
                         anio INTEGER NOT NULL,
                         mes INTEGER NOT NULL,
                         tasa_efectiva_anual NUMERIC(18,10) NOT NULL,
@@ -62,10 +59,6 @@ def _asegurar_tabla_tasas():
                        SET modalidad = COALESCE(modalidad, 'Consumo y ordinario')
                      WHERE modalidad IS NULL
                 """)
-                cur.execute("""
-                    CREATE UNIQUE INDEX IF NOT EXISTS uq_historico_tasas_periodo_modalidad
-                    ON historico_tasas (anio, mes, COALESCE(modalidad, 'Consumo y ordinario'))
-                """)
         return True
     except Exception as exc:
         print(f"[TASAS] No fue posible asegurar historico_tasas: {exc}", flush=True)
@@ -78,7 +71,6 @@ def _parse_tasa_porcentaje(valor):
     if valor is None:
         return None
     texto = str(valor).strip().replace("%", "").replace(" ", "")
-    # SFC publica normalmente 19,49. Aceptamos tambien 19.49 y formatos mixtos.
     if "," in texto and "." in texto:
         if texto.rfind(",") > texto.rfind("."):
             texto = texto.replace(".", "").replace(",", ".")
@@ -108,8 +100,6 @@ def _parse_fecha_sfc(valor):
 def _consultar_tasa_sfc(anio, mes):
     """Consulta la tasa IBC oficial de consumo y ordinario y deriva usura."""
     desde = date(int(anio), int(mes), 1)
-    # Consulta publica Socrata. Pedimos todas las filas para que funcione aunque
-    # el API no soporte exactamente la sintaxis usada por una instalacion local.
     respuesta = requests.get(
         TASAS_SFC_URL,
         params={"$limit": 5000, "$order": "vigencia_desde DESC"},
@@ -155,6 +145,46 @@ def _consultar_tasa_sfc(anio, mes):
     }
 
 
+def _guardar_tasa(datos):
+    conn = _conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE historico_tasas
+                       SET tasa_efectiva_anual=%s,
+                           tasa_usura_ea=%s,
+                           modalidad=%s,
+                           vigencia_desde=%s,
+                           vigencia_hasta=%s,
+                           fuente=%s,
+                           consultado_en=CURRENT_TIMESTAMP
+                     WHERE anio=%s AND mes=%s
+                       AND COALESCE(modalidad, %s)=%s
+                """, (
+                    datos["ibc_ea"], datos["usura_ea"], datos["modalidad"],
+                    datos["vigencia_desde"], datos["vigencia_hasta"], datos["fuente"],
+                    datos["anio"], datos["mes"], TASA_MODALIDAD, TASA_MODALIDAD,
+                ))
+                if cur.rowcount == 0:
+                    cur.execute("""
+                        INSERT INTO historico_tasas
+                            (anio, mes, tasa_efectiva_anual, tasa_usura_ea, modalidad,
+                             vigencia_desde, vigencia_hasta, fuente, consultado_en)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,CURRENT_TIMESTAMP)
+                    """, (
+                        datos["anio"], datos["mes"], datos["ibc_ea"], datos["usura_ea"],
+                        datos["modalidad"], datos["vigencia_desde"], datos["vigencia_hasta"], datos["fuente"],
+                    ))
+        print(
+            f"[TASAS] SFC -> Neon {datos['anio']}-{datos['mes']:02d}: "
+            f"IBC={datos['ibc_ea']*100:.2f}% EA, usura={datos['usura_ea']*100:.2f}% EA",
+            flush=True,
+        )
+    finally:
+        _release(conn)
+
+
 def obtener_tasa_bd_o_api(anio, mes):
     """Primero usa Neon; solo consulta SFC cuando el periodo no esta cacheado."""
     _asegurar_tabla_tasas()
@@ -166,62 +196,24 @@ def obtener_tasa_bd_o_api(anio, mes):
                   FROM historico_tasas
                  WHERE anio=%s AND mes=%s
                    AND COALESCE(modalidad, %s)=%s
-                 ORDER BY id DESC
                  LIMIT 1
             """, (int(anio), int(mes), TASA_MODALIDAD, TASA_MODALIDAD))
             fila = cur.fetchone()
-            if fila:
-                tasa = fila.get("tasa_usura_ea")
-                # Compatibilidad con registros historicos anteriores: si no tenian
-                # usura, el valor almacenado se interpreta como IBC y se deriva.
-                if tasa is None:
-                    ibc = fila.get("tasa_efectiva_anual")
-                    if ibc is not None:
-                        tasa = float(ibc) * 1.5
-                        cur.execute("""
-                            UPDATE historico_tasas
-                               SET tasa_usura_ea=%s
-                             WHERE anio=%s AND mes=%s
-                               AND COALESCE(modalidad, %s)=%s
-                        """, (tasa, int(anio), int(mes), TASA_MODALIDAD, TASA_MODALIDAD))
-                        conn.commit()
-                if tasa is not None:
-                    print(f"[TASAS] CACHE HIT Neon {anio}-{mes:02d}: usura={float(tasa)*100:.2f}% EA", flush=True)
-                    return float(tasa)
+            if fila and fila.get("tasa_usura_ea") is not None:
+                tasa = float(fila["tasa_usura_ea"])
+                # Sanitiza instalaciones antiguas que hubieran guardado porcentajes
+                # (29.24) en vez de fracciones (0.2924).
+                if tasa > 1:
+                    tasa /= 100.0
+                print(f"[TASAS] CACHE HIT Neon {anio}-{mes:02d}: usura={tasa*100:.2f}% EA", flush=True)
+                return tasa
     finally:
         _release(conn)
 
-    # Cache miss: consulta fuente oficial y persistimos el resultado.
+    # Cache miss, o registro antiguo incompleto: refresca desde fuente oficial.
     datos = _consultar_tasa_sfc(anio, mes)
-    conn = _conn()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO historico_tasas
-                        (anio, mes, tasa_efectiva_anual, tasa_usura_ea, modalidad,
-                         vigencia_desde, vigencia_hasta, fuente, consultado_en)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,CURRENT_TIMESTAMP)
-                    ON CONFLICT (anio, mes, COALESCE(modalidad, 'Consumo y ordinario'))
-                    DO UPDATE SET
-                        tasa_efectiva_anual=EXCLUDED.tasa_efectiva_anual,
-                        tasa_usura_ea=EXCLUDED.tasa_usura_ea,
-                        vigencia_desde=EXCLUDED.vigencia_desde,
-                        vigencia_hasta=EXCLUDED.vigencia_hasta,
-                        fuente=EXCLUDED.fuente,
-                        consultado_en=CURRENT_TIMESTAMP
-                """, (
-                    datos["anio"], datos["mes"], datos["ibc_ea"], datos["usura_ea"],
-                    datos["modalidad"], datos["vigencia_desde"], datos["vigencia_hasta"], datos["fuente"],
-                ))
-        print(
-            f"[TASAS] SFC -> Neon {anio}-{mes:02d}: IBC={datos['ibc_ea']*100:.2f}% EA, "
-            f"usura={datos['usura_ea']*100:.2f}% EA",
-            flush=True,
-        )
-        return float(datos["usura_ea"])
-    finally:
-        _release(conn)
+    _guardar_tasa(datos)
+    return float(datos["usura_ea"])
 
 
 # El motor de main.py llama esta funcion por nombre global. La exponemos en el
