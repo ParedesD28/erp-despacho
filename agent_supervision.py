@@ -45,9 +45,27 @@ def _proxy(method, path, *, json=None, params=None):
 
 
 def _usuario(request: Request):
-    # La sesión segura de start.py ya autentica al usuario antes de llegar aquí.
     token = request.cookies.get("token_erp")
     return str(token or "Supervisor ERP")
+
+
+def _normalizar_conversaciones(data):
+    if not isinstance(data, dict):
+        return data
+    filas = data.get("conversaciones")
+    if not isinstance(filas, list):
+        return data
+    for fila in filas:
+        if not isinstance(fila, dict):
+            continue
+        # Alias de presentación para que el front no dependa del nombre SQL.
+        fila["phone"] = fila.get("phone") or fila.get("telefono")
+        fila["identification"] = fila.get("identification") or fila.get("identificacion")
+        fila["mode_current"] = fila.get("mode_current") or fila.get("modo_actual") or "AGENTE"
+        fila["started_at"] = fila.get("started_at") or fila.get("fecha_inicio")
+        fila["last_activity"] = fila.get("last_activity") or fila.get("fecha_ultima_actividad")
+        fila["human_user"] = fila.get("human_user") or fila.get("usuario_humano")
+    return data
 
 
 @main.app.get("/supervision-agente")
@@ -66,7 +84,7 @@ def supervision_conversaciones(limit: int = 200, buscar: str = ""):
         "/control/conversaciones",
         params={"limit": min(max(limit, 1), 200), "buscar": buscar},
     )
-    return JSONResponse(data, status_code=status)
+    return JSONResponse(_normalizar_conversaciones(data), status_code=status)
 
 
 @main.app.get("/supervision-agente/api/conversaciones/{telefono}/mensajes")
@@ -105,6 +123,8 @@ async def supervision_devolver_agente(request: Request):
 async def supervision_mensaje(request: Request):
     payload = await request.json()
     payload["usuario"] = payload.get("usuario") or _usuario(request)
+    if not payload.get("texto") and payload.get("mensaje"):
+        payload["texto"] = payload["mensaje"]
     data, status = _proxy("POST", "/control/mensaje", json=payload)
     return JSONResponse(data, status_code=status)
 
