@@ -21,6 +21,8 @@ import tasa_patch  # noqa: F401
 import expedientes_patch  # noqa: F401
 import crm_anular_patch  # noqa: F401
 import agent_supervision  # noqa: F401
+import export_patches  # noqa: F401
+import export_patches_compat  # noqa: F401
 
 BOT_PATH = "/api/bot/liquidar"
 SESSION_COOKIE = "token_erp"
