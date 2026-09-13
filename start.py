@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import date
 
 from dotenv import load_dotenv
 
@@ -28,8 +29,6 @@ import uvicorn
 import main
 
 # Compatibilidad con funciones legacy que ya usan main.db_pool.getconn().
-# El SimpleConnectionPool histórico se cierra para que el proceso solo conserve
-# el ThreadedConnectionPool central.
 _legacy_pool = getattr(main, "db_pool", None)
 main.db_pool = db.POOL
 if _legacy_pool is not None and _legacy_pool is not db.POOL:
@@ -74,6 +73,44 @@ def _bypass_bot_auth_middleware() -> None:
         middleware.kwargs["dispatch"] = guarded_dispatch
         _json_log("INFO", "legacy_auth_middleware_adapted")
         return
+
+
+def _liquidador_get_view(request):
+    """Carga el formulario sin ejecutar el motor ni causar cuotas."""
+    query = request.query_params
+    try:
+        inmueble_id = int(query.get("inmueble_id")) if query.get("inmueble_id") else None
+    except (TypeError, ValueError):
+        inmueble_id = None
+    try:
+        tasa_fija = float(query.get("tasa_fija", 2.5))
+    except (TypeError, ValueError):
+        tasa_fija = 2.5
+    try:
+        honorarios_pct = float(query.get("honorarios_pct", 23.8))
+    except (TypeError, ValueError):
+        honorarios_pct = 23.8
+    try:
+        gastos = float(query.get("gastos", 0.0))
+    except (TypeError, ValueError):
+        gastos = 0.0
+    return main.templates.TemplateResponse(
+        request=request,
+        name="liquidador.html",
+        context={
+            "inmuebles": main.cargar_inmuebles_ph(),
+            "resultados": [],
+            "resumen": {},
+            "parametros": {
+                "inmueble_id": inmueble_id,
+                "tipo_tasa": query.get("tipo_tasa", "Máxima Legal"),
+                "tasa_fija": tasa_fija,
+                "honorarios_pct": honorarios_pct,
+                "gastos": gastos,
+                "fecha_corte": query.get("fecha_corte", date.today().strftime("%Y-%m-%d")),
+            },
+        },
+    )
 
 
 async def _production_security_middleware(request, call_next):
@@ -137,10 +174,9 @@ async def _production_security_middleware(request, call_next):
             return response
         request.state.user_id = user_id
 
-    # GET /liquidador deja de causar expensas. La causación solo ocurre en
-    # operaciones POST explícitas (actualización/cálculo), no por navegación.
+    # GET /liquidador solo prepara la vista. Ninguna navegación crea expensas.
     if path == "/liquidador" and request.method == "GET" and request.query_params.get("inmueble_id"):
-        return RedirectResponse(url="/liquidador", status_code=303)
+        return _liquidador_get_view(request)
 
     if path == "/crear_proceso_cascada" and request.method == "POST":
         try:
