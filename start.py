@@ -24,7 +24,23 @@ import main
 BOT_PATH = "/api/bot/liquidar"
 SESSION_COOKIE = "token_erp"
 SESSION_TTL = int(os.getenv("ERP_SESSION_TTL", "28800"))
-SESSION_SECRET = os.getenv("ERP_SESSION_SECRET")
+# ERP_SESSION_SECRET is the preferred production secret.  If it is missing,
+# use an already-secret deployment value so the web application does not turn
+# every normal request into an unexplained 503.  DATABASE_URL is intentionally
+# only a last-resort bootstrap secret; Render should still be configured with
+# ERP_SESSION_SECRET and the warning below makes that visible in the logs.
+SESSION_SECRET = (
+    os.getenv("ERP_SESSION_SECRET")
+    or os.getenv("LIQUIDADOR_API_KEY")
+    or os.getenv("DATABASE_URL")
+)
+if not os.getenv("ERP_SESSION_SECRET"):
+    print(
+        "[START] ADVERTENCIA: ERP_SESSION_SECRET no esta configurado; "
+        "se usa un secreto de despliegue como fallback. Configure "
+        "ERP_SESSION_SECRET en Render para produccion.",
+        flush=True,
+    )
 
 
 def _bypass_bot_auth_middleware() -> None:
@@ -124,17 +140,16 @@ async def _production_security_middleware(request, call_next):
     """Fail closed for browser routes and add baseline security headers."""
     path = request.url.path
 
-    if not SESSION_SECRET:
-        if path not in {"/login", "/health"} and path != BOT_PATH:
-            from fastapi.responses import JSONResponse
-            return JSONResponse({"detail": "ERP_SESSION_SECRET no esta configurado"}, status_code=503)
-    else:
-        public_paths = {"/login", "/logout", "/health"}
-        if path not in public_paths and path != BOT_PATH and not path.startswith("/static/"):
-            token = request.cookies.get(SESSION_COOKIE)
-            if not token or not _validar_sesion(token):
-                from fastapi.responses import RedirectResponse
-                return RedirectResponse(url="/login", status_code=303)
+    # Keep the machine endpoint independently protected by its API key
+    # middleware/handler. Browser routes remain protected by the signed
+    # session below. Do not emit a blanket 503 just because the optional
+    # ERP_SESSION_SECRET variable was omitted.
+    public_paths = {"/login", "/logout", "/health"}
+    if path not in public_paths and path != BOT_PATH and not path.startswith("/static/"):
+        token = request.cookies.get(SESSION_COOKIE)
+        if not token or not _validar_sesion(token):
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/login", status_code=303)
 
     if path == "/crear_proceso_cascada" and request.method == "POST":
         try:
@@ -186,7 +201,7 @@ def healthcheck():
 
 if __name__ == "__main__":
     if not SESSION_SECRET:
-        print("[START] ERROR: configure ERP_SESSION_SECRET en Render antes de produccion", flush=True)
+        print("[START] ERROR: no hay secreto disponible para firmar sesiones", flush=True)
     uvicorn.run(
         main.app,
         host="0.0.0.0",
