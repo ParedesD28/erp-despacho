@@ -30,7 +30,7 @@ def _table_columns(cur, table):
         "WHERE table_schema='public' AND table_name=%s",
         (table,),
     )
-    return {r[0] for r in cur.fetchall()}
+    return {r["column_name"] for r in cur.fetchall()}
 
 
 def _redirect(path, **params):
@@ -167,7 +167,8 @@ def crm(request: Request, buscar_inmueble: int | None = None):
 
 def _table_exists(cur, table):
     cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=%s)", (table,))
-    return bool(cur.fetchone()[0])
+    row = cur.fetchone()
+    return bool(row["exists"])
 
 
 @app.post("/crm/guardar")
@@ -384,7 +385,7 @@ def vencimientos(request: Request):
                 cur.execute("SELECT * FROM vencimientos ORDER BY fecha_vencimiento ASC LIMIT 500")
                 vencs = [dict(r) for r in cur.fetchall()]
             cur.execute("SELECT radicado_interno FROM procesos ORDER BY radicado_interno DESC LIMIT 500")
-            radicados = [r[0] for r in cur.fetchall()]
+            radicados = [r["radicado_interno"] for r in cur.fetchall()]
         return templates.TemplateResponse(request=request, name="vencimientos.html", context={"request": request, "vencimientos": vencs, "radicados": radicados})
     finally:
         _release(conn)
