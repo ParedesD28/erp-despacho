@@ -3,13 +3,6 @@ from functools import wraps
 
 _API_PATH = "/api/bot/liquidar"
 
-
-def _api_key_ok(request):
-    expected = os.getenv("LIQUIDADOR_API_KEY")
-    supplied = request.headers.get("X-API-Key")
-    return bool(expected and supplied and supplied == expected)
-
-
 try:
     from fastapi import FastAPI
     from starlette.middleware.base import BaseHTTPMiddleware
@@ -27,7 +20,9 @@ try:
 
             @wraps(func)
             async def guarded(request, call_next):
-                if request.url.path == _API_PATH and _api_key_ok(request):
+                # The bot endpoint performs its own X-API-Key validation.
+                # Do not let the browser-cookie middleware redirect it to /login.
+                if request.url.path == _API_PATH:
                     return await call_next(request)
                 return await func(request, call_next)
 
@@ -43,7 +38,7 @@ try:
 
                 @wraps(original_dispatch)
                 async def guarded_dispatch(request, call_next):
-                    if request.url.path == _API_PATH and _api_key_ok(request):
+                    if request.url.path == _API_PATH:
                         return await call_next(request)
                     return await original_dispatch(request, call_next)
 
@@ -64,8 +59,14 @@ try:
                 "tags", "dependencies", "callbacks", "openapi_extra", "include_in_schema",
             ):
                 route_kwargs.pop(key, None)
-            self.add_api_route(path, liquidar_para_bot, methods=["POST"], include_in_schema=True, **route_kwargs)
-            print("[SITECUSTOMIZE] Ruta /api/bot/liquidar registrada con autenticacion API", flush=True)
+            self.add_api_route(
+                path,
+                liquidar_para_bot,
+                methods=["POST"],
+                include_in_schema=True,
+                **route_kwargs,
+            )
+            print("[SITECUSTOMIZE] Ruta /api/bot/liquidar registrada", flush=True)
             return _legacy_function
 
         return decorator
