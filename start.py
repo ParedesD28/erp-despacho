@@ -23,6 +23,7 @@ import crm_anular_patch  # noqa: F401
 import agent_supervision  # noqa: F401
 import export_patches  # noqa: F401
 import export_patches_compat  # noqa: F401
+import pdf_final_patch  # noqa: F401
 import bot_pdf_patch  # noqa: F401
 
 BOT_PATH = "/api/bot/liquidar"
