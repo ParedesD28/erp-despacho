@@ -41,56 +41,6 @@
             const a = document.getElementById('toast-success'); if (a) { a.style.opacity='0'; setTimeout(()=>a.remove(),500); }
             const b = document.getElementById('toast-error'); if (b) { b.style.opacity='0'; setTimeout(()=>b.remove(),500); }
         }, 3500);
-
-        // Editor de expedientes: aparece solo en /expediente/<radicado>.
-        (async function () {
-            const m = location.pathname.match(/^\/expediente\/([^/]+)$/);
-            if (!m) return;
-            const radicado = decodeURIComponent(m[1]);
-            try {
-                const r = await fetch(`/expediente/${encodeURIComponent(radicado)}/editor-data`, {credentials:'same-origin'});
-                if (!r.ok) return;
-                const data = await r.json();
-                const p = data.proceso || {};
-                const abogados = data.abogados || [];
-
-                const fab = document.createElement('button');
-                fab.type='button'; fab.className='fixed right-6 bottom-6 z-40 inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-bold px-5 py-3 rounded-xl shadow-xl';
-                fab.innerHTML='<span>Editar expediente</span>';
-                fab.onclick=()=>document.getElementById('modal-editor-expediente').classList.remove('hidden');
-                document.body.appendChild(fab);
-
-                const modal = document.createElement('div');
-                modal.id='modal-editor-expediente';
-                modal.className='hidden fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4';
-                const options = abogados.map(a=>`<option value="${String(a.id??'')}">${String(a.nombre??'')}</option>`).join('');
-                const esc = v => String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
-                modal.innerHTML=`<div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] overflow-y-auto">
-                  <div class="px-6 py-4 border-b flex items-center justify-between"><div><h2 class="text-lg font-black text-slate-800">Editar expediente</h2><p class="text-xs text-slate-500">El radicado interno ${esc(p.radicado_interno)} es técnico y se conserva.</p></div><button type="button" id="cerrar-editor" class="text-slate-400 hover:text-slate-800 text-2xl">×</button></div>
-                  <form method="POST" action="/expediente/editar" class="p-6 space-y-5">
-                    <input type="hidden" name="radicado_interno" value="${esc(p.radicado_interno)}">
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <label class="text-xs font-bold uppercase text-slate-600">Radicado Rama<input name="radicado_rama" value="${esc(p.radicado_rama)}" class="mt-1 w-full border rounded-lg p-2.5 text-sm"></label>
-                      <label class="text-xs font-bold uppercase text-slate-600">Juzgado<input name="juzgado" value="${esc(p.juzgado)}" class="mt-1 w-full border rounded-lg p-2.5 text-sm"></label>
-                      <label class="text-xs font-bold uppercase text-slate-600">Naturaleza<input name="naturaleza" value="${esc(p.naturaleza)}" class="mt-1 w-full border rounded-lg p-2.5 text-sm"></label>
-                      <label class="text-xs font-bold uppercase text-slate-600">Etapa actual<input name="etapa_actual" value="${esc(p.etapa_actual)}" class="mt-1 w-full border rounded-lg p-2.5 text-sm"></label>
-                      <label class="text-xs font-bold uppercase text-slate-600">Estado<select name="estado" class="mt-1 w-full border rounded-lg p-2.5 text-sm"><option ${p.estado==='Activo'?'selected':''}>Activo</option><option ${p.estado==='Inactivo'?'selected':''}>Inactivo</option><option ${p.estado==='Terminado'?'selected':''}>Terminado</option><option ${p.estado==='Suspendido'?'selected':''}>Suspendido</option></select></label>
-                      <label class="text-xs font-bold uppercase text-slate-600">Abogado<select name="abogado_id" class="mt-1 w-full border rounded-lg p-2.5 text-sm"><option value="">Sin asignar</option>${options}</select></label>
-                    </div>
-                    <label class="block text-xs font-bold uppercase text-slate-600">Pretensiones<input name="pretensiones" value="${esc(p.pretensiones)}" inputmode="decimal" class="mt-1 w-full border rounded-lg p-2.5 text-sm"></label>
-                    <label class="block text-xs font-bold uppercase text-slate-600">Medidas cautelares<textarea name="medidas_cautelares" rows="4" class="mt-1 w-full border rounded-lg p-2.5 text-sm">${esc(p.medidas_cautelares)}</textarea></label>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4"><label class="text-xs font-bold uppercase text-slate-600">Demandados (nombres, separados por |)<textarea name="demandados_nombres" rows="5" class="mt-1 w-full border rounded-lg p-2.5 text-sm">${esc(p.demandado)}</textarea></label><label class="text-xs font-bold uppercase text-slate-600">Identificaciones, en el mismo orden<textarea name="demandados_ids" rows="5" class="mt-1 w-full border rounded-lg p-2.5 text-sm">${esc(p.id_demandado)}</textarea></label></div>
-                    <div class="flex items-center justify-between gap-3 pt-3 border-t"><button type="button" id="cancelar-editor" class="px-4 py-2.5 rounded-lg border font-bold text-slate-600">Cancelar</button><button class="px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold">Guardar cambios</button></div>
-                  </form></div>`;
-                document.body.appendChild(modal);
-                modal.querySelector('#cerrar-editor').onclick=()=>modal.classList.add('hidden');
-                modal.querySelector('#cancelar-editor').onclick=()=>modal.classList.add('hidden');
-                const abogadoSelect = modal.querySelector('select[name="abogado_id"]'); if (abogadoSelect && p.abogado_id != null) abogadoSelect.value=String(p.abogado_id);
-                lucide.createIcons();
-            } catch (e) {
-                console.warn('[EXPEDIENTE] Editor no disponible:', e);
-            }
-        })();
     </script>
 </body>
 </html>
