@@ -1,11 +1,4 @@
-"""Production startup for the ERP.
-
-Keeps the legacy application routes intact while adding a signed, expiring
-browser session at the ASGI edge, compatibility with legacy password records,
-validation for new processes, the machine-to-machine bot endpoint, the
-compatibility layer that connects the current HTML templates to FastAPI routes,
-and data/export hardening for the liquidator.
-"""
+"""Production startup for the ERP."""
 
 import base64
 import hashlib
@@ -21,23 +14,16 @@ import uvicorn
 
 import main
 import compat_routes  # noqa: F401
+import feature_routes  # noqa: F401
 import data_integrity  # noqa: F401
 import route_patches  # noqa: F401
 
 BOT_PATH = "/api/bot/liquidar"
 SESSION_COOKIE = "token_erp"
 SESSION_TTL = int(os.getenv("ERP_SESSION_TTL", "28800"))
-SESSION_SECRET = (
-    os.getenv("ERP_SESSION_SECRET")
-    or os.getenv("LIQUIDADOR_API_KEY")
-    or os.getenv("DATABASE_URL")
-)
+SESSION_SECRET = os.getenv("ERP_SESSION_SECRET") or os.getenv("LIQUIDADOR_API_KEY") or os.getenv("DATABASE_URL")
 if not os.getenv("ERP_SESSION_SECRET"):
-    print(
-        "[START] ADVERTENCIA: ERP_SESSION_SECRET no esta configurado; "
-        "se usa un secreto de despliegue como fallback. Configure ERP_SESSION_SECRET en Render para produccion.",
-        flush=True,
-    )
+    print("[START] ADVERTENCIA: ERP_SESSION_SECRET no esta configurado; se usa un secreto de despliegue como fallback. Configure ERP_SESSION_SECRET en Render para produccion.", flush=True)
 
 
 def _b64(value: bytes) -> str:
@@ -64,9 +50,7 @@ def _validar_sesion(token: str):
             return None
         user_id, expires_text = payload.decode("utf-8").split(".", 1)
         expires_at = int(expires_text)
-        if not user_id or expires_at <= int(time.time()):
-            return None
-        return user_id
+        return user_id if user_id and expires_at > int(time.time()) else None
     except (ValueError, TypeError, UnicodeDecodeError):
         return None
 
@@ -85,10 +69,9 @@ def _cookie_from_response(response):
 
 
 def _set_secure_session(response, user_id: str) -> None:
-    signed = _firmar_sesion(str(user_id), int(time.time()) + SESSION_TTL)
     response.set_cookie(
         key=SESSION_COOKIE,
-        value=signed,
+        value=_firmar_sesion(str(user_id), int(time.time()) + SESSION_TTL),
         max_age=SESSION_TTL,
         httponly=True,
         secure=True,
@@ -113,8 +96,7 @@ main.verificar_password = _password_compatible
 
 
 def _bypass_bot_auth_middleware() -> None:
-    user_middleware = getattr(main.app, "user_middleware", [])
-    for middleware in user_middleware:
+    for middleware in getattr(main.app, "user_middleware", []):
         dispatch = middleware.kwargs.get("dispatch")
         if dispatch is None or getattr(dispatch, "__name__", "") != "validador_general_seguridad":
             continue
@@ -154,7 +136,7 @@ async def _production_security_middleware(request, call_next):
                 return RedirectResponse(url="/expedientes?error=Identificacion+invalida", status_code=303)
             with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT 1 FROM procesos WHERE radicado_interno = %s LIMIT 1", (radicado,))
+                    cur.execute("SELECT 1 FROM procesos WHERE radicado_interno=%s LIMIT 1", (radicado,))
                     if cur.fetchone():
                         from fastapi.responses import RedirectResponse
                         return RedirectResponse(url="/expedientes?error=El+radicado+ya+existe", status_code=303)
@@ -164,12 +146,10 @@ async def _production_security_middleware(request, call_next):
             return RedirectResponse(url="/expedientes?error=No+fue+posible+validar+los+datos", status_code=303)
 
     response = await call_next(request)
-
     if SESSION_SECRET and path == "/login" and response.status_code in (301, 302, 303, 307, 308):
         legacy_user_id = _cookie_from_response(response)
         if legacy_user_id and legacy_user_id.isdigit():
             _set_secure_session(response, legacy_user_id)
-
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -191,8 +171,4 @@ def healthcheck():
 if __name__ == "__main__":
     if not SESSION_SECRET:
         print("[START] ERROR: no hay secreto disponible para firmar sesiones", flush=True)
-    uvicorn.run(
-        main.app,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "10000")),
-    )
+    uvicorn.run(main.app, host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
