@@ -49,13 +49,17 @@ def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[dic
     # Import local para evitar dependencias circulares durante el arranque de main.py.
     import main
 
+    # Usamos argumentos posicionales deliberadamente. Esto evita incompatibilidades
+    # si una version desplegada del motor tiene nombres de parametros distintos,
+    # manteniendo el orden de la firma oficial del motor:
+    # inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos_globales, fecha_corte.
     resultados, resumen, inm_info = main.motor_calculo_judicial(
-        inmueble_id=inmueble_id,
-        tipo_tasa="usura",
-        tasa_fija=2.5,
-        honorarios_pct=23.8,
-        gastos_globales=0.0,
-        fecha_corte=fecha_corte,
+        inmueble_id,
+        "usura",
+        2.5,
+        23.8,
+        0.0,
+        fecha_corte,
     )
 
     if not inm_info:
