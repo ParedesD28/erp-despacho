@@ -26,6 +26,7 @@ import export_patches_compat  # noqa: F401
 import pdf_final_patch  # noqa: F401
 import bot_pdf_patch  # noqa: F401
 import export_final_patch  # noqa: F401
+import production_checks  # noqa: F401
 
 BOT_PATH = "/api/bot/liquidar"
 SESSION_COOKIE = "token_erp"
@@ -170,11 +171,6 @@ async def _production_security_middleware(request, call_next):
 
 _bypass_bot_auth_middleware()
 main.app.middleware("http")(_production_security_middleware)
-
-
-@main.app.get("/health")
-def healthcheck():
-    return {"status": "ok"}
 
 
 if __name__ == "__main__":
