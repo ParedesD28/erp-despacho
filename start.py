@@ -2,7 +2,8 @@
 
 Keeps the legacy application routes intact while adding a signed, expiring
 browser session at the ASGI edge, compatibility with legacy password records,
-validation for new processes, and the machine-to-machine bot endpoint.
+validation for new processes, the machine-to-machine bot endpoint, and the
+compatibility layer that connects the current HTML templates to FastAPI routes.
 """
 
 import base64
@@ -18,6 +19,7 @@ import psycopg2
 import uvicorn
 
 import main
+import compat_routes  # noqa: F401  # registers template/service routes on main.app
 
 BOT_PATH = "/api/bot/liquidar"
 SESSION_COOKIE = "token_erp"
@@ -112,20 +114,13 @@ def _set_secure_session(response, user_id: str) -> None:
 
 
 def _password_compatible(password_plana, password_hash):
-    """Accept bcrypt and legacy Neon plaintext records during migration.
-
-    Existing ERP installations may still contain a legacy plaintext password.
-    Rejecting those records outright locks the administrator out. Bcrypt remains
-    the preferred format; the legacy comparison is deliberately isolated here
-    so it can be removed once all existing accounts have been migrated.
-    """
+    """Accept bcrypt and legacy Neon plaintext records during migration."""
     if not password_plana or not password_hash:
         return False
     try:
         encoded = str(password_hash).encode("utf-8")
         if encoded.startswith((b"$2a$", b"$2b$", b"$2y$")):
             return bcrypt.checkpw(password_plana.encode("utf-8"), encoded)
-        # Compatibility for accounts created before bcrypt hardening.
         return hmac.compare_digest(str(password_hash), str(password_plana))
     except (ValueError, TypeError):
         return False
