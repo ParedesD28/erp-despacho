@@ -1,12 +1,11 @@
 """Edicion segura de expedientes y normalizacion de demandados.
 
-Se reemplaza el endpoint de detalle existente despues de que las rutas base
-hayan sido cargadas. El radicado_interno se conserva como identificador tecnico;
-se editan los metadatos de negocio sin alterar las relaciones historicas.
+El radicado_interno se conserva como identificador tecnico; se editan los
+metadatos de negocio y se normalizan demandados sin borrar actuaciones.
 """
 from decimal import Decimal, InvalidOperation
-from fastapi import Request, Form
-from fastapi.responses import RedirectResponse
+from fastapi import Request, Form, HTTPException
+from fastapi.responses import RedirectResponse, JSONResponse
 from psycopg2.extras import RealDictCursor
 import main
 
@@ -32,6 +31,11 @@ def _cols(cur, table):
     return {r[0] for r in cur.fetchall()}
 
 
+def _tables(cur):
+    cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
+    return {r[0] for r in cur.fetchall()}
+
+
 def _dedupe_pairs(ids_text: str, names_text: str):
     ids = [x.strip() for x in str(ids_text or "").split("|") if x.strip()]
     names = [x.strip() for x in str(names_text or "").split("|") if x.strip()]
@@ -40,10 +44,9 @@ def _dedupe_pairs(ids_text: str, names_text: str):
     for idx, ident in enumerate(ids):
         nombre = names[idx] if idx < len(names) else ""
         key = (ident, " ".join(nombre.upper().split()))
-        if key in seen:
-            continue
-        seen.add(key)
-        pairs.append((ident, nombre))
+        if key not in seen:
+            seen.add(key)
+            pairs.append((ident, nombre))
     for idx in range(len(ids), len(names)):
         nombre = names[idx]
         key = ("", " ".join(nombre.upper().split()))
@@ -52,13 +55,21 @@ def _dedupe_pairs(ids_text: str, names_text: str):
             pairs.append(("", nombre))
     unique_ids = []
     unique_names = []
+    seen_ids = set()
+    seen_names = set()
     for ident, nombre in pairs:
-        if ident and ident not in unique_ids:
+        if ident:
+            if ident in seen_ids:
+                continue
+            seen_ids.add(ident)
             unique_ids.append(ident)
+            unique_names.append(nombre or ident)
+        elif nombre:
+            norm = " ".join(nombre.upper().split())
+            if norm in seen_names:
+                continue
+            seen_names.add(norm)
             unique_names.append(nombre)
-        elif not ident and nombre:
-            if nombre not in unique_names:
-                unique_names.append(nombre)
     return unique_ids, unique_names
 
 
@@ -74,7 +85,6 @@ def _lookup_proceso(cur, radicado):
 
 def _build_context(cur, proceso):
     proceso = dict(proceso)
-    # Demandante principal.
     demandante = proceso.get("id_cliente") or ""
     cur.execute(
         "SELECT nombre FROM contactos WHERE identificacion=%s LIMIT 1",
@@ -83,10 +93,9 @@ def _build_context(cur, proceso):
     row = cur.fetchone()
     proceso["demandante_db"] = row[0] if row else demandante
 
-    # Demandados: consolidar preferentemente desde la relacion de litisconsorcio.
-    ids = []
-    nombres = []
-    if "procesos_litisconsorcio" in _tables(cur):
+    ids, nombres = [], []
+    tablas = _tables(cur)
+    if "procesos_litisconsorcio" in tablas:
         cur.execute(
             "SELECT DISTINCT TRIM(pl.identificacion_demandado) AS ident, TRIM(c.nombre) AS nombre "
             "FROM procesos_litisconsorcio pl "
@@ -95,9 +104,8 @@ def _build_context(cur, proceso):
             "ORDER BY ident",
             (proceso.get("radicado_interno"),),
         )
-        for row in cur.fetchall():
-            ident, nombre = row
-            if ident not in ids:
+        for ident, nombre in cur.fetchall():
+            if ident and ident not in ids:
                 ids.append(ident)
                 nombres.append(nombre or ident)
     if not ids:
@@ -105,40 +113,34 @@ def _build_context(cur, proceso):
     proceso["id_demandado"] = " | ".join(ids)
     proceso["demandado"] = " | ".join(nombres)
 
-    # Actuaciones.
     actuaciones = []
-    if "actuaciones" in _tables(cur):
+    if "actuaciones" in tablas:
         cur.execute(
             "SELECT * FROM actuaciones WHERE radicado_interno=%s ORDER BY fecha DESC, id DESC",
             (proceso.get("radicado_interno"),),
         )
         actuaciones = [dict(r) for r in cur.fetchall()]
 
-    # Medidas relacionadas, si hay tabla especifica; de lo contrario se usa el campo del proceso.
     medidas_detalle = []
     for table in ("medidas_cautelares", "medidas"):
-        if table in _tables(cur):
-            cols = _cols(cur, table)
-            if "radicado_interno" in cols:
-                select = [c for c in ("id", "tipo", "descripcion", "estado", "fecha", "inmueble", "identificacion") if c in cols]
-                if select:
-                    cur.execute(
-                        f"SELECT {', '.join(select)} FROM {table} WHERE radicado_interno=%s ORDER BY "
-                        + ("fecha DESC" if "fecha" in cols else "id DESC" if "id" in cols else "1"),
-                        (proceso.get("radicado_interno"),),
-                    )
-                    medidas_detalle = [dict(r) for r in cur.fetchall()]
-                    break
+        if table not in tablas:
+            continue
+        cols = _cols(cur, table)
+        if "radicado_interno" not in cols:
+            continue
+        select = [c for c in ("id", "tipo", "descripcion", "estado", "fecha", "inmueble", "identificacion") if c in cols]
+        if not select:
+            continue
+        order = "fecha DESC" if "fecha" in cols else "id DESC" if "id" in cols else "1"
+        cur.execute(f"SELECT {', '.join(select)} FROM {table} WHERE radicado_interno=%s ORDER BY {order}", (proceso.get("radicado_interno"),))
+        medidas_detalle = [dict(r) for r in cur.fetchall()]
+        break
+
     abogados = []
-    if "abogados" in _tables(cur):
+    if "abogados" in tablas:
         cur.execute("SELECT id,nombre FROM abogados ORDER BY nombre")
         abogados = [dict(r) for r in cur.fetchall()]
     return proceso, actuaciones, medidas_detalle, abogados
-
-
-def _tables(cur):
-    cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
-    return {r[0] for r in cur.fetchall()}
 
 
 def expediente_editor(request: Request, radicado: str):
@@ -147,7 +149,6 @@ def expediente_editor(request: Request, radicado: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             proceso = _lookup_proceso(cur, radicado)
             if not proceso:
-                from fastapi import HTTPException
                 raise HTTPException(status_code=404, detail="Expediente no encontrado")
             proceso, actuaciones, medidas_detalle, abogados = _build_context(cur, proceso)
             return templates.TemplateResponse(
@@ -161,6 +162,23 @@ def expediente_editor(request: Request, radicado: str):
                     "abogados": abogados,
                 },
             )
+    finally:
+        _release(conn)
+
+
+@app.get("/expediente/{radicado}/editor-data")
+def expediente_editor_data(radicado: str):
+    conn = _conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            proceso = _lookup_proceso(cur, radicado)
+            if not proceso:
+                raise HTTPException(status_code=404, detail="Expediente no encontrado")
+            proceso, _, _, abogados = _build_context(cur, proceso)
+            return JSONResponse({
+                "proceso": proceso,
+                "abogados": abogados,
+            }, default=str)
     finally:
         _release(conn)
 
@@ -187,9 +205,9 @@ def editar_expediente(
                 if not cols:
                     raise RuntimeError("No existe la tabla procesos")
                 try:
-                    pret = Decimal(str(pretensiones).replace(".", ".").replace(",", ""))
+                    pret = Decimal(str(pretensiones or "0").replace(",", ""))
                 except (InvalidOperation, ValueError):
-                    pret = Decimal("0")
+                    raise ValueError("Pretensiones debe ser un valor numerico")
                 ids, names = _dedupe_pairs(demandados_ids, demandados_nombres)
                 updates = {
                     "radicado_rama": radicado_rama.strip(),
@@ -210,8 +228,6 @@ def editar_expediente(
                     f"UPDATE procesos SET {', '.join(f'{k}=%s' for k in usable)} WHERE radicado_interno=%s",
                     [updates[k] for k in usable] + [radicado_interno],
                 )
-
-                # Normalizar litisconsorcio para eliminar duplicados persistentes.
                 if "procesos_litisconsorcio" in _tables(cur):
                     lcols = _cols(cur, "procesos_litisconsorcio")
                     if "radicado_interno" in lcols and "identificacion_demandado" in lcols:
@@ -229,7 +245,6 @@ def editar_expediente(
         _release(conn)
 
 
-# Reemplazar el handler existente cuando el módulo se carga al arranque.
 for _route in getattr(app, "routes", []):
     if getattr(_route, "path", None) == "/expediente/{radicado}" and getattr(_route, "methods", None):
         _route.endpoint = expediente_editor
