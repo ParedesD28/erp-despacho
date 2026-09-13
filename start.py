@@ -1,12 +1,16 @@
-"""Render startup wrapper for the ERP.
+"""Production startup for the ERP.
 
-The legacy global auth middleware is registered inside main.py and requires the
-browser cookie token_erp for every route. The machine-to-machine bot endpoint
-already authenticates independently with X-API-Key in bot_api.py, so we replace
-only that middleware dispatch before Uvicorn builds the middleware stack.
+Keeps the legacy application routes intact while adding a signed, expiring
+browser session at the ASGI edge and preserving the machine-to-machine bot
+endpoint authenticated with X-API-Key.
 """
 
+import base64
+import hashlib
+import hmac
 import os
+import time
+from http.cookies import SimpleCookie
 
 import uvicorn
 
@@ -14,6 +18,9 @@ import main
 
 
 BOT_PATH = "/api/bot/liquidar"
+SESSION_COOKIE = "token_erp"
+SESSION_TTL = int(os.getenv("ERP_SESSION_TTL", "28800"))  # 8 hours
+SESSION_SECRET = os.getenv("ERP_SESSION_SECRET")
 
 
 def _bypass_bot_auth_middleware() -> None:
@@ -33,7 +40,6 @@ def _bypass_bot_auth_middleware() -> None:
 
         async def guarded_dispatch(request, call_next, _original=original_dispatch):
             if request.url.path == BOT_PATH:
-                # bot_api.py validates X-API-Key itself.
                 return await call_next(request)
             return await _original(request, call_next)
 
@@ -44,9 +50,111 @@ def _bypass_bot_auth_middleware() -> None:
     print("[START] No se encontro validador_general_seguridad", flush=True)
 
 
+def _b64(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _b64decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _firmar_sesion(user_id: str, expires_at: int) -> str:
+    payload = f"{user_id}.{expires_at}".encode("utf-8")
+    signature = hmac.new(SESSION_SECRET.encode("utf-8"), payload, hashlib.sha256).digest()
+    return f"{_b64(payload)}.{_b64(signature)}"
+
+
+def _validar_sesion(token: str):
+    try:
+        payload_b64, signature_b64 = token.split(".", 1)
+        payload = _b64decode(payload_b64)
+        expected = hmac.new(SESSION_SECRET.encode("utf-8"), payload, hashlib.sha256).digest()
+        supplied = _b64decode(signature_b64)
+        if not hmac.compare_digest(expected, supplied):
+            return None
+        user_id, expires_text = payload.decode("utf-8").split(".", 1)
+        expires_at = int(expires_text)
+        if not user_id or expires_at <= int(time.time()):
+            return None
+        return user_id
+    except (ValueError, TypeError, UnicodeDecodeError):
+        return None
+
+
+def _cookie_from_response(response):
+    raw = response.headers.get("set-cookie", "")
+    if not raw:
+        return None
+    cookie = SimpleCookie()
+    try:
+        cookie.load(raw)
+    except Exception:
+        return None
+    morsel = cookie.get(SESSION_COOKIE)
+    return morsel.value if morsel else None
+
+
+def _set_secure_session(response, user_id: str) -> None:
+    expires_at = int(time.time()) + SESSION_TTL
+    signed = _firmar_sesion(str(user_id), expires_at)
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=signed,
+        max_age=SESSION_TTL,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
+
+
+async def _production_security_middleware(request, call_next):
+    """Fail closed for browser routes and add baseline security headers."""
+    path = request.url.path
+
+    if not SESSION_SECRET:
+        if path not in {"/login", "/health"} and path != BOT_PATH:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail": "ERP_SESSION_SECRET no esta configurado"}, status_code=503)
+    else:
+        public_paths = {"/login", "/logout", "/health"}
+        if path not in public_paths and path != BOT_PATH and not path.startswith("/static/"):
+            token = request.cookies.get(SESSION_COOKIE)
+            if not token or not _validar_sesion(token):
+                from fastapi.responses import RedirectResponse
+                return RedirectResponse(url="/login", status_code=303)
+
+    response = await call_next(request)
+
+    # The legacy login route still creates a user-id cookie. Replace it with a
+    # signed cookie only after a successful redirect to the dashboard.
+    if SESSION_SECRET and path == "/login" and response.status_code in (301, 302, 303, 307, 308):
+        legacy_user_id = _cookie_from_response(response)
+        if legacy_user_id and legacy_user_id.isdigit():
+            _set_secure_session(response, legacy_user_id)
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
 _bypass_bot_auth_middleware()
+# Added last so this security layer is the outermost middleware.
+main.app.middleware("http")(_production_security_middleware)
+
+
+@main.app.get("/health")
+def healthcheck():
+    return {"status": "ok"}
+
 
 if __name__ == "__main__":
+    if not SESSION_SECRET:
+        print("[START] ERROR: configure ERP_SESSION_SECRET en Render antes de produccion", flush=True)
     uvicorn.run(
         main.app,
         host="0.0.0.0",
