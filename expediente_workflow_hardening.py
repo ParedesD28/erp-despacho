@@ -84,18 +84,49 @@ def _safe_table_exists(cur, table):
     return bool(_row_value(row, "exists_table", _row_value(row, 0, False)))
 
 
+def _safe_sync_stage(cur, radicado):
+    """Version compatible con RealDictCursor del cálculo automático de etapa."""
+    cols = _safe_cols(cur, "procesos")
+    if "etapa_actual" not in cols or not _safe_table_exists(cur, "actuaciones"):
+        return None
+    act_cols = _safe_cols(cur, "actuaciones")
+    available = [c for c in ("etapa", "descripcion", "tipificacion_sugerida") if c in act_cols]
+    if not available:
+        return None
+    select = ", ".join(available)
+    order_col = "fecha" if "fecha" in act_cols else "id"
+    id_clause = ", id DESC" if "id" in act_cols else ""
+    cur.execute(
+        f"SELECT {select} FROM actuaciones WHERE radicado_interno=%s "
+        f"ORDER BY {order_col} DESC NULLS LAST{id_clause} LIMIT 1",
+        (radicado,),
+    )
+    act = cur.fetchone()
+    if not act:
+        return None
+    values = {name: _row_value(act, name, _row_value(act, idx)) for idx, name in enumerate(available)}
+    stage = workflow._stage_from_act(values.get("etapa"), values.get("descripcion"), values.get("tipificacion_sugerida"))
+    if not stage:
+        return None
+    cur.execute("UPDATE procesos SET etapa_actual=%s WHERE radicado_interno=%s", (stage, radicado))
+    return stage
+
+
 # Compatibilidad centralizada: todos los parches nuevos pueden trabajar
 # indistintamente con RealDictCursor o cursores de tuplas.
 workflow._cols = _safe_cols
 workflow._table_exists = _safe_table_exists
+workflow._sync_stage = _safe_sync_stage
 editor._row_value = _row_value
 editor._cols = _safe_cols
-editor._tables = lambda cur: _table_names(cur)
 
 
 def _table_names(cur):
     cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
     return {str(_row_value(r, "table_name", _row_value(r, 0, ""))) for r in cur.fetchall() if _row_value(r, "table_name", _row_value(r, 0))}
+
+
+editor._tables = _table_names
 
 
 def _sync_all_stages_safe(cur):
@@ -105,7 +136,7 @@ def _sync_all_stages_safe(cur):
     for row in cur.fetchall():
         radicado = _row_value(row, "radicado_interno", _row_value(row, 0))
         if radicado:
-            workflow._sync_stage(cur, radicado)
+            _safe_sync_stage(cur, radicado)
 
 
 workflow._sync_all_stages = _sync_all_stages_safe
@@ -221,7 +252,7 @@ async def guardar_expediente_estructurado_hardened(request: Request):
                         json.dumps(after, default=str),
                     ),
                 )
-                workflow._sync_stage(cur, radicado)
+                _safe_sync_stage(cur, radicado)
         return _redirect(f"/expediente/{radicado}", mensaje="Expediente+actualizado")
     except HTTPException:
         raise
@@ -232,4 +263,4 @@ async def guardar_expediente_estructurado_hardened(request: Request):
         workflow._release(conn)
 
 
-print("[EXPEDIENTE_HARDENING] Compatibilidad RealDictCursor/tuplas + parseo monetario + errores protegidos", flush=True)
+print("[EXPEDIENTE_HARDENING] Compatibilidad RealDictCursor/tuplas + etapa automatica + parseo monetario + errores protegidos", flush=True)
