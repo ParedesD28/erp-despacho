@@ -10,12 +10,13 @@ from fastapi.responses import JSONResponse
 import main
 
 _TIMEOUT = 20
+_DEFAULT_AGENT_URL = "https://bot-cobranzas-ph.onrender.com"
 
 
 def _agent_url():
-    # No reutilizar una URL de liquidador a ciegas: supervisión es un servicio
-    # independiente y debe apuntar expresamente al agente de cobranza.
-    return (os.getenv("AGENT_SUPERVISION_URL") or "").rstrip("/")
+    # La variable de entorno sigue teniendo prioridad. El valor por defecto
+    # corresponde al servicio Render actual del agente de cobranza.
+    return (os.getenv("AGENT_SUPERVISION_URL") or _DEFAULT_AGENT_URL).rstrip("/")
 
 
 def _agent_headers():
@@ -25,13 +26,6 @@ def _agent_headers():
 
 def _proxy(method, path, *, json=None, params=None):
     base = _agent_url()
-    if not base:
-        print("[SUPERVISION AGENTE][ALERTA] AGENT_SUPERVISION_URL no esta configurada en Render", flush=True)
-        return {
-            "status": "error",
-            "codigo": "AGENT_SUPERVISION_URL_MISSING",
-            "mensaje": "Falta configurar AGENT_SUPERVISION_URL en Render para conectar el ERP con el agente.",
-        }, 503
     key = os.getenv("AGENT_SUPERVISION_KEY") or os.getenv("LIQUIDADOR_API_KEY") or ""
     if not key:
         print("[SUPERVISION AGENTE][ALERTA] No existe AGENT_SUPERVISION_KEY ni LIQUIDADOR_API_KEY", flush=True)
@@ -89,7 +83,7 @@ def supervision_agente(request: Request):
     return main.templates.TemplateResponse(
         request=request,
         name="supervision_agente.html",
-        context={"request": request, "usuario": _usuario(request), "configurado": bool(_agent_url())},
+        context={"request": request, "usuario": _usuario(request), "configurado": True},
     )
 
 
@@ -153,7 +147,8 @@ async def supervision_mensaje(request: Request):
 
 print(
     "[SUPERVISION AGENTE] Puente ERP -> agente cargado | "
-    f"URL configurada={'SI' if _agent_url() else 'NO'} | "
+    f"URL={'ENV' if os.getenv('AGENT_SUPERVISION_URL') else 'DEFAULT'} | "
+    f"DESTINO={_agent_url()} | "
     f"CLAVE configurada={'SI' if (os.getenv('AGENT_SUPERVISION_KEY') or os.getenv('LIQUIDADOR_API_KEY')) else 'NO'}",
     flush=True,
 )
