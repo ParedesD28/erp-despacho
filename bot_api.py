@@ -49,7 +49,7 @@ def _parse_payload(payload: Any) -> tuple[int, date]:
     return inmueble_id, fecha_corte
 
 
-def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[dict, dict, tuple]:
+def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[list[dict], dict, tuple]:
     import main
 
     resultados, resumen, inm_info = main.motor_calculo_judicial(
@@ -69,6 +69,32 @@ def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[dic
     return resultados, resumen, inm_info
 
 
+def _resumen_tasas(resultados: list[dict]) -> tuple[list[dict], str]:
+    """Expone al agente las tasas realmente usadas por el motor, sin recalcularlas."""
+    tasas = []
+    vistos = set()
+    for fila in resultados:
+        periodo = fila.get("periodo") or fila.get("mes")
+        desde = fila.get("desde")
+        tasa_ea = fila.get("tasa_ea")
+        tasa_mes = fila.get("tasa_mes")
+        clave = (str(periodo), str(desde), str(tasa_ea), str(tasa_mes))
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        tasas.append({
+            "periodo": periodo or desde or "",
+            "fecha_desde": desde or "",
+            "tasa_ea": tasa_ea or "",
+            "tasa_mensual": tasa_mes or "",
+            "fuente": "SFC/Neon validada" if not fila.get("tasa_personalizada") else "Tasa personalizada E.A.",
+        })
+    fuente = "SFC/Neon validada"
+    if any(f.get("tasa_personalizada") for f in resultados):
+        fuente = "Tasa personalizada E.A."
+    return tasas, fuente
+
+
 def _generar_pdf(inmueble_id: int, fecha_corte: date, resultados: list[dict], resumen: dict, inm_info: tuple) -> str:
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import getSampleStyleSheet
@@ -79,8 +105,6 @@ def _generar_pdf(inmueble_id: int, fecha_corte: date, resultados: list[dict], re
         raise HTTPException(status_code=500, detail="PUBLIC_BASE_URL/RENDER_EXTERNAL_URL no esta configurada")
 
     os.makedirs("static/pdfs", exist_ok=True)
-    # Do not expose predictable identifiers in a public PDF URL. Render's filesystem
-    # is ephemeral, so the file is still treated as a short-lived delivery artifact.
     nombre_pdf = f"Estado_Cuenta_{secrets.token_urlsafe(18)}.pdf"
     ruta = os.path.join("static", "pdfs", nombre_pdf)
 
@@ -123,8 +147,8 @@ def _generar_pdf(inmueble_id: int, fecha_corte: date, resultados: list[dict], re
     detalle = [["Periodo", "Capital", "Interes", "Capital + Interes"]]
     for fila in resultados:
         detalle.append([
-            str(fila.get("periodo", fila.get("mes", ""))),
-            dinero(fila.get("capital", fila.get("cap_mes", 0))),
+            str(fila.get("periodo", fila.get("mes", fila.get("desde", "")))),
+            dinero(fila.get("capital", fila.get("cap_mes", fila.get("capital_liquidable", 0)))),
             dinero(fila.get("interes", fila.get("intereses", 0))),
             dinero(fila.get("cap_int", 0)),
         ])
@@ -157,6 +181,16 @@ async def liquidar_para_bot(request: Request):
     try:
         resultados, resumen, inm_info = _obtener_datos_liquidacion(inmueble_id, fecha_corte)
         url_pdf = _generar_pdf(inmueble_id, fecha_corte, resultados, resumen, inm_info)
+        tasas_aplicadas, fuente_tasas = _resumen_tasas(resultados)
+
+        print(
+            f"[BOT LIQUIDADOR] inmueble={inmueble_id} corte={fecha_corte} "
+            f"capital={float(resumen.get('capital', 0)):.2f} "
+            f"intereses={float(resumen.get('intereses', 0)):.2f} "
+            f"total={float(resumen.get('gran_total', 0)):.2f} "
+            f"fuente_tasas={fuente_tasas}",
+            flush=True,
+        )
 
         return JSONResponse({
             "status": "success",
@@ -172,6 +206,9 @@ async def liquidar_para_bot(request: Request):
                 "gastos": float(resumen["gastos"]),
                 "gran_total": float(resumen["gran_total"]),
                 "total_exigible": float(resumen["gran_total"]),
+                "tasas_aplicadas": tasas_aplicadas,
+                "fuente_tasas": fuente_tasas,
+                "detalle_mensual": resultados,
                 "url_pdf": url_pdf,
             },
         })
