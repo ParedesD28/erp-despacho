@@ -55,8 +55,6 @@ def _wrap_crm_get():
             if not isinstance(context, dict):
                 return response
             historial = context.get("historial") or []
-            # Defensivo: aunque el SELECT original cambie en el futuro, nunca
-            # mostramos una fila cuyo estado ya sea ANULADO.
             context["historial"] = [
                 item for item in historial
                 if not bool(item.get("anulado"))
@@ -79,13 +77,14 @@ def install():
         with conn:
             with conn.cursor() as cur:
                 if not _table_exists(cur, "gestiones_crm"):
-                    print("[CRM] gestiones_crm no existe; se conserva la ruta compatible sin migracion", flush=True)
+                    print("[CRM] gestiones_crm no existe; no se instala anulación", flush=True)
                     return
                 cols = _table_columns(cur, "gestiones_crm")
                 if "anulado" not in cols:
                     cur.execute(
                         "ALTER TABLE gestiones_crm ADD COLUMN anulado BOOLEAN NOT NULL DEFAULT FALSE"
                     )
+                    cols.add("anulado")
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_gestiones_crm_inmueble_anulado "
                     "ON gestiones_crm (inmueble_id, anulado)"
@@ -96,7 +95,6 @@ def install():
     finally:
         _release(conn)
 
-    # Elimina cualquier POST previo para dejar un unico handler operativo.
     main.app.router.routes[:] = [
         r for r in main.app.router.routes
         if not (getattr(r, "path", None) == "/crm/anular" and "POST" in getattr(r, "methods", set()))
@@ -120,15 +118,19 @@ def install():
                             f"/crm?buscar_inmueble={inmueble_id}&error=Gestion+no+encontrada",
                             status_code=303,
                         )
-                    cur.execute(
-                        "UPDATE gestiones_crm "
-                        "SET anulado=TRUE, estado=CASE WHEN EXISTS "
-                        "(SELECT 1 FROM information_schema.columns WHERE table_schema='public' "
-                        "AND table_name='gestiones_crm' AND column_name='estado') "
-                        "THEN 'ANULADO' ELSE estado END "
-                        "WHERE id=%s AND inmueble_id=%s",
-                        (gestion_id, inmueble_id),
-                    )
+                    cols = _table_columns(cur, "gestiones_crm")
+                    if "estado" in cols:
+                        cur.execute(
+                            "UPDATE gestiones_crm SET anulado=TRUE, estado='ANULADO' "
+                            "WHERE id=%s AND inmueble_id=%s",
+                            (gestion_id, inmueble_id),
+                        )
+                    else:
+                        cur.execute(
+                            "UPDATE gestiones_crm SET anulado=TRUE "
+                            "WHERE id=%s AND inmueble_id=%s",
+                            (gestion_id, inmueble_id),
+                        )
             print(f"[CRM] Gestion {gestion_id} anulada para inmueble {inmueble_id}", flush=True)
             return RedirectResponse(
                 f"/crm?buscar_inmueble={inmueble_id}&mensaje=Gestion+anulada",
