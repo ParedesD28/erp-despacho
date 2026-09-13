@@ -27,6 +27,7 @@ import pdf_final_patch  # noqa: F401
 import bot_pdf_patch  # noqa: F401
 import export_final_patch  # noqa: F401
 import expediente_workflow_patch  # noqa: F401
+import expediente_cursor_hardening  # noqa: F401
 import expediente_workflow_hardening  # noqa: F401
 import expediente_stage_hardening  # noqa: F401
 import expediente_ui_patch  # noqa: F401
