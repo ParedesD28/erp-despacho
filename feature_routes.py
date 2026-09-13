@@ -29,6 +29,13 @@ def release(c):
         pool.putconn(c)
 
 
+def _row_value(row, key, index=0):
+    """Lee una columna tanto de RealDictRow como de una tupla tradicional."""
+    if isinstance(row, dict):
+        return row[key]
+    return row[index]
+
+
 def table_exists(cur, table):
     cur.execute(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
@@ -36,7 +43,7 @@ def table_exists(cur, table):
         (table,),
     )
     row = cur.fetchone()
-    return bool(row[0])
+    return bool(_row_value(row, "exists"))
 
 
 def ensure_schema():
