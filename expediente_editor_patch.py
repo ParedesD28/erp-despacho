@@ -23,18 +23,30 @@ def _release(conn):
         main.db_pool.putconn(conn)
 
 
+def _row_value(row, key_or_index, default=None):
+    """Lee filas tanto de cursores tuple como RealDictCursor."""
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        return row.get(key_or_index, default)
+    try:
+        return row[key_or_index]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def _cols(cur, table):
     cur.execute(
         "SELECT column_name FROM information_schema.columns "
         "WHERE table_schema='public' AND table_name=%s",
         (table,),
     )
-    return {r[0] for r in cur.fetchall()}
+    return {_row_value(r, "column_name", _row_value(r, 0)) for r in cur.fetchall()}
 
 
 def _tables(cur):
     cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
-    return {r[0] for r in cur.fetchall()}
+    return {_row_value(r, "table_name", _row_value(r, 0)) for r in cur.fetchall()}
 
 
 def _dedupe_pairs(ids_text: str, names_text: str):
@@ -92,7 +104,7 @@ def _build_context(cur, proceso):
         (str(demandante).split("|")[0].strip(),),
     )
     row = cur.fetchone()
-    proceso["demandante_db"] = row[0] if row else demandante
+    proceso["demandante_db"] = _row_value(row, "nombre", _row_value(row, 0, demandante))
 
     ids, nombres = [], []
     tablas = _tables(cur)
@@ -105,7 +117,9 @@ def _build_context(cur, proceso):
             "ORDER BY ident",
             (proceso.get("radicado_interno"),),
         )
-        for ident, nombre in cur.fetchall():
+        for row in cur.fetchall():
+            ident = _row_value(row, "ident", _row_value(row, 0))
+            nombre = _row_value(row, "nombre", _row_value(row, 1))
             if ident and ident not in ids:
                 ids.append(ident)
                 nombres.append(nombre or ident)
@@ -133,7 +147,10 @@ def _build_context(cur, proceso):
         if not select:
             continue
         order = "fecha DESC" if "fecha" in cols else "id DESC" if "id" in cols else "1"
-        cur.execute(f"SELECT {', '.join(select)} FROM {table} WHERE radicado_interno=%s ORDER BY {order}", (proceso.get("radicado_interno"),))
+        cur.execute(
+            f"SELECT {', '.join(select)} FROM {table} WHERE radicado_interno=%s ORDER BY {order}",
+            (proceso.get("radicado_interno"),),
+        )
         medidas_detalle = [dict(r) for r in cur.fetchall()]
         break
 
