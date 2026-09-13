@@ -4,6 +4,7 @@ import os
 
 import bot_api
 import main
+from bot_pdf_secure import build_signed_pdf_url
 
 
 if hasattr(main, "generar_pdf_liquidacion"):
@@ -15,9 +16,9 @@ if hasattr(main, "generar_pdf_liquidacion"):
         if not base:
             raise RuntimeError("PUBLIC_BASE_URL/RENDER_EXTERNAL_URL no esta configurada")
         filename = os.path.basename(path)
-        return f"{base}/static/pdfs/{filename}"
+        return build_signed_pdf_url(filename, base)
 
     bot_api._generar_pdf = _generar_pdf_unificado
-    print("[BOT PDF] Generador unificado con la descarga web | URL publica preservada", flush=True)
+    print("[BOT PDF] Generador unificado con descarga publica firmada activado", flush=True)
 else:
     print("[BOT PDF][ALERTA] No se encontró el generador PDF unificado", flush=True)
