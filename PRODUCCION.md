@@ -36,7 +36,7 @@ python start.py
 - El pool histórico de `main.py` se cierra durante el arranque para evitar dos pools concurrentes.
 - La extensión del ERP se registra desde `extensions.py`; se elimina el parche implícito por `sitecustomize.py`.
 - La plantilla del expediente queda consolidada en una única vista definitiva: `templates/detalle_expediente_v4.html`.
-- `GET /liquidador` no causa nuevas cuotas/expensas aunque reciba `inmueble_id`; la causación queda en operaciones `POST` explícitas.
+- La apertura de `/liquidador?inmueble_id=...` conserva la causación automática intencional de expensas/cuotas hasta la fecha de corte, para mantener actualizado el registro real de administración. La interfaz permite posteriormente corregir los datos causados cuando exista un error.
 - Los errores globales se registran como eventos JSON con `request_id` y traza en los logs del servidor; el usuario recibe únicamente mensajes genéricos sin SQL, rutas internas ni secretos.
 - El endpoint machine-to-machine del agente continúa protegido mediante `X-API-Key` y permanece excluido del middleware de sesión web.
 - Los PDFs generados para el bot utilizan URLs públicas temporales firmadas.
@@ -48,7 +48,7 @@ Antes de declarar producción estable, comprobar:
 2. Un login correcto devuelve `Set-Cookie` con `HttpOnly; Secure; SameSite=Lax` y un valor firmado `v1.*`.
 3. Una cookie antigua que contenga solo un ID ya no autoriza ninguna ruta.
 4. `/api/bot/liquidar` sigue respondiendo con `X-API-Key` sin exigir cookie del navegador.
-5. `GET /liquidador?inmueble_id=...` ya no inserta filas en `expensas_ph`.
+5. `GET /liquidador?inmueble_id=...` conserva la causación automática y actualiza las expensas hasta la fecha de corte sin duplicar los periodos ya existentes.
 6. `POST /liquidador` y `POST /liquidador/actualizar` conservan el cálculo y la actualización explícita.
 7. Una excepción inesperada genera un `request_id` y una traza en el log, sin devolver el detalle técnico al navegador.
 
