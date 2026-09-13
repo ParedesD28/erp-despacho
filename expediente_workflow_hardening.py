@@ -13,6 +13,7 @@ from psycopg2.extras import RealDictCursor
 
 import main
 import expediente_workflow_patch as workflow
+import expediente_editor_patch as editor
 
 app = main.app
 
@@ -40,12 +41,74 @@ def _parse_money(value, default=None):
             text = text.replace(".", "")
         elif "." in text:
             integer, fraction = text.split(".", 1)
-            # En Colombia un punto seguido de tres cifras suele ser miles.
             if len(fraction) == 3 and integer.replace("-", "").isdigit():
                 text = integer + fraction
         return Decimal(text)
     except (InvalidOperation, ValueError):
         raise ValueError("El valor de pretensiones no es válido")
+
+
+def _row_value(row, key_or_index, default=None):
+    """Lee tuple y RealDictRow sin acceso posicional inseguro."""
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        if key_or_index in row:
+            return row[key_or_index]
+        if isinstance(key_or_index, int):
+            values = list(row.values())
+            return values[key_or_index] if 0 <= key_or_index < len(values) else default
+        return default
+    try:
+        return row[key_or_index]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
+def _safe_cols(cur, table):
+    cur.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema='public' AND table_name=%s",
+        (table,),
+    )
+    return {str(_row_value(r, "column_name", _row_value(r, 0, ""))) for r in cur.fetchall() if _row_value(r, "column_name", _row_value(r, 0))}
+
+
+def _safe_table_exists(cur, table):
+    cur.execute(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema='public' AND table_name=%s) AS exists_table",
+        (table,),
+    )
+    row = cur.fetchone()
+    return bool(_row_value(row, "exists_table", _row_value(row, 0, False)))
+
+
+# Compatibilidad centralizada: todos los parches nuevos pueden trabajar
+# indistintamente con RealDictCursor o cursores de tuplas.
+workflow._cols = _safe_cols
+workflow._table_exists = _safe_table_exists
+editor._row_value = _row_value
+editor._cols = _safe_cols
+editor._tables = lambda cur: _table_names(cur)
+
+
+def _table_names(cur):
+    cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
+    return {str(_row_value(r, "table_name", _row_value(r, 0, ""))) for r in cur.fetchall() if _row_value(r, "table_name", _row_value(r, 0))}
+
+
+def _sync_all_stages_safe(cur):
+    if not _safe_table_exists(cur, "procesos"):
+        return
+    cur.execute("SELECT radicado_interno FROM procesos WHERE radicado_interno IS NOT NULL")
+    for row in cur.fetchall():
+        radicado = _row_value(row, "radicado_interno", _row_value(row, 0))
+        if radicado:
+            workflow._sync_stage(cur, radicado)
+
+
+workflow._sync_all_stages = _sync_all_stages_safe
 
 
 def _remove_route(path, methods=None):
@@ -84,7 +147,7 @@ async def guardar_expediente_estructurado_hardened(request: Request):
                 radicado_rama = str(form.get("radicado_rama") or "").strip()
                 if "radicado_rama" in cols and radicado_rama and radicado_rama != process.get("radicado_rama"):
                     cur.execute(
-                        "SELECT 1 FROM procesos WHERE radicado_rama=%s AND radicado_interno<>%s LIMIT 1",
+                        "SELECT 1 AS duplicate FROM procesos WHERE radicado_rama=%s AND radicado_interno<>%s LIMIT 1",
                         (radicado_rama, radicado),
                     )
                     if cur.fetchone():
@@ -116,17 +179,17 @@ async def guardar_expediente_estructurado_hardened(request: Request):
                         raise ValueError("Debe quedar al menos un demandante vinculado")
                     marks = ",".join(["%s"] * len(demandante_ids))
                     cur.execute(f"SELECT identificacion FROM contactos WHERE identificacion IN ({marks})", demandante_ids)
-                    valid = {r[0] for r in cur.fetchall()}
+                    valid = {str(_row_value(r, "identificacion", _row_value(r, 0, ""))) for r in cur.fetchall() if _row_value(r, "identificacion", _row_value(r, 0))}
                     if set(demandante_ids) != valid:
                         raise ValueError("Uno de los demandantes seleccionados no existe en Contactos")
                     cur.execute("UPDATE procesos SET id_cliente=%s WHERE radicado_interno=%s", (" | ".join(demandante_ids), radicado))
 
-                if workflow._table_exists(cur, "procesos_litisconsorcio"):
+                if _safe_table_exists(cur, "procesos_litisconsorcio"):
                     if not demandado_ids:
                         raise ValueError("Debe quedar al menos un demandado vinculado")
                     marks = ",".join(["%s"] * len(demandado_ids))
                     cur.execute(f"SELECT identificacion FROM contactos WHERE identificacion IN ({marks})", demandado_ids)
-                    valid = {r[0] for r in cur.fetchall()}
+                    valid = {str(_row_value(r, "identificacion", _row_value(r, 0, ""))) for r in cur.fetchall() if _row_value(r, "identificacion", _row_value(r, 0))}
                     if set(demandado_ids) != valid:
                         raise ValueError("Uno de los demandados seleccionados no existe en Contactos")
                     lcols = workflow._cols(cur, "procesos_litisconsorcio")
@@ -140,7 +203,7 @@ async def guardar_expediente_estructurado_hardened(request: Request):
                         )
                     if "demandado" in cols and "id_demandado" in cols:
                         cur.execute(f"SELECT nombre FROM contactos WHERE identificacion IN ({marks}) ORDER BY nombre", demandado_ids)
-                        names = [r[0] for r in cur.fetchall()]
+                        names = [str(_row_value(r, "nombre", _row_value(r, 0, ""))) for r in cur.fetchall() if _row_value(r, "nombre", _row_value(r, 0))]
                         cur.execute(
                             "UPDATE procesos SET demandado=%s,id_demandado=%s WHERE radicado_interno=%s",
                             (" | ".join(names), " | ".join(demandado_ids), radicado),
@@ -169,4 +232,4 @@ async def guardar_expediente_estructurado_hardened(request: Request):
         workflow._release(conn)
 
 
-print("[EXPEDIENTE_HARDENING] Parseo monetario y errores de edicion protegidos", flush=True)
+print("[EXPEDIENTE_HARDENING] Compatibilidad RealDictCursor/tuplas + parseo monetario + errores protegidos", flush=True)
