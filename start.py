@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import os
+import re
 import time
 from http.cookies import SimpleCookie
 
@@ -116,7 +117,6 @@ def _password_bcrypt_only(password_plana, password_hash):
         return False
 
 
-# Replace the legacy verifier before the login route executes.
 main.verificar_password = _password_bcrypt_only
 
 
@@ -136,7 +136,6 @@ async def _production_security_middleware(request, call_next):
                 from fastapi.responses import RedirectResponse
                 return RedirectResponse(url="/login", status_code=303)
 
-    # Validate the high-risk creation endpoint before the legacy handler writes.
     if path == "/crear_proceso_cascada" and request.method == "POST":
         try:
             form = await request.form()
@@ -162,8 +161,6 @@ async def _production_security_middleware(request, call_next):
 
     response = await call_next(request)
 
-    # Legacy login creates a temporary user-id cookie. Replace it immediately
-    # with an authenticated, signed, expiring cookie.
     if SESSION_SECRET and path == "/login" and response.status_code in (301, 302, 303, 307, 308):
         legacy_user_id = _cookie_from_response(response)
         if legacy_user_id and legacy_user_id.isdigit():
