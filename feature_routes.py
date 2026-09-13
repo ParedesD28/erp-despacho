@@ -228,11 +228,27 @@ def crm_unificado(request: Request, buscar_inmueble: int | None = None):
                     cur.execute(
                         "SELECT * FROM gestiones_cartera "
                         "WHERE REGEXP_REPLACE(COALESCE(identificacion_deudor::text,''), '[^0-9]', '', 'g')=%s "
-                        "ORDER BY fecha DESC LIMIT 200",
+                        "LIMIT 200",
                         (str(cedula).replace(".", ""),),
                     )
                     for r in cur.fetchall():
                         d = dict(r)
+                        gestion_fecha = next(
+                            (
+                                d.get(name)
+                                for name in (
+                                    "fecha",
+                                    "fecha_gestion",
+                                    "created_at",
+                                    "createdAt",
+                                    "timestamp",
+                                    "fecha_registro",
+                                    "created",
+                                )
+                                if d.get(name) is not None
+                            ),
+                            None,
+                        )
                         historial.append({
                             "id": d.get("id"),
                             "tipo": d.get("tipo_contacto") or "WhatsApp IA",
@@ -240,7 +256,7 @@ def crm_unificado(request: Request, buscar_inmueble: int | None = None):
                             "resumen": d.get("resumen", ""),
                             "promesa": d.get("promesa_pago_fecha"),
                             "usuario": d.get("usuario", "Bot Claude"),
-                            "fecha": d.get("fecha"),
+                            "fecha": gestion_fecha,
                         })
                     historial.sort(key=lambda x: str(x.get("fecha") or ""), reverse=True)
         return main.templates.TemplateResponse(
