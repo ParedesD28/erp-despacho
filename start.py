@@ -27,6 +27,7 @@ import pdf_final_patch  # noqa: F401
 import bot_pdf_patch  # noqa: F401
 import export_final_patch  # noqa: F401
 import expediente_editor_patch  # noqa: F401
+import expediente_workflow_patch  # noqa: F401
 import production_checks  # noqa: F401
 
 BOT_PATH = "/api/bot/liquidar"
