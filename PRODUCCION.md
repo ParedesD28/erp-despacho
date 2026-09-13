@@ -4,9 +4,9 @@
 
 ERP:
 - `DATABASE_URL`
-- `ERP_SESSION_SECRET` — secreto aleatorio largo, no reutilizar contrasenas ni claves publicas.
+- `ERP_SESSION_SECRET` — secreto aleatorio largo (mínimo 32 caracteres). Es obligatorio y no se usa como fallback ninguna otra variable.
 - `LIQUIDADOR_API_KEY`
-- `PUBLIC_BASE_URL` — URL publica del servicio ERP, por ejemplo `https://gestionjudicial.onrender.com`.
+- `PUBLIC_BASE_URL` — URL pública del servicio ERP, por ejemplo `https://gestionjudicial.onrender.com`.
 
 Agente:
 - `DATABASE_URL`
@@ -16,7 +16,7 @@ Agente:
 - `ID_NUMERO_TELEFONO`
 - `LIQUIDADOR_API_URL` — base del ERP, sin `/api/bot/liquidar`.
 - `LIQUIDADOR_API_KEY` — exactamente el mismo secreto configurado en el ERP.
-- `META_APP_SECRET` — recomendado y necesario para validar la firma de Meta cuando el despliegue este listo para produccion.
+- `META_APP_SECRET` — necesario para validar la firma de Meta en producción.
 
 ## Comandos
 
@@ -26,21 +26,34 @@ ERP Start Command:
 python start.py
 ```
 
-El arranque endurece la sesion del ERP, mantiene libre solo el endpoint machine-to-machine del liquidador y expone `/health` para health checks.
+## Seguridad y arquitectura aplicadas
 
-## Seguridad aplicada
+- La sesión web usa tokens HMAC versionados con expiración; la cookie no almacena el ID del usuario en texto plano.
+- La cookie de sesión usa `HttpOnly`, `Secure`, `SameSite=Lax` y `Path=/`.
+- `ERP_SESSION_SECRET` es obligatorio; no se deriva de `DATABASE_URL` ni de claves de otros servicios.
+- Las contraseñas del ERP se verifican únicamente con bcrypt. En el arranque, cualquier valor heredado que no sea bcrypt se transforma a bcrypt dentro de una transacción controlada.
+- Todo acceso a PostgreSQL pasa por `ThreadedConnectionPool`. Se reemplaza `psycopg2.connect()` por un proxy que devuelve la conexión al pool al cerrar o salir de un contexto.
+- El pool histórico de `main.py` se cierra durante el arranque para evitar dos pools concurrentes.
+- La extensión del ERP se registra desde `extensions.py`; se elimina el parche implícito por `sitecustomize.py`.
+- La plantilla del expediente queda consolidada en una única vista definitiva: `templates/detalle_expediente_v4.html`.
+- `GET /liquidador` no causa nuevas cuotas/expensas aunque reciba `inmueble_id`; la causación queda en operaciones `POST` explícitas.
+- Los errores globales se registran como eventos JSON con `request_id` y traza en los logs del servidor; el usuario recibe únicamente mensajes genéricos sin SQL, rutas internas ni secretos.
+- El endpoint machine-to-machine del agente continúa protegido mediante `X-API-Key` y permanece excluido del middleware de sesión web.
+- Los PDFs generados para el bot utilizan URLs públicas temporales firmadas.
 
-- La sesion web ya no acepta un simple ID de usuario: `start.py` exige un token HMAC con expiracion.
-- La cookie de sesion usa `HttpOnly`, `Secure` y `SameSite=Lax`.
-- Las contrasenas del ERP se aceptan unicamente como hashes bcrypt; no se admite fallback a texto plano.
-- El endpoint del agente usa `X-API-Key` y comparacion en tiempo constante.
-- La fecha de corte del liquidador no puede ser futura.
-- Los PDFs generados por el bot usan nombres criptograficamente aleatorios en lugar de incluir el `inmueble_id` en la URL.
-- La creacion de expedientes valida identificaciones, correspondencia entre cedulas/nombres y evita repetir un `radicado_interno` ya existente.
-- Se agregan headers HTTP basicos contra MIME sniffing, framing y fuga innecesaria de referrer.
+## Validaciones de despliegue
+
+Antes de declarar producción estable, comprobar:
+1. `GET /login` devuelve la página de acceso sin crear sesión.
+2. Un login correcto devuelve `Set-Cookie` con `HttpOnly; Secure; SameSite=Lax` y un valor firmado `v1.*`.
+3. Una cookie antigua que contenga solo un ID ya no autoriza ninguna ruta.
+4. `/api/bot/liquidar` sigue respondiendo con `X-API-Key` sin exigir cookie del navegador.
+5. `GET /liquidador?inmueble_id=...` ya no inserta filas en `expensas_ph`.
+6. `POST /liquidador` y `POST /liquidador/actualizar` conservan el cálculo y la actualización explícita.
+7. Una excepción inesperada genera un `request_id` y una traza en el log, sin devolver el detalle técnico al navegador.
 
 ## Importante sobre la base de datos
 
-Este repositorio no tiene acceso directo a las restricciones reales de Neon. Antes de declarar el esquema 100% cerrado, conviene verificar en Neon que existan las claves foraneas, `UNIQUE` e indices apropiados para `contactos.identificacion`, `procesos.radicado_interno`, `procesos.inmueble_id`, `procesos_litisconsorcio.radicado_interno` y las tablas de auditoria/CRM.
+Este repositorio no tiene acceso directo a las restricciones reales de Neon. Conviene verificar en Neon que existan las claves foráneas, `UNIQUE` e índices apropiados para `contactos.identificacion`, `procesos.radicado_interno`, `procesos.inmueble_id`, `procesos_litisconsorcio.radicado_interno` y las tablas de auditoría/CRM.
 
-El motor financiero no se modifica en este endurecimiento: sigue siendo la unica fuente de verdad para la liquidacion.
+El motor financiero no se modifica en este endurecimiento: sigue siendo la fuente de verdad para la liquidación.
