@@ -28,7 +28,15 @@ import uvicorn
 import main
 
 # Compatibilidad con funciones legacy que ya usan main.db_pool.getconn().
+# El SimpleConnectionPool histórico se cierra para que el proceso solo conserve
+# el ThreadedConnectionPool central.
+_legacy_pool = getattr(main, "db_pool", None)
 main.db_pool = db.POOL
+if _legacy_pool is not None and _legacy_pool is not db.POOL:
+    try:
+        _legacy_pool.closeall()
+    except Exception:
+        pass
 main.verificar_password = verify_password
 
 # Registro único de extensiones y rutas del ERP/bot.
@@ -117,7 +125,6 @@ async def _production_security_middleware(request, call_next):
 
     if path == "/logout":
         response = RedirectResponse(url="/login", status_code=303)
-        from security import clear_session_cookie
         clear_session_cookie(response)
         return response
 
