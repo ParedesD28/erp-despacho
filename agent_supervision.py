@@ -13,6 +13,8 @@ _TIMEOUT = 20
 
 
 def _agent_url():
+    # No reutilizar una URL de liquidador a ciegas: supervisión es un servicio
+    # independiente y debe apuntar expresamente al agente de cobranza.
     return (os.getenv("AGENT_SUPERVISION_URL") or "").rstrip("/")
 
 
@@ -24,7 +26,20 @@ def _agent_headers():
 def _proxy(method, path, *, json=None, params=None):
     base = _agent_url()
     if not base:
-        return {"status": "error", "mensaje": "AGENT_SUPERVISION_URL no esta configurada en Render"}, 503
+        print("[SUPERVISION AGENTE][ALERTA] AGENT_SUPERVISION_URL no esta configurada en Render", flush=True)
+        return {
+            "status": "error",
+            "codigo": "AGENT_SUPERVISION_URL_MISSING",
+            "mensaje": "Falta configurar AGENT_SUPERVISION_URL en Render para conectar el ERP con el agente.",
+        }, 503
+    key = os.getenv("AGENT_SUPERVISION_KEY") or os.getenv("LIQUIDADOR_API_KEY") or ""
+    if not key:
+        print("[SUPERVISION AGENTE][ALERTA] No existe AGENT_SUPERVISION_KEY ni LIQUIDADOR_API_KEY", flush=True)
+        return {
+            "status": "error",
+            "codigo": "AGENT_SUPERVISION_KEY_MISSING",
+            "mensaje": "Falta configurar AGENT_SUPERVISION_KEY (o el fallback LIQUIDADOR_API_KEY) en Render.",
+        }, 503
     try:
         response = requests.request(
             method,
@@ -38,10 +53,12 @@ def _proxy(method, path, *, json=None, params=None):
             data = response.json()
         except ValueError:
             data = {"status": "error", "mensaje": f"Respuesta no JSON del agente: HTTP {response.status_code}"}
+        if response.status_code >= 500:
+            print(f"[SUPERVISION AGENTE][ALERTA] Agente respondio HTTP {response.status_code} en {path}", flush=True)
         return data, response.status_code
     except requests.RequestException as exc:
-        print(f"[SUPERVISION AGENTE] Error de conexión: {exc!r}", flush=True)
-        return {"status": "error", "mensaje": f"Agente no disponible: {exc}"}, 503
+        print(f"[SUPERVISION AGENTE][ALERTA] Error de conexion al agente: {exc!r}", flush=True)
+        return {"status": "error", "codigo": "AGENT_UNREACHABLE", "mensaje": f"Agente no disponible: {exc}"}, 503
 
 
 def _usuario(request: Request):
@@ -58,7 +75,6 @@ def _normalizar_conversaciones(data):
     for fila in filas:
         if not isinstance(fila, dict):
             continue
-        # Alias de presentación para que el front no dependa del nombre SQL.
         fila["phone"] = fila.get("phone") or fila.get("telefono")
         fila["identification"] = fila.get("identification") or fila.get("identificacion")
         fila["mode_current"] = fila.get("mode_current") or fila.get("modo_actual") or "AGENTE"
@@ -75,6 +91,12 @@ def supervision_agente(request: Request):
         name="supervision_agente.html",
         context={"request": request, "usuario": _usuario(request), "configurado": bool(_agent_url())},
     )
+
+
+@main.app.get("/supervision-agente/api/estado")
+def supervision_estado():
+    data, status = _proxy("GET", "/control/health")
+    return JSONResponse(data, status_code=status)
 
 
 @main.app.get("/supervision-agente/api/conversaciones")
@@ -129,4 +151,9 @@ async def supervision_mensaje(request: Request):
     return JSONResponse(data, status_code=status)
 
 
-print("[SUPERVISION AGENTE] Puente ERP -> agente cargado", flush=True)
+print(
+    "[SUPERVISION AGENTE] Puente ERP -> agente cargado | "
+    f"URL configurada={'SI' if _agent_url() else 'NO'} | "
+    f"CLAVE configurada={'SI' if (os.getenv('AGENT_SUPERVISION_KEY') or os.getenv('LIQUIDADOR_API_KEY')) else 'NO'}",
+    flush=True,
+)
