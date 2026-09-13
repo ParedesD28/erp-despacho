@@ -19,6 +19,8 @@ import data_integrity  # noqa: F401
 import route_patches  # noqa: F401
 import tasa_patch  # noqa: F401
 import expedientes_patch  # noqa: F401
+import crm_anular_patch  # noqa: F401
+import agent_supervision  # noqa: F401
 
 BOT_PATH = "/api/bot/liquidar"
 SESSION_COOKIE = "token_erp"
