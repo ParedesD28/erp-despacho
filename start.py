@@ -2,8 +2,9 @@
 
 Keeps the legacy application routes intact while adding a signed, expiring
 browser session at the ASGI edge, compatibility with legacy password records,
-validation for new processes, the machine-to-machine bot endpoint, and the
-compatibility layer that connects the current HTML templates to FastAPI routes.
+validation for new processes, the machine-to-machine bot endpoint, the
+compatibility layer that connects the current HTML templates to FastAPI routes,
+and data/export hardening for the liquidator.
 """
 
 import base64
@@ -19,8 +20,9 @@ import psycopg2
 import uvicorn
 
 import main
-import compat_routes  # noqa: F401  # registers template/service routes on main.app
-import route_patches  # noqa: F401  # replaces the incompatible detail query
+import compat_routes  # noqa: F401
+import data_integrity  # noqa: F401
+import route_patches  # noqa: F401
 
 BOT_PATH = "/api/bot/liquidar"
 SESSION_COOKIE = "token_erp"
@@ -96,7 +98,6 @@ def _set_secure_session(response, user_id: str) -> None:
 
 
 def _password_compatible(password_plana, password_hash):
-    """Accept bcrypt and legacy Neon plaintext records during migration."""
     if not password_plana or not password_hash:
         return False
     try:
