@@ -64,6 +64,9 @@ def _wrap_crm_get():
 
         crm_wrapped._anulado_filter_wrapped = True
         route.endpoint = crm_wrapped
+        # Starlette/FastAPI ya conserva el callable en dependant.call.
+        if hasattr(route, "dependant"):
+            route.dependant.call = crm_wrapped
         return
 
 
@@ -84,7 +87,6 @@ def install():
                     cur.execute(
                         "ALTER TABLE gestiones_crm ADD COLUMN anulado BOOLEAN NOT NULL DEFAULT FALSE"
                     )
-                    cols.add("anulado")
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_gestiones_crm_inmueble_anulado "
                     "ON gestiones_crm (inmueble_id, anulado)"
