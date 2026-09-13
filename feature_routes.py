@@ -35,11 +35,12 @@ def table_exists(cur, table):
         "WHERE table_schema='public' AND table_name=%s)",
         (table,),
     )
-    return bool(cur.fetchone()[0])
+    row = cur.fetchone()
+    return bool(row[0])
 
 
 def ensure_schema():
-    """Inicializa las tablas auxiliares solo cuando realmente se necesitan."""
+    """Inicializa y actualiza las tablas auxiliares de forma idempotente."""
     global _SCHEMA_READY
     if _SCHEMA_READY:
         return
@@ -76,6 +77,17 @@ def ensure_schema():
                         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                # Las instalaciones antiguas pueden tener la tabla sin las columnas
+                # que añadió una versión posterior. Migramos de forma no destructiva
+                # antes de crear índices que dependan de ellas.
+                cur.execute(
+                    "ALTER TABLE vencimientos "
+                    "ADD COLUMN IF NOT EXISTS completado BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+                cur.execute(
+                    "ALTER TABLE vencimientos "
+                    "ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                )
                 cur.execute(
                     "CREATE INDEX IF NOT EXISTS idx_vencimientos_fecha "
                     "ON vencimientos (fecha_vencimiento, completado)"
