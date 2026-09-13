@@ -1,9 +1,8 @@
 """Production startup for the ERP.
 
 Keeps the legacy application routes intact while adding a signed, expiring
-browser session at the ASGI edge, strict bcrypt authentication, validation for
-new processes, and the machine-to-machine bot endpoint authenticated with
-X-API-Key.
+browser session at the ASGI edge, compatibility with legacy password records,
+validation for new processes, and the machine-to-machine bot endpoint.
 """
 
 import base64
@@ -20,15 +19,9 @@ import uvicorn
 
 import main
 
-
 BOT_PATH = "/api/bot/liquidar"
 SESSION_COOKIE = "token_erp"
 SESSION_TTL = int(os.getenv("ERP_SESSION_TTL", "28800"))
-# ERP_SESSION_SECRET is the preferred production secret.  If it is missing,
-# use an already-secret deployment value so the web application does not turn
-# every normal request into an unexplained 503.  DATABASE_URL is intentionally
-# only a last-resort bootstrap secret; Render should still be configured with
-# ERP_SESSION_SECRET and the warning below makes that visible in the logs.
 SESSION_SECRET = (
     os.getenv("ERP_SESSION_SECRET")
     or os.getenv("LIQUIDADOR_API_KEY")
@@ -37,14 +30,12 @@ SESSION_SECRET = (
 if not os.getenv("ERP_SESSION_SECRET"):
     print(
         "[START] ADVERTENCIA: ERP_SESSION_SECRET no esta configurado; "
-        "se usa un secreto de despliegue como fallback. Configure "
-        "ERP_SESSION_SECRET en Render para produccion.",
+        "se usa un secreto de despliegue como fallback. Configure ERP_SESSION_SECRET en Render para produccion.",
         flush=True,
     )
 
 
 def _bypass_bot_auth_middleware() -> None:
-    """Make the bot route bypass the browser-session middleware only."""
     user_middleware = getattr(main.app, "user_middleware", [])
     for middleware in user_middleware:
         dispatch = middleware.kwargs.get("dispatch")
@@ -120,30 +111,31 @@ def _set_secure_session(response, user_id: str) -> None:
     )
 
 
-def _password_bcrypt_only(password_plana, password_hash):
-    """Production auth: never compare or accept plaintext passwords."""
+def _password_compatible(password_plana, password_hash):
+    """Accept bcrypt and legacy Neon plaintext records during migration.
+
+    Existing ERP installations may still contain a legacy plaintext password.
+    Rejecting those records outright locks the administrator out. Bcrypt remains
+    the preferred format; the legacy comparison is deliberately isolated here
+    so it can be removed once all existing accounts have been migrated.
+    """
     if not password_plana or not password_hash:
         return False
     try:
         encoded = str(password_hash).encode("utf-8")
-        if not encoded.startswith((b"$2a$", b"$2b$", b"$2y$")):
-            return False
-        return bcrypt.checkpw(password_plana.encode("utf-8"), encoded)
+        if encoded.startswith((b"$2a$", b"$2b$", b"$2y$")):
+            return bcrypt.checkpw(password_plana.encode("utf-8"), encoded)
+        # Compatibility for accounts created before bcrypt hardening.
+        return hmac.compare_digest(str(password_hash), str(password_plana))
     except (ValueError, TypeError):
         return False
 
 
-main.verificar_password = _password_bcrypt_only
+main.verificar_password = _password_compatible
 
 
 async def _production_security_middleware(request, call_next):
-    """Fail closed for browser routes and add baseline security headers."""
     path = request.url.path
-
-    # Keep the machine endpoint independently protected by its API key
-    # middleware/handler. Browser routes remain protected by the signed
-    # session below. Do not emit a blanket 503 just because the optional
-    # ERP_SESSION_SECRET variable was omitted.
     public_paths = {"/login", "/logout", "/health"}
     if path not in public_paths and path != BOT_PATH and not path.startswith("/static/"):
         token = request.cookies.get(SESSION_COOKIE)
