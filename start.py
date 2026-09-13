@@ -29,6 +29,7 @@ import export_final_patch  # noqa: F401
 import production_checks  # noqa: F401
 
 BOT_PATH = "/api/bot/liquidar"
+BOT_PDF_PREFIX = "/api/bot/pdf/"
 SESSION_COOKIE = "token_erp"
 SESSION_TTL = int(os.getenv("ERP_SESSION_TTL", "28800"))
 SESSION_SECRET = os.getenv("ERP_SESSION_SECRET") or os.getenv("LIQUIDADOR_API_KEY") or os.getenv("DATABASE_URL")
@@ -105,6 +106,10 @@ def _password_compatible(password_plana, password_hash):
 main.verificar_password = _password_compatible
 
 
+def _is_bot_public_path(path: str) -> bool:
+    return path == BOT_PATH or path.startswith(BOT_PDF_PREFIX)
+
+
 def _bypass_bot_auth_middleware() -> None:
     for middleware in getattr(main.app, "user_middleware", []):
         dispatch = middleware.kwargs.get("dispatch")
@@ -113,12 +118,12 @@ def _bypass_bot_auth_middleware() -> None:
         original_dispatch = dispatch
 
         async def guarded_dispatch(request, call_next, _original=original_dispatch):
-            if request.url.path == BOT_PATH:
+            if _is_bot_public_path(request.url.path):
                 return await call_next(request)
             return await _original(request, call_next)
 
         middleware.kwargs["dispatch"] = guarded_dispatch
-        print("[START] Middleware browser-session adaptado para /api/bot/liquidar", flush=True)
+        print("[START] Middleware browser-session adaptado para /api/bot/*", flush=True)
         return
     print("[START] No se encontro validador_general_seguridad", flush=True)
 
@@ -126,7 +131,7 @@ def _bypass_bot_auth_middleware() -> None:
 async def _production_security_middleware(request, call_next):
     path = request.url.path
     public_paths = {"/login", "/logout", "/health"}
-    if path not in public_paths and path != BOT_PATH and not path.startswith("/static/"):
+    if path not in public_paths and not _is_bot_public_path(path) and not path.startswith("/static/"):
         token = request.cookies.get(SESSION_COOKIE)
         if not token or not _validar_sesion(token):
             from fastapi.responses import RedirectResponse
