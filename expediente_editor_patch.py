@@ -5,6 +5,7 @@ metadatos de negocio y se normalizan demandados sin borrar actuaciones.
 """
 from decimal import Decimal, InvalidOperation
 from fastapi import Request, Form, HTTPException
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import RedirectResponse, JSONResponse
 from psycopg2.extras import RealDictCursor
 import main
@@ -175,10 +176,7 @@ def expediente_editor_data(radicado: str):
             if not proceso:
                 raise HTTPException(status_code=404, detail="Expediente no encontrado")
             proceso, _, _, abogados = _build_context(cur, proceso)
-            return JSONResponse({
-                "proceso": proceso,
-                "abogados": abogados,
-            }, default=str)
+            return JSONResponse(jsonable_encoder({"proceso": proceso, "abogados": abogados}))
     finally:
         _release(conn)
 
