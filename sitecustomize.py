@@ -1,12 +1,12 @@
-"""Runtime compatibility hooks for the existing ERP monolith.
+"""Runtime compatibility hooks for the ERP bot endpoint.
 
-Python imports sitecustomize automatically when it is on sys.path. We use this
-small adapter so the bot endpoint can be secured and replaced without making
-a risky wholesale rewrite of main.py.
+The ERP has a global authentication middleware that protects the web UI with
+an ERP cookie. The machine-to-machine bot endpoint must instead authenticate
+with LIQUIDADOR_API_KEY. This module patches the existing decorators before
+main.py registers its routes, without modifying the large monolithic main.py.
 """
 import os
 from functools import wraps
-
 
 _API_PATH = "/api/bot/liquidar"
 
@@ -18,13 +18,13 @@ def _api_key_ok(request):
 
 
 try:
-    from fastapi import FastAPI, Request
-    from fastapi.responses import JSONResponse
+    from fastapi import FastAPI
 
     _original_middleware = FastAPI.middleware
     _original_post = FastAPI.post
 
     def _secure_middleware(self, middleware_type):
+        """Wrap HTTP middleware so the bot API bypasses the browser login guard."""
         decorator = _original_middleware(self, middleware_type)
 
         def register(func):
@@ -33,45 +33,35 @@ try:
 
             @wraps(func)
             async def guarded(request, call_next):
-                if request.url.path == _API_PATH:
-                    if _api_key_ok(request):
-                        return await call_next(request)
-                    return JSONResponse({"status": "error", "mensaje": "No autorizado"}, status_code=401)
+                if request.url.path == _API_PATH and _api_key_ok(request):
+                    return await call_next(request)
                 return await func(request, call_next)
 
-            # Register the wrapped version but preserve the original function
-            # for the module namespace.
-            self.add_middleware.__wrapped_dispatch__ = guarded
-            from starlette.middleware.base import BaseHTTPMiddleware
-            self.add_middleware(BaseHTTPMiddleware, dispatch=guarded)
-            return func
+            # Use FastAPI's normal middleware decorator mechanism. Do not call
+            # add_middleware manually here; doing so can create duplicate stacks
+            # and, in older versions, interfere with route startup.
+            return decorator(guarded)
 
         return register
 
     def _secure_post(self, path, *args, **kwargs):
+        """Replace only the legacy bot POST route with the authenticated handler."""
         if path != _API_PATH:
             return _original_post(self, path, *args, **kwargs)
 
         def decorator(_legacy_function):
             from bot_api import liquidar_para_bot
 
-            # The legacy handler remains in main.py for compatibility, but it
-            # is intentionally not registered: it exposed no API auth, returned
-            # the wrong total and generated a placeholder PDF URL.
             route_kwargs = dict(kwargs)
-            route_kwargs.pop("response_model", None)
-            route_kwargs.pop("status_code", None)
-            route_kwargs.pop("responses", None)
-            route_kwargs.pop("deprecated", None)
-            route_kwargs.pop("operation_id", None)
-            route_kwargs.pop("summary", None)
-            route_kwargs.pop("description", None)
-            route_kwargs.pop("response_description", None)
-            route_kwargs.pop("tags", None)
-            route_kwargs.pop("dependencies", None)
-            route_kwargs.pop("callbacks", None)
-            route_kwargs.pop("openapi_extra", None)
-            route_kwargs.pop("include_in_schema", None)
+            # These decorator arguments can conflict with the handler replacement
+            # and are not needed for this endpoint.
+            for key in (
+                "response_model", "status_code", "responses", "deprecated",
+                "operation_id", "summary", "description", "response_description",
+                "tags", "dependencies", "callbacks", "openapi_extra",
+                "include_in_schema",
+            ):
+                route_kwargs.pop(key, None)
 
             self.add_api_route(
                 path,
@@ -80,12 +70,14 @@ try:
                 include_in_schema=True,
                 **route_kwargs,
             )
+            print("[SITECUSTOMIZE] Ruta /api/bot/liquidar registrada con autenticacion API", flush=True)
             return _legacy_function
 
         return decorator
 
     FastAPI.middleware = _secure_middleware
     FastAPI.post = _secure_post
+    print("[SITECUSTOMIZE] Adaptador del bot cargado correctamente", flush=True)
 except Exception as exc:
     # Never prevent the ERP from starting if the compatibility hook itself fails.
     print(f"[SITECUSTOMIZE] No se pudo cargar el adaptador: {exc}", flush=True)
