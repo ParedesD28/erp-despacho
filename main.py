@@ -1498,21 +1498,34 @@ async def crear_expediente_completo(
                 if not ids_demandados:
                     raise Exception("Debes especificar al menos un demandado.")
 
-                # --- PASO 3: EL INMUEBLE ---
-                cur.execute("SELECT nombre FROM contactos WHERE identificacion = %s", (ids_demandantes[0],))
-                res_nombre = cur.fetchone()
-                nombre_conjunto = res_nombre['nombre'] if isinstance(res_nombre, dict) else (res_nombre[0] if res_nombre else "SIN NOMBRE")
-
-                cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (ids_demandados[0],))
-                res_contacto = cur.fetchone()
-                contacto_id = res_contacto['id'] if isinstance(res_contacto, dict) else (res_contacto[0] if res_contacto else None)
-                
+                # --- 3. CREAR EL INMUEBLE ---
                 cur.execute("""
-                    INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) 
-                    VALUES (%s, %s, %s) RETURNING id;
-                """, (contacto_id, nombre_conjunto, apto.upper()))
-                nuevo_inmueble_id = cur.fetchone()
-                nuevo_inmueble_id = nuevo_inmueble_id['id'] if isinstance(nuevo_inmueble_id, dict) else nuevo_inmueble_id[0]
+                    INSERT INTO inmuebles_ph (conjunto_residencial, torre_apto) 
+                    VALUES (%s, %s) RETURNING id;
+                """, (conjunto.strip().upper(), apto.strip().upper()))
+                nuevo_inmueble_id = cur.fetchone()[0]
+                
+                # 🔥 TU SOLUCIÓN: GUARDADO EN TABLAS SEPARADAS
+                # Asumimos que 'ids_demandados' es la lista de cédulas que llega del formulario
+                
+                if ids_demandados:
+                    # 1. El PRIMERO de la lista va a la tabla EXCLUSIVA de PROPIETARIOS
+                    cedula_principal = ids_demandados[0]
+                    cur.execute("""
+                        INSERT INTO inmuebles_propietarios (inmueble_id, contacto_id) 
+                        VALUES (%s, (SELECT id FROM contactos WHERE identificacion = %s LIMIT 1))
+                    """, (nuevo_inmueble_id, cedula_principal))
+                    
+                    # 2. Del SEGUNDO en adelante, van a la tabla EXCLUSIVA de CODEUDORES
+                    if len(ids_demandados) > 1:
+                        for cedula_codeudor in ids_demandados[1:]:
+                            cur.execute("""
+                                INSERT INTO inmuebles_codeudores (inmueble_id, contacto_id) 
+                                VALUES (%s, (SELECT id FROM contactos WHERE identificacion = %s LIMIT 1))
+                            """, (nuevo_inmueble_id, cedula_codeudor))
+
+                # --- 4. CREAR EL PROCESO ---
+                # (Aquí va tu código normal para insertar en la tabla procesos usando nuevo_inmueble_id)
                 
                 # --- PASO 4: EL PROCESO (LÓGICA LIMPIA) ---
                 cur.execute("SELECT radicado_interno FROM procesos ORDER BY radicado_interno DESC LIMIT 1")
