@@ -1,4 +1,8 @@
 """Correcciones puntuales aplicadas después del registro de compat_routes."""
+from datetime import date, datetime
+import re
+
+import requests
 from fastapi import Request, HTTPException
 from fastapi.responses import RedirectResponse
 from psycopg2.extras import RealDictCursor
@@ -11,6 +15,218 @@ def _conn():
 
 def _release(conn):
     main.db_pool.putconn(conn)
+
+
+# ==============================================================================
+# CACHE OFICIAL DE TASAS DE INTERES / USURA
+# ==============================================================================
+# Fuente primaria: Datos Abiertos Colombia, conjunto pare-7x5i, propiedad de la
+# Superintendencia Financiera de Colombia (SFC). La tabla local historico_tasas
+# funciona como cache historico para evitar consultas repetitivas a la fuente.
+#
+# El motor existente espera tasa_efectiva_anual como fraccion decimal:
+#   29.24% EA -> 0.2924
+# ==============================================================================
+TASAS_SFC_URL = "https://www.datos.gov.co/resource/pare-7x5i.json"
+TASA_MODALIDAD = "Consumo y ordinario"
+
+
+def _asegurar_tabla_tasas():
+    conn = _conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS historico_tasas (
+                        id BIGSERIAL PRIMARY KEY,
+                        anio INTEGER NOT NULL,
+                        mes INTEGER NOT NULL,
+                        tasa_efectiva_anual NUMERIC(18,10) NOT NULL,
+                        tasa_usura_ea NUMERIC(18,10),
+                        modalidad VARCHAR(120) NOT NULL DEFAULT 'Consumo y ordinario',
+                        vigencia_desde DATE,
+                        vigencia_hasta DATE,
+                        fuente TEXT,
+                        consultado_en TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                # Compatibilidad con instalaciones antiguas que ya tienen la tabla.
+                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS tasa_usura_ea NUMERIC(18,10)")
+                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS modalidad VARCHAR(120)")
+                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS vigencia_desde DATE")
+                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS vigencia_hasta DATE")
+                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS fuente TEXT")
+                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS consultado_en TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP")
+                cur.execute("""
+                    UPDATE historico_tasas
+                       SET modalidad = COALESCE(modalidad, 'Consumo y ordinario')
+                     WHERE modalidad IS NULL
+                """)
+                cur.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_historico_tasas_periodo_modalidad
+                    ON historico_tasas (anio, mes, COALESCE(modalidad, 'Consumo y ordinario'))
+                """)
+        return True
+    except Exception as exc:
+        print(f"[TASAS] No fue posible asegurar historico_tasas: {exc}", flush=True)
+        return False
+    finally:
+        _release(conn)
+
+
+def _parse_tasa_porcentaje(valor):
+    if valor is None:
+        return None
+    texto = str(valor).strip().replace("%", "").replace(" ", "")
+    # SFC publica normalmente 19,49. Aceptamos tambien 19.49 y formatos mixtos.
+    if "," in texto and "." in texto:
+        if texto.rfind(",") > texto.rfind("."):
+            texto = texto.replace(".", "").replace(",", ".")
+        else:
+            texto = texto.replace(",", "")
+    elif "," in texto:
+        texto = texto.replace(",", ".")
+    try:
+        numero = float(texto)
+        return numero / 100.0 if numero > 1 else numero
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_fecha_sfc(valor):
+    if not valor:
+        return None
+    try:
+        return datetime.fromisoformat(str(valor).replace("Z", "+00:00")).date()
+    except Exception:
+        try:
+            return datetime.strptime(str(valor)[:10], "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+
+def _consultar_tasa_sfc(anio, mes):
+    """Consulta la tasa IBC oficial de consumo y ordinario y deriva usura."""
+    desde = date(int(anio), int(mes), 1)
+    # Consulta publica Socrata. Pedimos todas las filas para que funcione aunque
+    # el API no soporte exactamente la sintaxis usada por una instalacion local.
+    respuesta = requests.get(
+        TASAS_SFC_URL,
+        params={"$limit": 5000, "$order": "vigencia_desde DESC"},
+        timeout=15,
+    )
+    respuesta.raise_for_status()
+    registros = respuesta.json()
+    if not isinstance(registros, list):
+        raise ValueError("La SFC no devolvio una lista de registros")
+
+    candidatos = []
+    for fila in registros:
+        modalidad = str(fila.get("modalidad") or "").strip()
+        if modalidad.lower() != TASA_MODALIDAD.lower():
+            continue
+        vig_desde = _parse_fecha_sfc(fila.get("vigencia_desde"))
+        vig_hasta = _parse_fecha_sfc(fila.get("vigencia_hasta"))
+        if vig_desde is None:
+            continue
+        if vig_desde.year == desde.year and vig_desde.month == desde.month:
+            ibc_ea = _parse_tasa_porcentaje(fila.get("interes_bancario_corriente"))
+            if ibc_ea is None:
+                continue
+            candidatos.append((vig_desde, vig_hasta, ibc_ea, fila))
+
+    if not candidatos:
+        raise LookupError(f"No existe tasa SFC para {anio}-{mes:02d} en modalidad {TASA_MODALIDAD}")
+
+    candidatos.sort(key=lambda item: item[0], reverse=True)
+    vig_desde, vig_hasta, ibc_ea, fila = candidatos[0]
+    usura_ea = ibc_ea * 1.5
+
+    return {
+        "anio": int(anio),
+        "mes": int(mes),
+        "ibc_ea": ibc_ea,
+        "usura_ea": usura_ea,
+        "vigencia_desde": vig_desde,
+        "vigencia_hasta": vig_hasta,
+        "modalidad": TASA_MODALIDAD,
+        "fuente": TASAS_SFC_URL,
+        "resolucion": fila.get("resolucion"),
+    }
+
+
+def obtener_tasa_bd_o_api(anio, mes):
+    """Primero usa Neon; solo consulta SFC cuando el periodo no esta cacheado."""
+    _asegurar_tabla_tasas()
+    conn = _conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT tasa_efectiva_anual, tasa_usura_ea, vigencia_desde, vigencia_hasta, fuente
+                  FROM historico_tasas
+                 WHERE anio=%s AND mes=%s
+                   AND COALESCE(modalidad, %s)=%s
+                 ORDER BY id DESC
+                 LIMIT 1
+            """, (int(anio), int(mes), TASA_MODALIDAD, TASA_MODALIDAD))
+            fila = cur.fetchone()
+            if fila:
+                tasa = fila.get("tasa_usura_ea")
+                # Compatibilidad con registros historicos anteriores: si no tenian
+                # usura, el valor almacenado se interpreta como IBC y se deriva.
+                if tasa is None:
+                    ibc = fila.get("tasa_efectiva_anual")
+                    if ibc is not None:
+                        tasa = float(ibc) * 1.5
+                        cur.execute("""
+                            UPDATE historico_tasas
+                               SET tasa_usura_ea=%s
+                             WHERE anio=%s AND mes=%s
+                               AND COALESCE(modalidad, %s)=%s
+                        """, (tasa, int(anio), int(mes), TASA_MODALIDAD, TASA_MODALIDAD))
+                        conn.commit()
+                if tasa is not None:
+                    print(f"[TASAS] CACHE HIT Neon {anio}-{mes:02d}: usura={float(tasa)*100:.2f}% EA", flush=True)
+                    return float(tasa)
+    finally:
+        _release(conn)
+
+    # Cache miss: consulta fuente oficial y persistimos el resultado.
+    datos = _consultar_tasa_sfc(anio, mes)
+    conn = _conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO historico_tasas
+                        (anio, mes, tasa_efectiva_anual, tasa_usura_ea, modalidad,
+                         vigencia_desde, vigencia_hasta, fuente, consultado_en)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,CURRENT_TIMESTAMP)
+                    ON CONFLICT (anio, mes, COALESCE(modalidad, 'Consumo y ordinario'))
+                    DO UPDATE SET
+                        tasa_efectiva_anual=EXCLUDED.tasa_efectiva_anual,
+                        tasa_usura_ea=EXCLUDED.tasa_usura_ea,
+                        vigencia_desde=EXCLUDED.vigencia_desde,
+                        vigencia_hasta=EXCLUDED.vigencia_hasta,
+                        fuente=EXCLUDED.fuente,
+                        consultado_en=CURRENT_TIMESTAMP
+                """, (
+                    datos["anio"], datos["mes"], datos["ibc_ea"], datos["usura_ea"],
+                    datos["modalidad"], datos["vigencia_desde"], datos["vigencia_hasta"], datos["fuente"],
+                ))
+        print(
+            f"[TASAS] SFC -> Neon {anio}-{mes:02d}: IBC={datos['ibc_ea']*100:.2f}% EA, "
+            f"usura={datos['usura_ea']*100:.2f}% EA",
+            flush=True,
+        )
+        return float(datos["usura_ea"])
+    finally:
+        _release(conn)
+
+
+# El motor de main.py llama esta funcion por nombre global. La exponemos en el
+# modulo main sin modificar su codigo matematico existente.
+main.obtener_tasa_bd_o_api = obtener_tasa_bd_o_api
 
 
 def _replace_detail_route():
@@ -71,5 +287,7 @@ def _replace_detail_route():
             _release(conn)
 
 
+_ensure_route_patch_ready = _asegurar_tabla_tasas()
 _replace_detail_route()
 print("[ROUTE_PATCHES] Detalle de expediente corregido", flush=True)
+print("[TASAS] Cache historico SFC/Neon habilitado", flush=True)
