@@ -20,6 +20,7 @@ import uvicorn
 
 import main
 import compat_routes  # noqa: F401  # registers template/service routes on main.app
+import route_patches  # noqa: F401  # replaces the incompatible detail query
 
 BOT_PATH = "/api/bot/liquidar"
 SESSION_COOKIE = "token_erp"
@@ -35,25 +36,6 @@ if not os.getenv("ERP_SESSION_SECRET"):
         "se usa un secreto de despliegue como fallback. Configure ERP_SESSION_SECRET en Render para produccion.",
         flush=True,
     )
-
-
-def _bypass_bot_auth_middleware() -> None:
-    user_middleware = getattr(main.app, "user_middleware", [])
-    for middleware in user_middleware:
-        dispatch = middleware.kwargs.get("dispatch")
-        if dispatch is None or getattr(dispatch, "__name__", "") != "validador_general_seguridad":
-            continue
-        original_dispatch = dispatch
-
-        async def guarded_dispatch(request, call_next, _original=original_dispatch):
-            if request.url.path == BOT_PATH:
-                return await call_next(request)
-            return await _original(request, call_next)
-
-        middleware.kwargs["dispatch"] = guarded_dispatch
-        print("[START] Middleware browser-session adaptado para /api/bot/liquidar", flush=True)
-        return
-    print("[START] No se encontro validador_general_seguridad", flush=True)
 
 
 def _b64(value: bytes) -> str:
@@ -127,6 +109,25 @@ def _password_compatible(password_plana, password_hash):
 
 
 main.verificar_password = _password_compatible
+
+
+def _bypass_bot_auth_middleware() -> None:
+    user_middleware = getattr(main.app, "user_middleware", [])
+    for middleware in user_middleware:
+        dispatch = middleware.kwargs.get("dispatch")
+        if dispatch is None or getattr(dispatch, "__name__", "") != "validador_general_seguridad":
+            continue
+        original_dispatch = dispatch
+
+        async def guarded_dispatch(request, call_next, _original=original_dispatch):
+            if request.url.path == BOT_PATH:
+                return await call_next(request)
+            return await _original(request, call_next)
+
+        middleware.kwargs["dispatch"] = guarded_dispatch
+        print("[START] Middleware browser-session adaptado para /api/bot/liquidar", flush=True)
+        return
+    print("[START] No se encontro validador_general_seguridad", flush=True)
 
 
 async def _production_security_middleware(request, call_next):
