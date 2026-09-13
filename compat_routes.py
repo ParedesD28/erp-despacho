@@ -24,13 +24,20 @@ def _release(conn):
         main.db_pool.putconn(conn)
 
 
+def _row_value(row, key, index=0):
+    """Lee una columna tanto de RealDictRow como de una tupla tradicional."""
+    if isinstance(row, dict):
+        return row[key]
+    return row[index]
+
+
 def _table_columns(cur, table):
     cur.execute(
         "SELECT column_name FROM information_schema.columns "
         "WHERE table_schema='public' AND table_name=%s",
         (table,),
     )
-    return {r["column_name"] for r in cur.fetchall()}
+    return {_row_value(r, "column_name") for r in cur.fetchall()}
 
 
 def _redirect(path, **params):
@@ -168,7 +175,7 @@ def crm(request: Request, buscar_inmueble: int | None = None):
 def _table_exists(cur, table):
     cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=%s)", (table,))
     row = cur.fetchone()
-    return bool(row["exists"])
+    return bool(_row_value(row, "exists"))
 
 
 @app.post("/crm/guardar")
