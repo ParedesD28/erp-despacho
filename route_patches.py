@@ -48,8 +48,18 @@ def _replace_detail_route():
                 """, (radicado,))
                 demandados = cur.fetchall()
                 if demandados:
-                    proceso["id_demandado"] = " | ".join(str(r[0]) for r in demandados if r[0])
-                    proceso["demandado"] = " | ".join(str(r[1] or r[0]) for r in demandados)
+                    identificaciones = [
+                        str(r.get("identificacion_demandado"))
+                        for r in demandados
+                        if r.get("identificacion_demandado")
+                    ]
+                    nombres = [
+                        str(r.get("nombre") or r.get("identificacion_demandado"))
+                        for r in demandados
+                        if r.get("nombre") or r.get("identificacion_demandado")
+                    ]
+                    proceso["id_demandado"] = " | ".join(identificaciones)
+                    proceso["demandado"] = " | ".join(nombres)
                 cur.execute("SELECT * FROM actuaciones WHERE radicado_interno=%s ORDER BY fecha DESC, id DESC", (radicado,))
                 actuaciones = [dict(r) for r in cur.fetchall()]
             return main.templates.TemplateResponse(
