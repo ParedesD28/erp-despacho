@@ -1,8 +1,9 @@
 """Production startup for the ERP.
 
 Keeps the legacy application routes intact while adding a signed, expiring
-browser session at the ASGI edge and preserving the machine-to-machine bot
-endpoint authenticated with X-API-Key.
+browser session at the ASGI edge, strict bcrypt authentication, validation for
+new processes, and the machine-to-machine bot endpoint authenticated with
+X-API-Key.
 """
 
 import base64
@@ -12,6 +13,8 @@ import os
 import time
 from http.cookies import SimpleCookie
 
+import bcrypt
+import psycopg2
 import uvicorn
 
 import main
@@ -19,23 +22,17 @@ import main
 
 BOT_PATH = "/api/bot/liquidar"
 SESSION_COOKIE = "token_erp"
-SESSION_TTL = int(os.getenv("ERP_SESSION_TTL", "28800"))  # 8 hours
+SESSION_TTL = int(os.getenv("ERP_SESSION_TTL", "28800"))
 SESSION_SECRET = os.getenv("ERP_SESSION_SECRET")
 
 
 def _bypass_bot_auth_middleware() -> None:
     """Make the bot route bypass the browser-session middleware only."""
     user_middleware = getattr(main.app, "user_middleware", [])
-
     for middleware in user_middleware:
         dispatch = middleware.kwargs.get("dispatch")
-        if dispatch is None:
+        if dispatch is None or getattr(dispatch, "__name__", "") != "validador_general_seguridad":
             continue
-
-        name = getattr(dispatch, "__name__", "")
-        if name != "validador_general_seguridad":
-            continue
-
         original_dispatch = dispatch
 
         async def guarded_dispatch(request, call_next, _original=original_dispatch):
@@ -46,7 +43,6 @@ def _bypass_bot_auth_middleware() -> None:
         middleware.kwargs["dispatch"] = guarded_dispatch
         print("[START] Middleware browser-session adaptado para /api/bot/liquidar", flush=True)
         return
-
     print("[START] No se encontro validador_general_seguridad", flush=True)
 
 
@@ -95,8 +91,7 @@ def _cookie_from_response(response):
 
 
 def _set_secure_session(response, user_id: str) -> None:
-    expires_at = int(time.time()) + SESSION_TTL
-    signed = _firmar_sesion(str(user_id), expires_at)
+    signed = _firmar_sesion(str(user_id), int(time.time()) + SESSION_TTL)
     response.set_cookie(
         key=SESSION_COOKIE,
         value=signed,
@@ -106,6 +101,23 @@ def _set_secure_session(response, user_id: str) -> None:
         samesite="lax",
         path="/",
     )
+
+
+def _password_bcrypt_only(password_plana, password_hash):
+    """Production auth: never compare or accept plaintext passwords."""
+    if not password_plana or not password_hash:
+        return False
+    try:
+        encoded = str(password_hash).encode("utf-8")
+        if not encoded.startswith((b"$2a$", b"$2b$", b"$2y$")):
+            return False
+        return bcrypt.checkpw(password_plana.encode("utf-8"), encoded)
+    except (ValueError, TypeError):
+        return False
+
+
+# Replace the legacy verifier before the login route executes.
+main.verificar_password = _password_bcrypt_only
 
 
 async def _production_security_middleware(request, call_next):
@@ -124,10 +136,34 @@ async def _production_security_middleware(request, call_next):
                 from fastapi.responses import RedirectResponse
                 return RedirectResponse(url="/login", status_code=303)
 
+    # Validate the high-risk creation endpoint before the legacy handler writes.
+    if path == "/crear_proceso_cascada" and request.method == "POST":
+        try:
+            form = await request.form()
+            radicado = str(form.get("radicado_interno", "")).strip()
+            cedulas = [x.strip() for x in str(form.get("demandado_cedulas", "")).split("|") if x.strip()]
+            nombres = [x.strip() for x in str(form.get("demandado_nombres", "")).split("|") if x.strip()]
+            if not radicado or not cedulas or len(cedulas) != len(nombres):
+                from fastapi.responses import RedirectResponse
+                return RedirectResponse(url="/expedientes?error=Datos+de+demandados+invalidos", status_code=303)
+            if any(not re.match(r"^\d{6,15}$", c) for c in cedulas):
+                from fastapi.responses import RedirectResponse
+                return RedirectResponse(url="/expedientes?error=Identificacion+invalida", status_code=303)
+            with psycopg2.connect(os.getenv("DATABASE_URL")) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1 FROM procesos WHERE radicado_interno = %s LIMIT 1", (radicado,))
+                    if cur.fetchone():
+                        from fastapi.responses import RedirectResponse
+                        return RedirectResponse(url="/expedientes?error=El+radicado+ya+existe", status_code=303)
+        except Exception as exc:
+            print(f"[START] Validacion de proceso fallida: {repr(exc)}", flush=True)
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/expedientes?error=No+fue+posible+validar+los+datos", status_code=303)
+
     response = await call_next(request)
 
-    # The legacy login route still creates a user-id cookie. Replace it with a
-    # signed cookie only after a successful redirect to the dashboard.
+    # Legacy login creates a temporary user-id cookie. Replace it immediately
+    # with an authenticated, signed, expiring cookie.
     if SESSION_SECRET and path == "/login" and response.status_code in (301, 302, 303, 307, 308):
         legacy_user_id = _cookie_from_response(response)
         if legacy_user_id and legacy_user_id.isdigit():
@@ -143,7 +179,6 @@ async def _production_security_middleware(request, call_next):
 
 
 _bypass_bot_auth_middleware()
-# Added last so this security layer is the outermost middleware.
 main.app.middleware("http")(_production_security_middleware)
 
 
