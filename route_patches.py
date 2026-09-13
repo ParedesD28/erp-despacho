@@ -18,14 +18,6 @@ def _release(conn):
 # ==============================================================================
 # CACHE OFICIAL DE TASAS DE INTERES / USURA
 # ==============================================================================
-# Fuente primaria: Datos Abiertos Colombia, conjunto pare-7x5i, propiedad de la
-# Superintendencia Financiera de Colombia (SFC). historico_tasas es la cache
-# historica para no repetir consultas a la fuente.
-#
-# IMPORTANTE: main.py usa tasa_efectiva_anual como la tasa que debe aplicar el
-# liquidador. Para la opcion "Superfinanciera" esa columna debe contener USURA,
-# no el IBC. El IBC se conserva separadamente en ibc_ea.
-# ==============================================================================
 TASAS_SFC_URL = "https://www.datos.gov.co/resource/pare-7x5i.json"
 TASA_MODALIDAD = "Consumo y ordinario"
 
@@ -61,9 +53,9 @@ def _asegurar_tabla_tasas():
                        SET modalidad = COALESCE(modalidad, 'Consumo y ordinario')
                      WHERE modalidad IS NULL
                 """)
-                # Reparacion de datos historicos: main.py consumia esta columna
-                # directamente. Registros antiguos contienen IBC; los convertimos
-                # una sola vez a usura y preservamos el IBC en ibc_ea.
+                # main.py lee tasa_efectiva_anual directamente. Historicamente esa
+                # columna podia contener IBC. La convertimos a USURA y conservamos
+                # el IBC en ibc_ea para que el motor aplique la tasa correcta.
                 cur.execute("""
                     UPDATE historico_tasas
                        SET ibc_ea = COALESCE(ibc_ea, tasa_efectiva_anual),
@@ -81,7 +73,7 @@ def _asegurar_tabla_tasas():
                        SET tasa_efectiva_anual = tasa_usura_ea
                      WHERE tasa_usura_ea IS NOT NULL
                 """)
-        print("[TASAS] historico_tasas listo; tasa_efectiva_anual reparada para usar USURA", flush=True)
+        print("[TASAS] historico_tasas listo: tasa_efectiva_anual = USURA", flush=True)
         return True
     except Exception as exc:
         print(f"[TASAS][ALERTA] No fue posible preparar historico_tasas: {exc!r}", flush=True)
@@ -121,7 +113,6 @@ def _parse_fecha_sfc(valor):
 
 
 def _consultar_tasa_sfc(anio, mes):
-    """Consulta el IBC oficial de consumo y ordinario y calcula usura."""
     print(f"[TASAS][SFC] Consultando fuente oficial para {int(anio)}-{int(mes):02d}...", flush=True)
     desde = date(int(anio), int(mes), 1)
     try:
@@ -163,11 +154,7 @@ def _consultar_tasa_sfc(anio, mes):
     candidatos.sort(key=lambda item: item[0], reverse=True)
     vig_desde, vig_hasta, ibc_ea, fila = candidatos[0]
     usura_ea = ibc_ea * 1.5
-
-    print(
-        f"[TASAS][SFC] OK {anio}-{mes:02d}: IBC={ibc_ea*100:.2f}% EA -> USURA={usura_ea*100:.2f}% EA",
-        flush=True,
-    )
+    print(f"[TASAS][SFC] OK {anio}-{mes:02d}: IBC={ibc_ea*100:.2f}% EA -> USURA={usura_ea*100:.2f}% EA", flush=True)
     return {
         "anio": int(anio),
         "mes": int(mes),
@@ -212,17 +199,13 @@ def _guardar_tasa(datos):
                         datos["anio"], datos["mes"], datos["usura_ea"], datos["usura_ea"], datos["ibc_ea"],
                         datos["modalidad"], datos["vigencia_desde"], datos["vigencia_hasta"], datos["fuente"],
                     ))
-        print(
-            f"[TASAS] SFC -> Neon {datos['anio']}-{datos['mes']:02d}: "
-            f"IBC={datos['ibc_ea']*100:.2f}% EA, USURA={datos['usura_ea']*100:.2f}% EA",
-            flush=True,
-        )
+        print(f"[TASAS] SFC -> Neon {datos['anio']}-{datos['mes']:02d}: IBC={datos['ibc_ea']*100:.2f}% EA, USURA={datos['usura_ea']*100:.2f}% EA", flush=True)
     finally:
         _release(conn)
 
 
 def obtener_tasa_bd_o_api(anio, mes):
-    """Neon primero; SFC solo en cache miss o registro incompleto."""
+    """Neon primero; SFC solo en cache miss."""
     _asegurar_tabla_tasas()
     conn = _conn()
     try:
@@ -245,14 +228,68 @@ def obtener_tasa_bd_o_api(anio, mes):
                     return tasa
     finally:
         _release(conn)
-
     datos = _consultar_tasa_sfc(anio, mes)
     _guardar_tasa(datos)
     return float(datos["usura_ea"])
 
 
-# El motor de main.py llama esta funcion por nombre global.
 main.obtener_tasa_bd_o_api = obtener_tasa_bd_o_api
+
+
+# ==============================================================================
+# PRE-CARGA DE TASAS ANTES DEL MOTOR EXISTENTE
+# ==============================================================================
+# main.py hace un catch-all y pondria 0% si faltara una tasa. Eso es peligroso.
+# Antes de ejecutar el motor, aseguramos en Neon TODOS los meses requeridos.
+# Si la SFC esta caida, se aborta la liquidacion en lugar de calcular con 0%.
+_ORIGINAL_MOTOR_CALCULO = main.motor_calculo_judicial
+
+
+def _asegurar_tasas_para_liquidacion(inmueble_id, tipo_tasa, fecha_corte):
+    if "Fija" in str(tipo_tasa):
+        return
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT MIN(periodo_anio), MIN(periodo_mes)
+                  FROM expensas_ph
+                 WHERE inmueble_id=%s
+            """, (int(inmueble_id),))
+            fila = cur.fetchone()
+    finally:
+        _release(conn)
+    if not fila or fila[0] is None or fila[1] is None:
+        return
+
+    y, m = int(fila[0]), int(fila[1])
+    limite = date(fecha_corte.year, fecha_corte.month, 1)
+    while date(y, m, 1) <= limite:
+        obtener_tasa_bd_o_api(y, m)
+        if m == 12:
+            y, m = y + 1, 1
+        else:
+            m += 1
+
+
+def motor_calculo_judicial_seguro(inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos_globales, fecha_corte):
+    _asegurar_tasas_para_liquidacion(inmueble_id, tipo_tasa, fecha_corte)
+    return _ORIGINAL_MOTOR_CALCULO(
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos_globales, fecha_corte
+    )
+
+
+main.motor_calculo_judicial = motor_calculo_judicial_seguro
+
+
+def _prueba_conexion_sfc():
+    """Deja una alerta inequívoca en Render si la fuente oficial no responde."""
+    hoy = date.today()
+    try:
+        _consultar_tasa_sfc(hoy.year, hoy.month)
+        print("[TASAS][SFC] CONEXION VERIFICADA AL ARRANCAR EL ERP", flush=True)
+    except Exception as exc:
+        print(f"[TASAS][ALERTA] CONEXION SFC NO VERIFICADA AL ARRANCAR: {exc!r}", flush=True)
 
 
 def _replace_detail_route():
@@ -311,4 +348,5 @@ _ensure_route_patch_ready = _asegurar_tabla_tasas()
 _replace_detail_route()
 print("[ROUTE_PATCHES] Detalle de expediente corregido", flush=True)
 print("[TASAS] Cache historico SFC/Neon habilitado", flush=True)
-print("[TASAS] ALERTA OPERATIVA: si la SFC no responde, aparecerá [TASAS][ALERTA] en el log y NO se usara 0% silenciosamente", flush=True)
+print("[TASAS] ALERTA OPERATIVA: si la SFC no responde, aparecera [TASAS][ALERTA] en el log", flush=True)
+_prueba_conexion_sfc()
