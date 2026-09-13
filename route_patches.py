@@ -19,11 +19,12 @@ def _release(conn):
 # CACHE OFICIAL DE TASAS DE INTERES / USURA
 # ==============================================================================
 # Fuente primaria: Datos Abiertos Colombia, conjunto pare-7x5i, propiedad de la
-# Superintendencia Financiera de Colombia (SFC). La tabla local historico_tasas
-# funciona como cache historico para evitar consultas repetitivas a la fuente.
+# Superintendencia Financiera de Colombia (SFC). historico_tasas es la cache
+# historica para no repetir consultas a la fuente.
 #
-# El motor existente espera tasa_efectiva_anual como fraccion decimal:
-#   29.24% EA -> 0.2924
+# IMPORTANTE: main.py usa tasa_efectiva_anual como la tasa que debe aplicar el
+# liquidador. Para la opcion "Superfinanciera" esa columna debe contener USURA,
+# no el IBC. El IBC se conserva separadamente en ibc_ea.
 # ==============================================================================
 TASAS_SFC_URL = "https://www.datos.gov.co/resource/pare-7x5i.json"
 TASA_MODALIDAD = "Consumo y ordinario"
@@ -40,6 +41,7 @@ def _asegurar_tabla_tasas():
                         mes INTEGER NOT NULL,
                         tasa_efectiva_anual NUMERIC(18,10) NOT NULL,
                         tasa_usura_ea NUMERIC(18,10),
+                        ibc_ea NUMERIC(18,10),
                         modalidad VARCHAR(120) NOT NULL DEFAULT 'Consumo y ordinario',
                         vigencia_desde DATE,
                         vigencia_hasta DATE,
@@ -47,8 +49,8 @@ def _asegurar_tabla_tasas():
                         consultado_en TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                # Compatibilidad con instalaciones antiguas que ya tienen la tabla.
                 cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS tasa_usura_ea NUMERIC(18,10)")
+                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS ibc_ea NUMERIC(18,10)")
                 cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS modalidad VARCHAR(120)")
                 cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS vigencia_desde DATE")
                 cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS vigencia_hasta DATE")
@@ -59,9 +61,30 @@ def _asegurar_tabla_tasas():
                        SET modalidad = COALESCE(modalidad, 'Consumo y ordinario')
                      WHERE modalidad IS NULL
                 """)
+                # Reparacion de datos historicos: main.py consumia esta columna
+                # directamente. Registros antiguos contienen IBC; los convertimos
+                # una sola vez a usura y preservamos el IBC en ibc_ea.
+                cur.execute("""
+                    UPDATE historico_tasas
+                       SET ibc_ea = COALESCE(ibc_ea, tasa_efectiva_anual),
+                           tasa_usura_ea = COALESCE(
+                               tasa_usura_ea,
+                               CASE
+                                   WHEN tasa_efectiva_anual > 1 THEN tasa_efectiva_anual * 1.5 / 100.0
+                                   ELSE tasa_efectiva_anual * 1.5
+                               END
+                           )
+                     WHERE tasa_efectiva_anual IS NOT NULL
+                """)
+                cur.execute("""
+                    UPDATE historico_tasas
+                       SET tasa_efectiva_anual = tasa_usura_ea
+                     WHERE tasa_usura_ea IS NOT NULL
+                """)
+        print("[TASAS] historico_tasas listo; tasa_efectiva_anual reparada para usar USURA", flush=True)
         return True
     except Exception as exc:
-        print(f"[TASAS] No fue posible asegurar historico_tasas: {exc}", flush=True)
+        print(f"[TASAS][ALERTA] No fue posible preparar historico_tasas: {exc!r}", flush=True)
         return False
     finally:
         _release(conn)
@@ -98,16 +121,24 @@ def _parse_fecha_sfc(valor):
 
 
 def _consultar_tasa_sfc(anio, mes):
-    """Consulta la tasa IBC oficial de consumo y ordinario y deriva usura."""
+    """Consulta el IBC oficial de consumo y ordinario y calcula usura."""
+    print(f"[TASAS][SFC] Consultando fuente oficial para {int(anio)}-{int(mes):02d}...", flush=True)
     desde = date(int(anio), int(mes), 1)
-    respuesta = requests.get(
-        TASAS_SFC_URL,
-        params={"$limit": 5000, "$order": "vigencia_desde DESC"},
-        timeout=15,
-    )
-    respuesta.raise_for_status()
-    registros = respuesta.json()
+    try:
+        respuesta = requests.get(
+            TASAS_SFC_URL,
+            params={"$limit": 5000, "$order": "vigencia_desde DESC"},
+            timeout=15,
+        )
+        print(f"[TASAS][SFC] HTTP {respuesta.status_code} para {int(anio)}-{int(mes):02d}", flush=True)
+        respuesta.raise_for_status()
+        registros = respuesta.json()
+    except Exception as exc:
+        print(f"[TASAS][ALERTA] NO SE PUDO CONECTAR A LA API DE LA SFC para {int(anio)}-{int(mes):02d}: {exc!r}", flush=True)
+        raise
+
     if not isinstance(registros, list):
+        print("[TASAS][ALERTA] La SFC no devolvio una lista de registros", flush=True)
         raise ValueError("La SFC no devolvio una lista de registros")
 
     candidatos = []
@@ -126,12 +157,17 @@ def _consultar_tasa_sfc(anio, mes):
             candidatos.append((vig_desde, vig_hasta, ibc_ea, fila))
 
     if not candidatos:
+        print(f"[TASAS][ALERTA] La API SFC respondio, pero no encontro tasa para {anio}-{mes:02d} / {TASA_MODALIDAD}", flush=True)
         raise LookupError(f"No existe tasa SFC para {anio}-{mes:02d} en modalidad {TASA_MODALIDAD}")
 
     candidatos.sort(key=lambda item: item[0], reverse=True)
     vig_desde, vig_hasta, ibc_ea, fila = candidatos[0]
     usura_ea = ibc_ea * 1.5
 
+    print(
+        f"[TASAS][SFC] OK {anio}-{mes:02d}: IBC={ibc_ea*100:.2f}% EA -> USURA={usura_ea*100:.2f}% EA",
+        flush=True,
+    )
     return {
         "anio": int(anio),
         "mes": int(mes),
@@ -141,7 +177,6 @@ def _consultar_tasa_sfc(anio, mes):
         "vigencia_hasta": vig_hasta,
         "modalidad": TASA_MODALIDAD,
         "fuente": TASAS_SFC_URL,
-        "resolucion": fila.get("resolucion"),
     }
 
 
@@ -154,6 +189,7 @@ def _guardar_tasa(datos):
                     UPDATE historico_tasas
                        SET tasa_efectiva_anual=%s,
                            tasa_usura_ea=%s,
+                           ibc_ea=%s,
                            modalidad=%s,
                            vigencia_desde=%s,
                            vigencia_hasta=%s,
@@ -162,23 +198,23 @@ def _guardar_tasa(datos):
                      WHERE anio=%s AND mes=%s
                        AND COALESCE(modalidad, %s)=%s
                 """, (
-                    datos["ibc_ea"], datos["usura_ea"], datos["modalidad"],
+                    datos["usura_ea"], datos["usura_ea"], datos["ibc_ea"], datos["modalidad"],
                     datos["vigencia_desde"], datos["vigencia_hasta"], datos["fuente"],
                     datos["anio"], datos["mes"], TASA_MODALIDAD, TASA_MODALIDAD,
                 ))
                 if cur.rowcount == 0:
                     cur.execute("""
                         INSERT INTO historico_tasas
-                            (anio, mes, tasa_efectiva_anual, tasa_usura_ea, modalidad,
+                            (anio, mes, tasa_efectiva_anual, tasa_usura_ea, ibc_ea, modalidad,
                              vigencia_desde, vigencia_hasta, fuente, consultado_en)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,CURRENT_TIMESTAMP)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,CURRENT_TIMESTAMP)
                     """, (
-                        datos["anio"], datos["mes"], datos["ibc_ea"], datos["usura_ea"],
+                        datos["anio"], datos["mes"], datos["usura_ea"], datos["usura_ea"], datos["ibc_ea"],
                         datos["modalidad"], datos["vigencia_desde"], datos["vigencia_hasta"], datos["fuente"],
                     ))
         print(
             f"[TASAS] SFC -> Neon {datos['anio']}-{datos['mes']:02d}: "
-            f"IBC={datos['ibc_ea']*100:.2f}% EA, usura={datos['usura_ea']*100:.2f}% EA",
+            f"IBC={datos['ibc_ea']*100:.2f}% EA, USURA={datos['usura_ea']*100:.2f}% EA",
             flush=True,
         )
     finally:
@@ -186,44 +222,40 @@ def _guardar_tasa(datos):
 
 
 def obtener_tasa_bd_o_api(anio, mes):
-    """Primero usa Neon; solo consulta SFC cuando el periodo no esta cacheado."""
+    """Neon primero; SFC solo en cache miss o registro incompleto."""
     _asegurar_tabla_tasas()
     conn = _conn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT tasa_efectiva_anual, tasa_usura_ea, vigencia_desde, vigencia_hasta, fuente
+                SELECT tasa_efectiva_anual, tasa_usura_ea, ibc_ea, vigencia_desde, vigencia_hasta, fuente
                   FROM historico_tasas
                  WHERE anio=%s AND mes=%s
                    AND COALESCE(modalidad, %s)=%s
                  LIMIT 1
             """, (int(anio), int(mes), TASA_MODALIDAD, TASA_MODALIDAD))
             fila = cur.fetchone()
-            if fila and fila.get("tasa_usura_ea") is not None:
-                tasa = float(fila["tasa_usura_ea"])
-                # Sanitiza instalaciones antiguas que hubieran guardado porcentajes
-                # (29.24) en vez de fracciones (0.2924).
-                if tasa > 1:
-                    tasa /= 100.0
-                print(f"[TASAS] CACHE HIT Neon {anio}-{mes:02d}: usura={tasa*100:.2f}% EA", flush=True)
-                return tasa
+            if fila:
+                tasa = fila.get("tasa_usura_ea") or fila.get("tasa_efectiva_anual")
+                if tasa is not None:
+                    tasa = float(tasa)
+                    if tasa > 1:
+                        tasa /= 100.0
+                    print(f"[TASAS] CACHE HIT Neon {anio}-{mes:02d}: USURA={tasa*100:.2f}% EA", flush=True)
+                    return tasa
     finally:
         _release(conn)
 
-    # Cache miss, o registro antiguo incompleto: refresca desde fuente oficial.
     datos = _consultar_tasa_sfc(anio, mes)
     _guardar_tasa(datos)
     return float(datos["usura_ea"])
 
 
-# El motor de main.py llama esta funcion por nombre global. La exponemos en el
-# modulo main sin modificar su codigo matematico existente.
+# El motor de main.py llama esta funcion por nombre global.
 main.obtener_tasa_bd_o_api = obtener_tasa_bd_o_api
 
 
 def _replace_detail_route():
-    # FastAPI conserva las rutas en orden. Quitamos la versión con GROUP BY
-    # incompatible con SELECT p.* y dejamos una implementación estable.
     routes = main.app.router.routes
     main.app.router.routes[:] = [
         r for r in routes
@@ -256,18 +288,14 @@ def _replace_detail_route():
                 """, (radicado,))
                 demandados = cur.fetchall()
                 if demandados:
-                    identificaciones = [
-                        str(r.get("identificacion_demandado"))
-                        for r in demandados
-                        if r.get("identificacion_demandado")
-                    ]
-                    nombres = [
+                    proceso["id_demandado"] = " | ".join(
+                        str(r.get("identificacion_demandado")) for r in demandados if r.get("identificacion_demandado")
+                    )
+                    proceso["demandado"] = " | ".join(
                         str(r.get("nombre") or r.get("identificacion_demandado"))
                         for r in demandados
                         if r.get("nombre") or r.get("identificacion_demandado")
-                    ]
-                    proceso["id_demandado"] = " | ".join(identificaciones)
-                    proceso["demandado"] = " | ".join(nombres)
+                    )
                 cur.execute("SELECT * FROM actuaciones WHERE radicado_interno=%s ORDER BY fecha DESC, id DESC", (radicado,))
                 actuaciones = [dict(r) for r in cur.fetchall()]
             return main.templates.TemplateResponse(
@@ -283,3 +311,4 @@ _ensure_route_patch_ready = _asegurar_tabla_tasas()
 _replace_detail_route()
 print("[ROUTE_PATCHES] Detalle de expediente corregido", flush=True)
 print("[TASAS] Cache historico SFC/Neon habilitado", flush=True)
+print("[TASAS] ALERTA OPERATIVA: si la SFC no responde, aparecerá [TASAS][ALERTA] en el log y NO se usara 0% silenciosamente", flush=True)
