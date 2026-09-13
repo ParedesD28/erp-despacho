@@ -1,7 +1,7 @@
 """Puente seguro ERP -> agente de cobranza.
 
-El navegador nunca recibe la clave del agente. El ERP autentica al usuario
-mediante la sesion existente y usa AGENT_SUPERVISION_KEY servidor-a-servidor.
+El navegador nunca recibe la clave del agente. Todas las operaciones contra el
+agente se realizan servidor-a-servidor usando las variables de entorno de Render.
 """
 import os
 import requests
@@ -18,7 +18,7 @@ def _agent_url():
 
 def _agent_headers():
     key = os.getenv("AGENT_SUPERVISION_KEY") or os.getenv("LIQUIDADOR_API_KEY") or ""
-    return {"X-Agent-Supervision-Key": key, "Accept": "application/json"}
+    return {"X-Agent-Supervision-Key": key, "Accept": "application/json", "Content-Type": "application/json"}
 
 
 def _proxy(method, path, *, json=None, params=None):
@@ -40,36 +40,42 @@ def _proxy(method, path, *, json=None, params=None):
             data = {"status": "error", "mensaje": f"Respuesta no JSON del agente: HTTP {response.status_code}"}
         return data, response.status_code
     except requests.RequestException as exc:
+        print(f"[SUPERVISION AGENTE] Error de conexión: {exc!r}", flush=True)
         return {"status": "error", "mensaje": f"Agente no disponible: {exc}"}, 503
+
+
+def _usuario(request: Request):
+    # La sesión segura de start.py ya autentica al usuario antes de llegar aquí.
+    token = request.cookies.get("token_erp")
+    return str(token or "Supervisor ERP")
 
 
 @main.app.get("/supervision-agente")
 def supervision_agente(request: Request):
-    data, status = _proxy("GET", "/control/conversaciones", params={"limit": 200})
-    configurado = bool(_agent_url())
-    conversaciones = data.get("conversaciones", []) if isinstance(data, dict) else []
     return main.templates.TemplateResponse(
         request=request,
         name="supervision_agente.html",
-        context={
-            "request": request,
-            "configurado": configurado,
-            "conectado": status == 200 and data.get("status") == "success",
-            "mensaje_estado": data.get("mensaje") if isinstance(data, dict) else None,
-            "conversaciones": conversaciones,
-        },
+        context={"request": request, "usuario": _usuario(request), "configurado": bool(_agent_url())},
     )
 
 
 @main.app.get("/supervision-agente/api/conversaciones")
 def supervision_conversaciones(limit: int = 200, buscar: str = ""):
-    data, status = _proxy("GET", "/control/conversaciones", params={"limit": min(max(limit, 1), 200), "buscar": buscar})
+    data, status = _proxy(
+        "GET",
+        "/control/conversaciones",
+        params={"limit": min(max(limit, 1), 200), "buscar": buscar},
+    )
     return JSONResponse(data, status_code=status)
 
 
 @main.app.get("/supervision-agente/api/conversaciones/{telefono}/mensajes")
 def supervision_mensajes(telefono: str, limit: int = 1000):
-    data, status = _proxy("GET", f"/control/conversaciones/{telefono}/mensajes", params={"limit": min(max(limit, 1), 1000)})
+    data, status = _proxy(
+        "GET",
+        f"/control/conversaciones/{telefono}/mensajes",
+        params={"limit": min(max(limit, 1), 1000)},
+    )
     return JSONResponse(data, status_code=status)
 
 
@@ -79,19 +85,10 @@ def supervision_control(telefono: str):
     return JSONResponse(data, status_code=status)
 
 
-@main.app.post("/supervision-agente/api/tomar")
-def supervision_tomar(request: Request):
-    # FastAPI no necesita exponer la clave: la recibe solo el servidor.
-    from fastapi import Body
-    payload = request.state.supervision_payload if hasattr(request.state, "supervision_payload") else None
-    return JSONResponse({"status": "error", "mensaje": "Use /supervision-agente/api/tomar con JSON"}, status_code=400) if payload is None else JSONResponse({"status": "error"})
-
-
-# Endpoints de accion implementados con handlers async para leer JSON de forma limpia.
 @main.app.post("/supervision-agente/api/tomar-control")
 async def supervision_tomar_control(request: Request):
     payload = await request.json()
-    payload["usuario"] = payload.get("usuario") or "Supervisor ERP"
+    payload["usuario"] = payload.get("usuario") or _usuario(request)
     data, status = _proxy("POST", "/control/tomar", json=payload)
     return JSONResponse(data, status_code=status)
 
@@ -99,7 +96,7 @@ async def supervision_tomar_control(request: Request):
 @main.app.post("/supervision-agente/api/devolver-agente")
 async def supervision_devolver_agente(request: Request):
     payload = await request.json()
-    payload["usuario"] = payload.get("usuario") or "Supervisor ERP"
+    payload["usuario"] = payload.get("usuario") or _usuario(request)
     data, status = _proxy("POST", "/control/devolver", json=payload)
     return JSONResponse(data, status_code=status)
 
@@ -107,7 +104,7 @@ async def supervision_devolver_agente(request: Request):
 @main.app.post("/supervision-agente/api/mensaje")
 async def supervision_mensaje(request: Request):
     payload = await request.json()
-    payload["usuario"] = payload.get("usuario") or "Supervisor ERP"
+    payload["usuario"] = payload.get("usuario") or _usuario(request)
     data, status = _proxy("POST", "/control/mensaje", json=payload)
     return JSONResponse(data, status_code=status)
 
