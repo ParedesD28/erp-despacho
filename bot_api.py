@@ -1,5 +1,6 @@
 import os
 import io
+import secrets
 from datetime import datetime, date
 from typing import Any
 
@@ -20,7 +21,7 @@ def _require_api_key(request: Request) -> None:
     supplied = request.headers.get("X-API-Key")
     if not expected:
         raise HTTPException(status_code=503, detail="LIQUIDADOR_API_KEY no esta configurada")
-    if not supplied or supplied != expected:
+    if not supplied or not secrets.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="No autorizado")
 
 
@@ -42,17 +43,15 @@ def _parse_payload(payload: Any) -> tuple[int, date]:
     except ValueError:
         raise HTTPException(status_code=422, detail="fecha_corte debe tener formato YYYY-MM-DD")
 
+    if fecha_corte > date.today():
+        raise HTTPException(status_code=422, detail="fecha_corte no puede ser futura")
+
     return inmueble_id, fecha_corte
 
 
 def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[dict, dict, tuple]:
-    # Import local para evitar dependencias circulares durante el arranque de main.py.
     import main
 
-    # Usamos argumentos posicionales deliberadamente. Esto evita incompatibilidades
-    # si una version desplegada del motor tiene nombres de parametros distintos,
-    # manteniendo el orden de la firma oficial del motor:
-    # inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos_globales, fecha_corte.
     resultados, resumen, inm_info = main.motor_calculo_judicial(
         inmueble_id,
         "usura",
@@ -80,7 +79,9 @@ def _generar_pdf(inmueble_id: int, fecha_corte: date, resultados: list[dict], re
         raise HTTPException(status_code=500, detail="PUBLIC_BASE_URL/RENDER_EXTERNAL_URL no esta configurada")
 
     os.makedirs("static/pdfs", exist_ok=True)
-    nombre_pdf = f"Estado_Cuenta_{inmueble_id}_{fecha_corte.isoformat()}.pdf"
+    # Do not expose predictable identifiers in a public PDF URL. Render's filesystem
+    # is ephemeral, so the file is still treated as a short-lived delivery artifact.
+    nombre_pdf = f"Estado_Cuenta_{secrets.token_urlsafe(18)}.pdf"
     ruta = os.path.join("static", "pdfs", nombre_pdf)
 
     styles = getSampleStyleSheet()
@@ -146,7 +147,11 @@ def _generar_pdf(inmueble_id: int, fecha_corte: date, resultados: list[dict], re
 
 async def liquidar_para_bot(request: Request):
     _require_api_key(request)
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="El cuerpo debe ser JSON valido")
+
     inmueble_id, fecha_corte = _parse_payload(payload)
 
     try:
