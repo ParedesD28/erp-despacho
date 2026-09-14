@@ -341,6 +341,10 @@ def _audit(cur, radicado):
 
 
 def cargar_procesos_general_sin_duplicados():
+    """Carga la lista completa de expedientes sin duplicados utilizando cursores directos ultra rápidos."""
+    hora = time.strftime("%H:%M:%S")
+    print(f"[{hora} UTC] 📂 [EXPEDIENTES] Consultando base de datos...", flush=True)
+    t0 = time.perf_counter()
     conn = db.get_connection()
     try:
         query = """
@@ -387,10 +391,23 @@ def cargar_procesos_general_sin_duplicados():
                 a.nombre
             ORDER BY p.radicado_interno DESC
         """
-        df = pd.read_sql_query(query, conn)
-        return df.fillna("").to_dict(orient="records")
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query)
+            rows = cur.fetchall()
+            lista = []
+            for r in rows:
+                d = dict(r)
+                for k, v in d.items():
+                    if v is None:
+                        d[k] = ""
+                lista.append(d)
+            duracion = round((time.perf_counter() - t0) * 1000, 1)
+            hora_fin = time.strftime("%H:%M:%S")
+            print(f"[{hora_fin} UTC] 📂 [EXPEDIENTES] {len(lista)} registros cargados exitosamente ({duracion}ms)", flush=True)
+            return lista
     except Exception as exc:
-        print(f"[EXPEDIENTES] Error cargando procesos: {exc}", flush=True)
+        hora_err = time.strftime("%H:%M:%S")
+        print(f"[{hora_err} UTC] 💥 [EXPEDIENTES ERROR] {exc}", flush=True)
         return []
     finally:
         conn.release()
