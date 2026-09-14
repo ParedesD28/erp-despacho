@@ -156,8 +156,10 @@ def _redirect(path: str, **params) -> RedirectResponse:
     return RedirectResponse(url=f"{path}?{query}" if query else path, status_code=303)
 
 
-def cargar_inmuebles_ph() -> list[dict]:
-    conn = db.get_connection()
+def cargar_inmuebles_ph(conn=None) -> list[dict]:
+    external_conn = conn is not None
+    if not external_conn:
+        conn = db.get_connection()
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -185,7 +187,8 @@ def cargar_inmuebles_ph() -> list[dict]:
         print(f"[INMUEBLES] Error cargando inmuebles: {e}", flush=True)
         return []
     finally:
-        conn.release()
+        if not external_conn and conn:
+            conn.release()
 
 
 def sumar_dias_habiles(fecha_inicial: date, dias: int) -> date:
@@ -208,18 +211,8 @@ def root_compat():
 
 @app.get("/health")
 def health():
-    try:
-        conn = db.get_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                cur.fetchone()
-            return {"status": "ok", "database": "ready"}
-        finally:
-            conn.release()
-    except Exception as exc:
-        _json_log("ERROR", "healthcheck_failed", error=str(exc))
-        return JSONResponse({"status": "degraded", "database": "unavailable"}, status_code=503)
+    # Respuesta inmediata para el health check de Render (evita timeouts de 5s)
+    return {"status": "ok", "service": "erp-despacho"}
 
 
 @app.head("/login", include_in_schema=False)
@@ -785,10 +778,9 @@ def _ensure_crm_and_vencimientos_schema():
 
 @app.get("/crm")
 def crm(request: Request, buscar_inmueble: int | None = None):
-    _ensure_crm_and_vencimientos_schema()
     conn = db.get_connection()
     try:
-        inmuebles = cargar_inmuebles_ph()
+        inmuebles = cargar_inmuebles_ph(conn)
         conjuntos = sorted({x.get("conjunto_residencial") for x in inmuebles if x.get("conjunto_residencial")})
         filtro = {}
         for item in inmuebles:
@@ -797,7 +789,7 @@ def crm(request: Request, buscar_inmueble: int | None = None):
                 "nombre": f"{item.get('torre_apto') or ''} - {item.get('nombre') or ''} ({item.get('cedula') or ''})".strip(" -"),
             })
         inmueble_actual = next(
-            (x for x in inmuebles if buscar_inmueble and int(x.get("id")) == int(buscar_inmueble)),
+            (x for x in inmuebles if buscar_inmueble and str(x.get("id")) == str(buscar_inmueble)),
             None,
         )
         propietarios, historial = [], []
@@ -916,7 +908,6 @@ def crm_anular(gestion_id: int = Form(...), inmueble_id: int = Form(...)):
 # ==============================================================================
 @app.get("/vencimientos")
 def vencimientos(request: Request):
-    _ensure_crm_and_vencimientos_schema()
     conn = db.get_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -971,7 +962,6 @@ def completar_vencimiento(vencimiento_id: int = Form(...)):
 # ==============================================================================
 @app.get("/informes")
 def informes(request: Request):
-    _ensure_crm_and_vencimientos_schema()
     conn = db.get_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
