@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block contenido %}
+<div class="p-6 md:p-10 max-w-7xl mx-auto space-y-6">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <a href="/expedientes" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 text-white font-bold text-sm">← Volver al directorio</a>
+    <div class="flex items-center gap-2">
+      <span class="px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold uppercase">{{ proceso.estado or 'Activo' }}</span>
+      <button type="button" onclick="abrirEditor()" class="px-4 py-2 rounded-xl bg-slate-900 text-white font-bold text-sm hover:bg-blue-700">✎ Editar expediente</button>
+      <a href="/liquidador?inmueble_id={{ proceso.inmueble_id }}" target="_blank" class="px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold text-sm">Generar liquidación</a>
+    </div>
+  </div>
+
+  {% if request.query_params.get('mensaje') %}<div class="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold">{{ request.query_params.get('mensaje')|replace('+',' ') }}</div>{% endif %}
+  {% if request.query_params.get('error') %}<div class="p-4 rounded-xl bg-red-50 border border-red-200 text-red-800 font-semibold">{{ request.query_params.get('error')|replace('+',' ') }}</div>{% endif %}
+
+  <section class="bg-slate-900 text-white rounded-3xl p-8 shadow-xl">
+    <div class="flex flex-wrap items-start justify-between gap-6">
+      <div>
+        <p class="text-xs uppercase tracking-widest text-slate-400 font-bold">Expediente</p>
+        <h1 class="text-3xl md:text-4xl font-black mt-1">{{ proceso.radicado_interno }}</h1>
+        <p class="text-slate-300 mt-2">Radicado Rama: <strong class="text-white">{{ proceso.radicado_rama or 'EN REPARTO' }}</strong></p>
+      </div>
+      <div class="text-left md:text-right max-w-xl">
+        <p class="text-xs uppercase tracking-widest text-slate-400 font-bold">Etapa actual</p>
+        <p class="text-lg md:text-xl font-black text-blue-300 mt-1">{{ proceso.etapa_actual or 'Sin actuaciones' }}</p>
+        <p class="text-[11px] text-slate-400 mt-1">Calculada automáticamente desde las actuaciones judiciales.</p>
+      </div>
+    </div>
+    <div class="mt-7 flex flex-wrap items-center gap-4">
+      <div class="bg-slate-800/80 px-5 py-4 rounded-2xl border border-slate-700/60"><div class="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Demandante / Conjunto</div><div class="mt-1 text-lg font-black">{{ proceso.demandante or (demandantes|map(attribute='nombre')|join(' | ')) or 'Sin asignar' }}</div><div class="text-xs text-slate-400 mt-1">{{ proceso.id_cliente or 'Sin identificación' }}</div></div>
+      <div class="text-slate-500 font-black text-lg">VS</div>
+      <div class="bg-slate-800/80 px-5 py-4 rounded-2xl border border-slate-700/60 max-w-full"><div class="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Demandado(s)</div><div class="mt-1 text-lg font-black break-words">{{ proceso.demandado or (demandados|map(attribute='nombre')|join(' | ')) or 'Sin asignar' }}</div><div class="text-xs text-slate-400 mt-1">{{ proceso.id_demandado or 'Sin identificación' }}</div></div>
+    </div>
+  </section>
+
+  <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <div class="bg-white rounded-2xl border border-slate-200 p-5"><p class="text-xs uppercase text-slate-400 font-bold">Despacho actual</p><p class="font-black mt-1">{{ proceso.juzgado or 'Sin asignar' }}</p><p class="text-xs font-bold text-purple-600 uppercase mt-2">{{ proceso.naturaleza or 'Proceso' }}</p></div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-5"><p class="text-xs uppercase text-slate-400 font-bold">Identificador</p><p class="font-black font-mono mt-1">{{ proceso.radicado_rama or 'EN REPARTO' }}</p><p class="text-xs bg-slate-100 px-2 py-1 rounded inline-block mt-2 font-mono">{{ proceso.radicado_interno }}</p></div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-5"><p class="text-xs uppercase text-slate-400 font-bold">Pretensiones</p><p class="text-xl font-black text-emerald-700 mt-1">${{ proceso.pretensiones or 0 }}</p></div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-5"><p class="text-xs uppercase text-slate-400 font-bold">Abogado</p><p class="font-black mt-1">{{ proceso.abogado_asignado or 'Sin asignar' }}</p></div>
+  </section>
+
+  <section class="grid grid-cols-1 lg:grid-cols-3 gap-6 pb-12">
+    <section class="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm p-6 md:p-8">
+      <div class="flex flex-wrap items-center justify-between gap-4 mb-7 border-b border-slate-100 pb-4"><h2 class="text-lg font-black text-slate-800">Memoria del expediente</h2><button type="button" onclick="document.getElementById('act-modal').classList.remove('hidden')" class="px-4 py-2.5 rounded-xl bg-slate-900 text-white font-bold text-sm hover:bg-blue-700">+ Nueva actuación</button></div>
+      <div class="relative border-l-2 border-slate-200 ml-4 space-y-7 pb-2">
+        {% for a in actuaciones %}<div class="relative pl-8"><div class="absolute -left-[9px] top-1 w-4 h-4 rounded-full bg-blue-500 ring-4 ring-white"></div><div class="bg-slate-50 border border-slate-100 rounded-xl p-5"><div class="flex flex-wrap justify-between items-start gap-2"><span class="px-2.5 py-1 bg-blue-100 text-blue-700 rounded text-[10px] font-bold uppercase tracking-wider">{{ a.etapa or 'Actuación' }}</span><span class="text-[11px] font-bold text-slate-500 bg-white border border-slate-200 px-2 py-1 rounded-md">{{ a.fecha }} · {{ a.usuario or 'Sistema' }}</span></div><p class="mt-3 text-sm text-slate-700 leading-relaxed">{{ a.descripcion }}</p><form method="POST" action="/actuacion/eliminar" class="mt-4" onsubmit="return confirm('¿Eliminar esta actuación? La etapa se recalculará automáticamente.');"><input type="hidden" name="actuacion_id" value="{{ a.id }}"><input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}"><button class="text-xs font-bold text-red-600 hover:text-red-800">Eliminar actuación</button></form></div></div>{% else %}<div class="p-7 border-2 border-dashed rounded-xl text-center text-slate-400">No hay actuaciones procesales registradas.</div>{% endfor %}
+      </div>
+    </section>
+    <aside class="space-y-6">
+      <section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm"><div class="flex items-center justify-between mb-4"><h2 class="text-lg font-black">Partes</h2><span class="text-[10px] uppercase font-bold text-slate-400">Sin duplicados</span></div><div class="space-y-4"><div><div class="text-[10px] uppercase font-bold tracking-widest text-slate-400">Demandantes</div>{% for d in demandantes %}<div class="mt-2 text-sm font-bold text-slate-700">{{ d.nombre }} <span class="text-slate-400 font-mono">— {{ d.identificacion }}</span></div>{% else %}<div class="mt-2 text-sm text-slate-500">Sin demandantes.</div>{% endfor %}</div><div><div class="text-[10px] uppercase font-bold tracking-widest text-slate-400">Demandados</div>{% for d in demandados %}<div class="mt-2 text-sm font-bold text-slate-700">{{ d.nombre }} <span class="text-slate-400 font-mono">— {{ d.identificacion }}</span></div>{% else %}<div class="mt-2 text-sm text-slate-500">Sin demandados.</div>{% endfor %}</div></div></section>
+      <section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm"><h2 class="text-lg font-black mb-3">Medidas cautelares</h2>{% for m in (proceso.medidas_cautelares or '').split('\n') if m.strip %}<div class="p-3 bg-slate-50 border rounded-lg text-sm text-slate-700 mb-2">{{ m }}</div>{% else %}<div class="text-sm text-slate-500">Sin medidas registradas.</div>{% endfor %}</section>
+      <section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm"><h2 class="text-lg font-black mb-3">Acuerdos / CRM</h2>{% for a in acuerdos_crm %}<div class="border rounded-xl p-4 mb-3 bg-emerald-50 border-emerald-200"><div class="text-[10px] font-bold uppercase tracking-widest text-emerald-700">{{ a.tipo_contacto or 'Gestión CRM' }}</div>{% if a.promesa_pago_fecha %}<div class="font-black mt-1">Promesa: {{ a.promesa_pago_fecha }}</div>{% endif %}<p class="text-sm text-slate-700 mt-2">{{ a.resumen }}</p><p class="text-xs text-slate-500 mt-2">{{ a.fecha }} · {{ a.usuario or 'ERP' }}</p></div>{% else %}<div class="text-sm text-slate-500">No hay acuerdos o promesas activos registrados en CRM.</div>{% endfor %}</section>
+    </aside>
+  </section>
+
+  <div id="editor-expediente" class="hidden fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 p-4 overflow-y-auto">
+    <div class="max-w-6xl mx-auto bg-white rounded-3xl shadow-2xl border border-slate-200 my-6 overflow-hidden">
+      <div class="px-6 py-5 bg-slate-900 text-white flex items-center justify-between"><div><div class="text-xs uppercase tracking-widest text-slate-400 font-bold">Edición de radicación</div><h2 class="text-xl font-black">Modificar expediente {{ proceso.radicado_interno }}</h2></div><button type="button" onclick="cerrarEditor()" class="text-slate-300 hover:text-white text-xl">✕</button></div>
+      <form method="POST" action="/expediente/guardar-estructurado" class="p-6 md:p-8 space-y-8">
+        <input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}">
+        <section><h3 class="text-lg font-black border-b pb-3 mb-5">1. Identificación y Juzgado</h3><div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Radicado Rama Judicial *</label><input name="radicado_rama" value="{{ proceso.radicado_rama or '' }}" required class="w-full border border-slate-300 rounded-xl p-3"></div>
+          <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Naturaleza *</label><select name="naturaleza" required class="w-full border border-slate-300 rounded-xl p-3"><option value="">Seleccione</option>{% for o in ['EJECUTIVO SINGULAR','EJECUTIVO HIPOTECARIO','CIVIL: VERBAL'] %}<option value="{{ o }}" {% if (proceso.naturaleza or '')|upper == o %}selected{% endif %}>{{ o }}</option>{% endfor %}{% if proceso.naturaleza and (proceso.naturaleza|upper) not in ['EJECUTIVO SINGULAR','EJECUTIVO HIPOTECARIO','CIVIL: VERBAL'] %}<option selected value="{{ proceso.naturaleza }}">{{ proceso.naturaleza }}</option>{% endif %}</select></div>
+          <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Juzgado de Conocimiento</label><select name="juzgado" class="w-full border border-slate-300 rounded-xl p-3"><option value="">Seleccione</option>{% for o in ['Civil Municipal','Civil del Circuito','De Pequeñas Causas','Promiscuo Municipal'] %}<option value="{{ o }}" {% if (proceso.juzgado or '')|lower == o|lower %}selected{% endif %}>{{ o }}</option>{% endfor %}{% if proceso.juzgado and (proceso.juzgado|lower) not in ['civil municipal','civil del circuito','de pequeñas causas','promiscuo municipal'] %}<option selected value="{{ proceso.juzgado }}">{{ proceso.juzgado }}</option>{% endif %}</select></div>
+        </div></section>
+
+        <section><h3 class="text-lg font-black border-b pb-3 mb-5">2. Vinculación de Partes</h3><div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div><label class="block text-xs font-bold uppercase text-slate-500 mb-2">Demandante(s) / Cliente(s)</label><select name="demandante_id" multiple size="10" required class="w-full border border-slate-300 rounded-xl p-3 text-sm">{% for c in contactos %}<option value="{{ c.identificacion }}" {% if c.identificacion in demandante_ids %}selected{% endif %}>{{ c.identificacion }} - {{ c.nombre }}</option>{% endfor %}</select><p class="text-xs text-slate-500 mt-2">Seleccione uno o varios contactos existentes. Se guardan una sola vez por identificación.</p></div>
+          <div><label class="block text-xs font-bold uppercase text-slate-500 mb-2">Demandado(s) / Contraparte(s)</label><select name="demandado_id" multiple size="10" required class="w-full border border-slate-300 rounded-xl p-3 text-sm">{% for c in contactos %}<option value="{{ c.identificacion }}" {% if c.identificacion in demandado_ids %}selected{% endif %}>{{ c.identificacion }} - {{ c.nombre }}</option>{% endfor %}</select><p class="text-xs text-slate-500 mt-2">Se eliminan duplicados automáticamente por identificación antes de guardar.</p></div>
+        </div></section>
+
+        <section><h3 class="text-lg font-black border-b pb-3 mb-5">3. Propiedad Involucrada</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-5"><div class="p-4 rounded-xl bg-slate-50 border"><div class="text-xs uppercase font-bold text-slate-500">Conjunto Residencial</div><div class="font-black mt-1">{{ proceso.demandante or 'Se asignará desde el demandante' }}</div><div class="text-xs text-slate-500 mt-1">Se conserva la asociación existente. No se modifica desde este formulario.</div></div><div class="p-4 rounded-xl bg-slate-50 border"><div class="text-xs uppercase font-bold text-slate-500">Nomenclatura Exacta (Torre/Apto)</div><div class="font-black mt-1">{{ proceso.torre_apto or 'Sin nomenclatura registrada' }}</div><div class="text-xs text-slate-500 mt-1">La nomenclatura no se modifica desde la edición del expediente para evitar alterar la vinculación inmobiliaria.</div></div></div></section>
+
+        <section><h3 class="text-lg font-black border-b pb-3 mb-5">4. Pretensiones, Medidas y Asignación</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5"><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Pretensiones / Cuantía ($)</label><input name="pretensiones" value="{{ proceso.pretensiones or 0 }}" inputmode="decimal" class="w-full border border-slate-300 rounded-xl p-3"></div><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Abogado Responsable</label><select name="abogado_id" class="w-full border border-slate-300 rounded-xl p-3"><option value="">Sin abogado</option>{% for a in abogados %}<option value="{{ a.id }}" {% if proceso.abogado_id == a.id %}selected{% endif %}>{{ a.nombre }}</option>{% endfor %}</select></div></div><div><label class="block text-xs font-bold uppercase text-slate-500 mb-2">Medidas Cautelares Solicitadas</label><div id="medidas-list" class="space-y-2">{% for m in (proceso.medidas_cautelares or '').split('\n') if m.strip() %}<div class="flex gap-2"><input name="medida" value="{{ m }}" class="flex-1 border border-slate-300 rounded-xl p-3"><button type="button" onclick="this.parentElement.remove()" class="px-3 rounded-xl border text-red-600">Quitar</button></div>{% endfor %}</div><button type="button" onclick="agregarMedida()" class="mt-2 px-4 py-2 rounded-xl border border-blue-200 text-blue-700 font-bold text-sm">+ Agregar medida</button></div></section>
+
+        <div class="flex flex-wrap justify-end gap-3 border-t pt-5"><button type="button" onclick="cerrarEditor()" class="px-5 py-3 rounded-xl border border-slate-300 font-bold">Cancelar</button><button class="px-6 py-3 bg-slate-900 text-white rounded-xl font-black">Guardar cambios</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div id="act-modal" class="hidden fixed inset-0 bg-black/50 z-50 p-4"><div class="bg-white max-w-2xl mx-auto rounded-2xl p-6 mt-10"><div class="flex justify-between"><h3 class="font-black text-lg">Registrar actuación</h3><button onclick="document.getElementById('act-modal').classList.add('hidden')">✕</button></div><form method="POST" action="/actuacion/nueva" class="space-y-4 mt-5"><input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}"><input type="date" name="fecha" class="w-full border rounded-xl p-3" required><select name="etapa" class="w-full border rounded-xl p-3" required><option value="1. Presentación de la demanda">1. Presentación de la demanda</option><option value="2. Inadmisión">2. Inadmisión</option><option value="3. Admisión">3. Admisión</option><option value="4. Medidas Cautelares">4. Medidas Cautelares</option><option value="5. Notificación">5. Notificación</option><option value="6. Excepciones">6. Excepciones</option><option value="7. Sentencia">7. Sentencia</option><option value="8. Desistimiento tácito">8. Desistimiento tácito</option><option value="Terminación del Proceso">Terminación del Proceso</option></select><input name="sub_etapa" placeholder="Tipificación / sub-etapa" class="w-full border rounded-xl p-3"><textarea name="descripcion" rows="4" placeholder="Descripción del auto o actuación" class="w-full border rounded-xl p-3"></textarea><button class="w-full bg-slate-900 text-white rounded-xl py-3 font-black">Guardar actuación y actualizar etapa</button></form></div></div>
+</div>
+<script>
+function abrirEditor(){document.getElementById('editor-expediente').classList.remove('hidden');document.body.classList.add('overflow-hidden');}
+function cerrarEditor(){document.getElementById('editor-expediente').classList.add('hidden');document.body.classList.remove('overflow-hidden');}
+function agregarMedida(){const wrap=document.getElementById('medidas-list');const row=document.createElement('div');row.className='flex gap-2';row.innerHTML='<input name="medida" class="flex-1 border border-slate-300 rounded-xl p-3" placeholder="Descripción de la medida"><button type="button" class="px-3 rounded-xl border text-red-600" onclick="this.parentElement.remove()">Quitar</button>';wrap.appendChild(row);}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')cerrarEditor();});
+</script>
+{% endblock %}

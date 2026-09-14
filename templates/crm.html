@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm">
+    <h2 class="text-xl font-semibold text-slate-800">CRM de Cartera - Propiedad Horizontal</h2>
+</header>
+
+<div class="p-8 grid grid-cols-1 xl:grid-cols-12 gap-8 items-start h-[calc(100vh-4rem)] overflow-y-auto">
+    
+    <!-- ========================================== -->
+    <!-- COLUMNA IZQUIERDA: BUSCADOR DE INMUEBLES   -->
+    <!-- ========================================== -->
+    <div class="xl:col-span-4 bg-white rounded-xl shadow-sm border border-slate-200 p-6 sticky top-0">
+        <h3 class="text-md font-bold text-slate-800 mb-4 flex items-center gap-2">
+            <i data-lucide="home" class="w-5 h-5 text-blue-600"></i> Buscar Inmueble
+        </h3>
+        
+        <form method="GET" action="/crm" class="space-y-5" onsubmit="if(!document.getElementById('hidden_inmueble_id').value){ alert('⚠️ Selecciona un inmueble válido de la lista.'); return false; }">
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-2">1. Conjunto Residencial</label>
+                <select id="filtro_conjunto" class="w-full border border-slate-300 rounded-md p-2.5 text-sm bg-slate-50 focus:border-blue-500 outline-none text-slate-700 shadow-sm" onchange="actualizarDatalist()">
+                    <option value="TODOS" {% if conjunto_actual == 'TODOS' %}selected{% endif %}>Mostrar Todos</option>
+                    {% for c in conjuntos %}
+                    <option value="{{ c }}" {% if conjunto_actual == c %}selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-2">2. Buscar Torre / Apartamento</label>
+                <input type="hidden" name="buscar_inmueble" id="hidden_inmueble_id" value="{{ inmueble_actual.id if inmueble_actual else '' }}">
+                <input type="text" list="opciones_inmuebles" id="input_inmueble"
+                       class="w-full border border-slate-300 rounded-md p-2.5 text-sm bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none text-slate-700 placeholder-slate-400 transition-all shadow-inner"
+                       placeholder="🔍 Ej: Torre 1 Apto 101..."
+                       value="{{ inmueble_actual.apto if inmueble_actual else '' }}"
+                       required autocomplete="off" oninput="sincronizarId()">
+                <datalist id="opciones_inmuebles"></datalist>
+            </div>
+
+            <button type="submit" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-2.5 rounded-md transition-colors shadow-sm flex items-center justify-center gap-2 mt-2">
+                Cargar Inmueble
+            </button>
+        </form>
+
+        <script>
+            const datosFiltro = {{ json_filtro | safe }};
+            
+            function actualizarDatalist() {
+                const conjunto = document.getElementById('filtro_conjunto').value;
+                const datalist = document.getElementById('opciones_inmuebles');
+                const inputInmueble = document.getElementById('input_inmueble');
+                const inputOculto = document.getElementById('hidden_inmueble_id');
+                
+                datalist.innerHTML = '';
+                let inmueblesAMostrar = [];
+                
+                if (conjunto === "TODOS") {
+                    Object.values(datosFiltro).forEach(lista => {
+                        inmueblesAMostrar = inmueblesAMostrar.concat(lista);
+                    });
+                } else {
+                    inmueblesAMostrar = datosFiltro[conjunto] || [];
+                }
+                
+                inmueblesAMostrar.sort((a, b) => a.nombre.localeCompare(b.nombre));
+                
+                inmueblesAMostrar.forEach(d => {
+                    const opt = document.createElement('option');
+                    opt.value = d.nombre; 
+                    datalist.appendChild(opt);
+                });
+                
+                if (conjunto !== "TODOS" && conjunto !== "{{ conjunto_actual }}") {
+                    inputInmueble.value = '';
+                    inputOculto.value = '';
+                }
+            }
+
+            function sincronizarId() {
+                const conjunto = document.getElementById('filtro_conjunto').value;
+                const textoIngresado = document.getElementById('input_inmueble').value;
+                const inputOculto = document.getElementById('hidden_inmueble_id');
+                
+                let lista = [];
+                if (conjunto === "TODOS") {
+                    Object.values(datosFiltro).forEach(arr => lista = lista.concat(arr));
+                } else {
+                    lista = datosFiltro[conjunto] || [];
+                }
+                
+                const match = lista.find(d => d.nombre === textoIngresado);
+                if (match) {
+                    inputOculto.value = match.id;
+                } else {
+                    inputOculto.value = '';
+                }
+            }
+
+            document.addEventListener('DOMContentLoaded', actualizarDatalist);
+        </script>
+
+        {% if inmueble_actual %}
+        <!-- 🔥 BOTÓN DE LIQUIDACIÓN RÁPIDA 🔥 -->
+        <div class="mt-6 mb-2">
+            <a href="/liquidador?inmueble_id={{ inmueble_actual.id }}" target="_blank" class="w-full bg-blue-50 border border-blue-200 hover:bg-blue-600 hover:text-white text-blue-700 font-bold py-2.5 rounded-md transition-all shadow-sm flex items-center justify-center gap-2 group">
+                <i data-lucide="file-spreadsheet" class="w-5 h-5 text-blue-500 group-hover:text-white transition-colors"></i> 
+                Ver / Descargar Liquidación
+            </a>
+        </div>
+
+        <div class="mt-6 pt-6 border-t border-slate-100">
+            <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                <i data-lucide="users" class="w-4 h-4"></i> Propietarios Registrados
+            </h4>
+            <div class="space-y-4">
+                {% for p in propietarios %}
+                <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 shadow-sm relative overflow-hidden">
+                    <div class="absolute left-0 top-0 bottom-0 w-1 bg-blue-500"></div>
+                    <p class="text-sm font-bold text-slate-800 mb-2 pl-2">{{ p.nombre }}</p>
+                    <div class="space-y-1.5 text-xs text-slate-600 pl-2">
+                        <p class="flex items-center gap-2"><i data-lucide="credit-card" class="w-3.5 h-3.5 text-slate-400"></i> {{ p.identificacion }}</p>
+                        <p class="flex items-center gap-2"><i data-lucide="phone" class="w-3.5 h-3.5 text-slate-400"></i> {{ p.telefono or 'No registrado' }}</p>
+                        <p class="flex items-center gap-2"><i data-lucide="mail" class="w-3.5 h-3.5 text-slate-400"></i> {{ p.email or 'No registrado' }}</p>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- ========================================== -->
+    <!-- COLUMNA DERECHA: GESTIÓN E HISTORIAL       -->
+    <!-- ========================================== -->
+    <div class="xl:col-span-8 space-y-6">
+        
+        {% if inmueble_actual %}
+        <!-- FORMULARIO DE REGISTRO MANUAL -->
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            <h3 class="text-md font-bold text-emerald-700 mb-4 flex items-center gap-2">
+                <i data-lucide="plus-circle" class="w-5 h-5"></i> Registrar Gestión ({{ inmueble_actual.apto }})
+            </h3>
+            
+            <form method="POST" action="/crm/guardar" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <input type="hidden" name="inmueble_id" value="{{ inmueble_actual.id }}">
+                
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Contacto Atendido</label>
+                    <select name="identificacion_deudor" required class="w-full border border-slate-300 rounded-md p-2 text-sm bg-slate-50 focus:border-emerald-500 outline-none">
+                        {% for p in propietarios %}
+                        <option value="{{ p.identificacion }}">{{ p.nombre }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Tipo de Contacto</label>
+                    <select name="tipo_contacto" required class="w-full border border-slate-300 rounded-md p-2 text-sm bg-slate-50 focus:border-emerald-500 outline-none">
+                        <option value="Llamada Telefónica">Llamada Telefónica</option>
+                        <option value="Mensaje de WhatsApp">Mensaje de WhatsApp</option>
+                        <option value="Correo Electrónico">Correo Electrónico</option>
+                        <option value="Visita Presencial">Visita Presencial</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Promesa (Opcional)</label>
+                    <input type="date" name="promesa_pago_fecha" class="w-full border border-slate-300 rounded-md p-2 text-sm bg-slate-50 focus:border-emerald-500 outline-none text-slate-700">
+                </div>
+
+                <div class="md:col-span-3">
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Resumen de la Gestión</label>
+                    <textarea name="resumen" rows="3" required placeholder="Ej: Me contesta Juan, manifiesta que pagará la próxima semana..." class="w-full border border-slate-300 rounded-md p-3 text-sm bg-slate-50 focus:border-emerald-500 outline-none text-slate-700"></textarea>
+                </div>
+
+                <div class="md:col-span-3 flex justify-end">
+                    <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-6 rounded-md transition-colors shadow-md flex items-center gap-2">
+                        <i data-lucide="save" class="w-4 h-4"></i> Guardar Gestión
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- LÍNEA DE TIEMPO (HISTORIAL DEL APARTAMENTO) -->
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            <h3 class="text-md font-bold text-slate-800 mb-6 flex items-center gap-2">
+                <i data-lucide="history" class="w-5 h-5 text-blue-600"></i> Historial del Inmueble
+            </h3>
+            
+            {% if historial %}
+            <div class="space-y-6 border-l-2 border-slate-100 ml-3 pl-5">
+                {% for h in historial %}
+                <div class="relative">
+                    <div class="absolute -left-[29px] top-1 h-4 w-4 rounded-full border-2 border-white {% if 'Bot' in h.usuario or 'IA' in h.usuario %}bg-purple-500{% else %}bg-blue-500{% endif %}"></div>
+                    
+                    <div class="bg-slate-50 border border-slate-100 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow">
+                        <div class="flex justify-between items-start mb-2">
+                            <div>
+                                <span class="text-xs font-bold px-2 py-1 rounded text-white {% if 'Bot' in h.usuario or 'IA' in h.usuario %}bg-purple-600{% else %}bg-blue-600{% endif %}">{{ h.tipo }}</span>
+                                <span class="text-xs text-slate-500 ml-2 font-medium">Contactado: {{ h.deudor_nombre }}</span>
+                            </div>
+                            
+                            <div class="text-right flex items-start gap-3">
+                                <div>
+                                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">{{ h.usuario }}</span>
+                                    <span class="text-[10px] text-slate-500"><i data-lucide="clock" class="inline w-3 h-3 mb-0.5"></i> {{ h.fecha }}</span>
+                                </div>
+                                
+                                <form method="POST" action="/crm/anular" onsubmit="return confirm('¿Estás seguro de anular esta anotación? Desaparecerá de la vista, pero se conservará en auditoría interna.');">
+                                    <input type="hidden" name="gestion_id" value="{{ h.id }}">
+                                    <input type="hidden" name="inmueble_id" value="{{ inmueble_actual.id }}">
+                                    <button type="submit" class="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-md transition-all shadow-sm border border-transparent hover:border-red-200" title="Anular Anotación">
+                                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                        
+                        <p class="text-sm text-slate-700 mt-3 whitespace-pre-wrap">{{ h.resumen }}</p>
+                        
+                        {% if h.promesa %}
+                        <div class="mt-3 inline-block bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold px-3 py-1.5 rounded-md flex items-center gap-1.5">
+                            <i data-lucide="calendar-check" class="w-4 h-4"></i> Promesa para: {{ h.promesa }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="text-center py-10 text-slate-400">
+                <i data-lucide="message-square-dashed" class="w-12 h-12 mx-auto mb-3 opacity-50"></i>
+                <p>No hay gestiones registradas para los propietarios de este inmueble.</p>
+            </div>
+            {% endif %}
+        </div>
+        
+        {% else %}
+        <!-- ESTADO VACÍO CUANDO NO HAY INMUEBLE SELECCIONADO -->
+        <div class="bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center h-full min-h-[400px] text-center p-8">
+            <div class="w-16 h-16 bg-white text-slate-300 rounded-full flex items-center justify-center shadow-sm mb-4">
+                <i data-lucide="home" class="w-8 h-8"></i>
+            </div>
+            <h4 class="text-lg font-bold text-slate-700">Panel de Gestión por Inmueble</h4>
+            <p class="text-sm text-slate-500 mt-2 max-w-sm">Selecciona una Torre/Apartamento en el panel izquierdo para ver los datos de los propietarios y registrar la gestión.</p>
+        </div>
+        {% endif %}
+        
+    </div>
+</div>
+{% endblock %}

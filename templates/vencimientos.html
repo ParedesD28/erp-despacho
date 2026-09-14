@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm justify-between">
+    <h2 class="text-xl font-semibold text-slate-800">Control de Vencimientos y Términos</h2>
+    <span class="bg-red-50 text-red-700 text-xs font-bold px-3 py-1 rounded-full border border-red-200 shadow-sm flex items-center gap-2">
+        <i data-lucide="alarm-clock" class="w-4 h-4"></i> Alarmas Activas: {{ vencimientos|length }}
+    </span>
+</header>
+
+<div class="p-8 grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 sticky top-8">
+        <h3 class="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2 border-b border-slate-100 pb-3">
+            <i data-lucide="calendar-plus" class="w-5 h-5 text-blue-600"></i> Programar Término
+        </h3>
+        <form method="POST" action="/vencimientos/guardar" class="space-y-4">
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Expediente</label>
+                <select name="radicado_interno" required class="w-full border border-slate-300 rounded-md p-2.5 text-sm text-slate-700 bg-slate-50">
+                    {% for rad in radicados %}<option value="{{ rad }}">{{ rad }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Descripción / Tarea</label>
+                <input type="text" name="titulo" required placeholder="Ej: Presentar recurso de reposición" class="w-full border border-slate-300 rounded-md p-2.5 text-sm">
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Fecha Límite</label>
+                <input type="date" name="fecha_vencimiento" required class="w-full border border-slate-300 rounded-md p-2.5 text-sm text-slate-700">
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Observaciones</label>
+                <textarea name="observaciones" rows="3" placeholder="Detalles adicionales..." class="w-full border border-slate-300 rounded-md p-2.5 text-sm"></textarea>
+            </div>
+            <button type="submit" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 rounded-md flex items-center justify-center gap-2 shadow-sm">
+                <i data-lucide="save" class="w-4 h-4"></i> Agendar Vencimiento
+            </button>
+        </form>
+    </div>
+
+    <div class="lg:col-span-2 space-y-4">
+        <h3 class="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2">
+            <i data-lucide="bell-ring" class="w-5 h-5 text-red-500"></i> Alarmas Pendientes
+        </h3>
+        {% if vencimientos %}
+            {% for v in vencimientos %}
+            <div class="bg-white border border-slate-200 rounded-lg p-5 hover:border-red-300 hover:shadow-md transition-all">
+                <div class="flex justify-between items-start mb-3">
+                    <div>
+                        <span class="bg-slate-100 text-slate-600 text-xs font-bold px-2.5 py-1 rounded border border-slate-200">{{ v.radicado_interno }}</span>
+                        <h4 class="font-bold text-slate-800 mt-2 text-lg">{{ v.titulo }}</h4>
+                    </div>
+                    <span class="bg-red-50 text-red-700 text-xs font-bold px-3 py-1.5 rounded-md border border-red-200">Límite: {{ v.fecha_vencimiento }}</span>
+                </div>
+                <p class="text-sm text-slate-600 mb-4 bg-slate-50 p-3 rounded border border-slate-100">{{ v.observaciones or "Sin observaciones registradas." }}</p>
+                <div class="flex gap-2 justify-end">
+                    <form method="POST" action="/vencimientos/completar">
+                        <input type="hidden" name="vencimiento_id" value="{{ v.id }}">
+                        <button type="submit" class="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1.5">
+                            <i data-lucide="check-circle" class="w-4 h-4"></i> Marcar Completado
+                        </button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="bg-emerald-50 border-2 border-dashed border-emerald-200 rounded-xl p-10 text-center">
+                <div class="w-16 h-16 bg-white text-emerald-500 rounded-full flex items-center justify-center shadow-sm mb-4 mx-auto"><i data-lucide="check" class="w-8 h-8"></i></div>
+                <h4 class="text-lg font-bold text-emerald-800">¡Agenda limpia!</h4>
+                <p class="text-emerald-600 text-sm mt-1">No tienes términos ni vencimientos pendientes por gestionar.</p>
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

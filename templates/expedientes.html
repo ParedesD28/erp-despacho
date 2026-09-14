@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<!-- ========================================== -->
+<!-- VISTA 1: EL BUSCADOR MINIMALISTA CENTRAL   -->
+<!-- ========================================== -->
+<div class="h-full flex flex-col items-center justify-center bg-slate-50 relative p-8 transition-all duration-500" id="vista-busqueda">
+    
+    <!-- Ícono corporativo -->
+    <div class="w-20 h-20 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-6 shadow-inner">
+        <i data-lucide="folder-search" class="w-10 h-10"></i>
+    </div>
+    
+    <h2 class="text-3xl font-bold text-slate-800 mb-2 tracking-tight">Directorio de Expedientes</h2>
+    <p class="text-slate-500 mb-10 text-center max-w-md">Busca de forma inteligente ingresando un fragmento del radicado, la cédula, o el nombre de las partes.</p>
+    
+    <!-- Barra de búsqueda gigante -->
+    <div class="w-full max-w-3xl relative">
+        <div class="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
+            <i data-lucide="search" class="w-6 h-6 text-slate-400"></i>
+        </div>
+        <input type="text" id="input-principal" class="w-full pl-14 pr-32 py-5 text-lg border-2 border-slate-200 rounded-2xl focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all shadow-sm bg-white text-slate-700 placeholder-slate-400" placeholder="Ej: 202300145, Urbanización Santa, 1088..." onkeypress="if(event.key === 'Enter') ejecutarBusqueda()">
+        
+        <button onclick="ejecutarBusqueda()" class="absolute inset-y-2 right-2 bg-slate-900 hover:bg-blue-600 text-white font-bold py-2 px-8 rounded-xl transition-colors shadow-sm">
+            Buscar
+        </button>
+    </div>
+
+    <!-- Botón pequeño para ver todo -->
+    <button onclick="mostrarTodo()" class="mt-8 text-sm font-bold text-slate-400 hover:text-blue-600 flex items-center gap-2 transition-colors px-4 py-2 rounded-lg hover:bg-blue-50">
+        <i data-lucide="list" class="w-4 h-4"></i> Mostrar el listado completo de procesos
+    </button>
+</div>
+
+
+<!-- ========================================== -->
+<!-- VISTA 2: LA TABLA DE RESULTADOS            -->
+<!-- ========================================== -->
+<div class="p-8 hidden h-full flex-col animate-fade-in" id="vista-tabla">
+    
+    <!-- Cabecera de la tabla con su propio buscador -->
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 gap-4">
+        <div>
+            <button onclick="volverBuscador()" class="text-blue-600 hover:text-blue-800 font-bold text-sm flex items-center gap-2 mb-3 transition-colors px-3 py-1.5 rounded-md hover:bg-blue-50 -ml-3">
+                <i data-lucide="arrow-left" class="w-4 h-4"></i> Volver al buscador principal
+            </button>
+            <h2 class="text-2xl font-bold text-slate-800">Resultados de Búsqueda</h2>
+        </div>
+        
+        <!-- Buscador secundario (Integrado en la tabla) -->
+        <div class="relative w-full md:w-80">
+            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <i data-lucide="filter" class="w-4 h-4 text-slate-400"></i>
+            </div>
+            <input type="text" id="input-tabla" class="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm shadow-sm" placeholder="Refinar resultados..." oninput="filtrarTabla(this.value)">
+        </div>
+    </div>
+
+    <!-- Contenedor de la tabla -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex-1 flex flex-col relative">
+        <div class="overflow-y-auto flex-1">
+            <table class="w-full text-left border-collapse">
+                <thead class="bg-slate-900 sticky top-0 z-10">
+                    <tr>
+                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Radicado</th>
+                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Demandante</th>
+                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Demandado</th>
+                    </tr>
+                </thead>
+                <tbody id="cuerpo-tabla" class="divide-y divide-slate-100">
+    {% for p in procesos %}
+    <!-- Agregamos el onclick aquí mismo: -->
+    <tr onclick="window.location.href='/expediente/{{ p.radicado_interno }}'" class="hover:bg-blue-50 transition-colors fila-proceso cursor-pointer">
+        <td class="px-6 py-4">
+                            <div class="font-bold text-blue-600">{{ p.radicado_interno }}</div>
+                            <div class="text-xs font-mono text-slate-500 mt-1">{{ p.radicado_rama }}</div>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-700 font-bold uppercase">{{ p.demandante_db or p.id_cliente or 'SIN REGISTRO' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-700 font-medium uppercase">{{ p.demandado or 'SIN REGISTRO' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            
+            <!-- Mensaje cuando no hay resultados -->
+            <div id="mensaje-vacio" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-white/90 backdrop-blur-sm z-20">
+                <div class="w-16 h-16 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mb-4">
+                    <i data-lucide="search-x" class="w-8 h-8"></i>
+                </div>
+                <h3 class="text-lg font-bold text-slate-700 mb-1">No hay coincidencias</h3>
+                <p class="text-slate-500 text-sm">Intenta con otro fragmento de radicado o nombre.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ========================================== -->
+<!-- MOTOR DE BÚSQUEDA JAVASCRIPT               -->
+<!-- ========================================== -->
+<style>
+    .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+
+<script>
+    const vistaBusqueda = document.getElementById('vista-busqueda');
+    const vistaTabla = document.getElementById('vista-tabla');
+    const inputPrincipal = document.getElementById('input-principal');
+    const inputTabla = document.getElementById('input-tabla');
+    const filas = document.querySelectorAll('.fila-proceso');
+    const mensajeVacio = document.getElementById('mensaje-vacio');
+
+    // 1. Ejecutar búsqueda desde la pantalla inicial
+    function ejecutarBusqueda() {
+        const texto = inputPrincipal.value.trim();
+        vistaBusqueda.classList.add('hidden');
+        vistaTabla.classList.remove('hidden');
+        vistaTabla.classList.add('flex');
+        
+        inputTabla.value = texto; // Sincronizamos el buscador pequeño
+        filtrarTabla(texto);
+    }
+
+    // 2. Mostrar la tabla con todos los datos sin filtrar
+    function mostrarTodo() {
+        inputPrincipal.value = '';
+        inputTabla.value = '';
+        vistaBusqueda.classList.add('hidden');
+        vistaTabla.classList.remove('hidden');
+        vistaTabla.classList.add('flex');
+        filtrarTabla(''); // Envía un filtro vacío para mostrar todo
+    }
+
+    // 3. Volver al panel limpio central
+    function volverBuscador() {
+        vistaTabla.classList.add('hidden');
+        vistaTabla.classList.remove('flex');
+        vistaBusqueda.classList.remove('hidden');
+        vistaBusqueda.classList.add('flex');
+        
+        inputPrincipal.value = ''; // Limpiamos la caja para la próxima búsqueda
+        inputPrincipal.focus();
+    }
+
+    // 4. El Cerebro del Filtro Parcial (Busca en toda la fila al mismo tiempo)
+    function filtrarTabla(texto) {
+        // Normalizamos el texto: minúsculas y sin acentos para evitar errores
+        const busqueda = texto.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+        let visibles = 0;
+
+        filas.forEach(fila => {
+            // Leemos todo el texto oculto de esa fila (Radicados + Nombres)
+            const contenido = fila.textContent.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            
+            // Si el texto que escribiste es "parte" del texto de la fila, se muestra
+            if (contenido.includes(busqueda)) {
+                fila.style.display = '';
+                visibles++;
+            } else {
+                fila.style.display = 'none'; // Se oculta instantáneamente
+            }
+        });
+
+        // Si escondimos todas las filas, mostramos el mensaje de error bonito
+        if (visibles === 0) {
+            mensajeVacio.classList.remove('hidden');
+        } else {
+            mensajeVacio.classList.add('hidden');
+        }
+    }
+</script>
+{% endblock %}
