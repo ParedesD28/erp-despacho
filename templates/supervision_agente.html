@@ -1,76 +1,182 @@
 {% extends "base.html" %}
 
 {% block contenido %}
-<div class="p-6 md:p-8 space-y-6 h-full overflow-y-auto">
-    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div>
-            <p class="text-sm font-semibold text-blue-600 uppercase tracking-wider">Control operativo</p>
-            <h1 class="text-3xl font-bold text-slate-900">Supervisión del agente</h1>
-            <p class="text-slate-500 mt-1">Conversaciones WhatsApp, estado de IA, mensajes, liquidaciones y toma de control humano.</p>
+<div class="flex flex-col h-full overflow-hidden p-3 md:p-5 gap-3">
+    <!-- BARRA SUPERIOR COMPACTA -->
+    <div class="bg-white rounded-2xl border border-slate-200 px-4 py-3 shadow-xs flex flex-wrap items-center justify-between gap-3 shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shadow-xs">
+                <i data-lucide="message-square-code" class="w-5 h-5"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold text-slate-900 leading-tight">Supervisión WhatsApp & Agente IA</h1>
+                <p class="text-xs text-slate-500">Monitoreo en tiempo real, auditoría de respuestas y toma de control humano</p>
+            </div>
         </div>
-        <div id="conexion" class="flex items-center gap-2 px-4 py-2 rounded-xl border bg-slate-50 border-slate-200 text-slate-600">
-            <span id="conexion-dot" class="w-2.5 h-2.5 rounded-full bg-slate-400"></span>
-            <span id="conexion-text" class="font-semibold">Verificando agente...</span>
+
+        <!-- Mini KPIs / Estado del Servicio -->
+        <div class="flex flex-wrap items-center gap-2">
+            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium">
+                <span class="text-slate-400">Total:</span>
+                <span id="stat-total" class="font-bold">0</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 text-xs font-medium">
+                <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                <span>En Agente:</span>
+                <span id="stat-agent" class="font-bold">0</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 text-xs font-medium">
+                <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+                <span>Humano:</span>
+                <span id="stat-human" class="font-bold">0</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-medium">
+                <span class="text-emerald-500">✓</span>
+                <span>Activas hoy:</span>
+                <span id="stat-active" class="font-bold">0</span>
+            </div>
+
+            <!-- Estado Conexión Agente -->
+            <div id="conexion" class="flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-slate-50 border-slate-200 text-slate-600 text-xs font-medium">
+                <span id="conexion-dot" class="w-2 h-2 rounded-full bg-slate-400 animate-pulse"></span>
+                <span id="conexion-text" class="font-semibold">Verificando...</span>
+            </div>
         </div>
     </div>
 
-    <div class="grid grid-cols-2 xl:grid-cols-5 gap-4">
-        <div class="bg-white rounded-2xl border border-slate-200 p-5"><div class="text-sm text-slate-500">Conversaciones</div><div id="stat-total" class="text-3xl font-bold mt-2">0</div></div>
-        <div class="bg-white rounded-2xl border border-slate-200 p-5"><div class="text-sm text-slate-500">En agente</div><div id="stat-agent" class="text-3xl font-bold text-blue-600 mt-2">0</div></div>
-        <div class="bg-white rounded-2xl border border-slate-200 p-5"><div class="text-sm text-slate-500">Control humano</div><div id="stat-human" class="text-3xl font-bold text-amber-600 mt-2">0</div></div>
-        <div class="bg-white rounded-2xl border border-slate-200 p-5"><div class="text-sm text-slate-500">Activas hoy</div><div id="stat-active" class="text-3xl font-bold text-emerald-600 mt-2">0</div></div>
-        <div class="bg-white rounded-2xl border border-slate-200 p-5"><div class="text-sm text-slate-500">Errores</div><div id="stat-errors" class="text-3xl font-bold text-rose-600 mt-2">0</div></div>
-    </div>
-
-    <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 min-h-[600px]">
-        <section class="xl:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div class="p-4 border-b border-slate-200">
-                <div class="flex gap-2">
-                    <input id="buscar" type="search" placeholder="Buscar teléfono o cédula..." class="flex-1 border border-slate-300 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-200">
-                    <button onclick="cargarConversaciones()" class="px-3 py-2 rounded-xl bg-slate-900 text-white" title="Actualizar"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button>
+    <!-- CONTENEDOR PRINCIPAL TIPO WHATSAPP WEB -->
+    <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-3 overflow-hidden">
+        
+        <!-- PANEL IZQUIERDO: LISTA DE CONVERSACIONES -->
+        <section class="lg:col-span-4 xl:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col h-full overflow-hidden">
+            <!-- Buscador y Refrescar -->
+            <div class="p-3 border-b border-slate-100 bg-slate-50/70">
+                <div class="flex gap-2 items-center">
+                    <div class="relative flex-1">
+                        <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-2.5"></i>
+                        <input id="buscar" type="search" placeholder="Buscar teléfono o cédula..." class="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all shadow-xs">
+                    </div>
+                    <button onclick="cargarConversaciones()" class="p-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors shadow-xs" title="Actualizar lista">
+                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                    </button>
                 </div>
             </div>
+
+            <!-- Lista de Chats -->
             <div id="lista" class="divide-y divide-slate-100 overflow-y-auto flex-1">
-                <div class="p-8 text-center text-slate-400">Cargando...</div>
+                <div class="p-10 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
+                    <i data-lucide="loader-2" class="w-6 h-6 animate-spin text-emerald-500"></i>
+                    <span>Cargando conversaciones...</span>
+                </div>
             </div>
         </section>
 
-        <section class="xl:col-span-8 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div id="detalle-vacio" class="flex-1 flex items-center justify-center text-center text-slate-400 p-10">
-                <div><i data-lucide="message-circle-more" class="w-14 h-14 mx-auto mb-3 opacity-40"></i><p>Selecciona una conversación para supervisarla.</p></div>
+        <!-- PANEL DERECHO: VENTANA DE CHAT INTEGRADA (WHATSAPP WEB STYLE) -->
+        <section class="lg:col-span-8 xl:col-span-8 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col h-full overflow-hidden relative">
+            
+            <!-- Estado Vacío (Sin chat seleccionado) -->
+            <div id="detalle-vacio" class="flex-1 flex flex-col items-center justify-center text-center p-8 bg-slate-50/50">
+                <div class="w-20 h-20 rounded-full bg-emerald-50 text-emerald-500 flex items-center justify-center mb-4 shadow-inner">
+                    <i data-lucide="message-circle-dashed" class="w-10 h-10 opacity-70"></i>
+                </div>
+                <h3 class="text-base font-bold text-slate-800">Panel de Chat WhatsApp</h3>
+                <p class="text-xs text-slate-500 max-w-sm mt-1">Selecciona una conversación de la lista lateral para visualizar el historial, supervisar la IA o tomar el control manual.</p>
+                <div class="mt-4 flex items-center gap-2 text-xs text-slate-400">
+                    <i data-lucide="shield-check" class="w-4 h-4 text-emerald-500"></i>
+                    <span>Comunicaciones auditadas y seguras</span>
+                </div>
             </div>
 
-            <div id="detalle" class="hidden flex-1 flex flex-col min-h-0">
-                <div class="p-5 border-b border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                    <div>
-                        <div class="flex items-center gap-3">
-                            <h2 id="detalle-telefono" class="text-xl font-bold"></h2>
-                            <span id="detalle-modo" class="text-xs font-bold px-2.5 py-1 rounded-full"></span>
+            <!-- Contenedor del Chat Activo -->
+            <div id="detalle" class="hidden flex-1 flex flex-col h-full overflow-hidden">
+                
+                <!-- 1. HEADER DEL CHAT FIJO ARRIBA -->
+                <header class="p-3 md:px-5 md:py-3 border-b border-slate-200 bg-white flex items-center justify-between gap-3 shrink-0 z-10 shadow-xs">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <!-- Avatar WhatsApp -->
+                        <div class="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
+                            <i data-lucide="user" class="w-5 h-5"></i>
                         </div>
-                        <div id="detalle-meta" class="text-sm text-slate-500 mt-1"></div>
+                        <div class="min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <h2 id="detalle-telefono" class="text-sm md:text-base font-bold text-slate-900 truncate"></h2>
+                                <span id="detalle-modo" class="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider"></span>
+                            </div>
+                            <div id="detalle-meta" class="text-[11px] text-slate-400 truncate mt-0.5"></div>
+                        </div>
                     </div>
-                    <div class="flex gap-2">
-                        <button id="btn-tomar" onclick="tomarControl()" class="hidden px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold">Tomar control</button>
-                        <button id="btn-devolver" onclick="devolverAgente()" class="hidden px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold">Devolver al agente</button>
+
+                    <!-- Botones de Acción de Control -->
+                    <div class="flex items-center gap-2 shrink-0">
+                        <button id="btn-tomar" onclick="tomarControl()" class="hidden px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5">
+                            <i data-lucide="hand" class="w-3.5 h-3.5"></i>
+                            <span>Tomar control</span>
+                        </button>
+                        <button id="btn-devolver" onclick="devolverAgente()" class="hidden px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5">
+                            <i data-lucide="bot" class="w-3.5 h-3.5"></i>
+                            <span>Devolver al agente</span>
+                        </button>
+                        <button onclick="toggleResumen()" class="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors" title="Ver detalles de cartera">
+                            <i data-lucide="info" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </header>
+
+                <!-- Mini Barra Colapsable de Cartera/Expediente -->
+                <div id="barra-resumen" class="bg-slate-50 border-b border-slate-200 px-4 py-2 text-xs grid grid-cols-2 md:grid-cols-4 gap-3 shrink-0">
+                    <div>
+                        <span class="text-[10px] uppercase font-bold text-slate-400 block">Cédula</span>
+                        <span id="d-cedula" class="font-semibold text-slate-800">-</span>
+                    </div>
+                    <div>
+                        <span class="text-[10px] uppercase font-bold text-slate-400 block">Estado Deuda</span>
+                        <span id="d-deuda" class="font-semibold text-slate-800">-</span>
+                    </div>
+                    <div>
+                        <span class="text-[10px] uppercase font-bold text-slate-400 block">Liquidación</span>
+                        <span id="d-liquidacion" class="font-semibold text-slate-800">-</span>
+                    </div>
+                    <div>
+                        <span class="text-[10px] uppercase font-bold text-slate-400 block">Última Actividad</span>
+                        <span id="d-ultima" class="font-semibold text-slate-800">-</span>
                     </div>
                 </div>
 
-                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 border-b border-slate-100 bg-slate-50">
-                    <div><div class="text-[10px] uppercase text-slate-400 font-bold">Cédula</div><div id="d-cedula" class="font-semibold text-sm mt-1">-</div></div>
-                    <div><div class="text-[10px] uppercase text-slate-400 font-bold">Estado deuda</div><div id="d-deuda" class="font-semibold text-sm mt-1">-</div></div>
-                    <div><div class="text-[10px] uppercase text-slate-400 font-bold">Liquidación</div><div id="d-liquidacion" class="font-semibold text-sm mt-1">-</div></div>
-                    <div><div class="text-[10px] uppercase text-slate-400 font-bold">Última actividad</div><div id="d-ultima" class="font-semibold text-sm mt-1">-</div></div>
+                <!-- 2. ÁREA DE MENSAJES CON SCROLL PROPIO (WHATSAPP STYLE) -->
+                <!-- Patrón de fondo sutil tipo chat -->
+                <div id="mensajes" class="flex-1 overflow-y-auto p-4 space-y-2.5 bg-[#eae6df] bg-opacity-40" style="background-image: radial-gradient(#cbd5e1 0.75px, transparent 0.75px); background-size: 16px 16px;">
+                    <!-- Los mensajes se inyectan dinámicamente aquí -->
                 </div>
 
-                <div id="mensajes" class="flex-1 overflow-y-auto p-5 space-y-3 bg-slate-50/60"></div>
-
-                <div id="compositor" class="p-4 border-t border-slate-200 bg-white">
-                    <div class="flex gap-3">
-                        <textarea id="texto" rows="2" placeholder="Escribe un mensaje de WhatsApp..." class="flex-1 resize-none border border-slate-300 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-200"></textarea>
-                        <button onclick="enviarMensaje()" class="self-end px-4 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-2"><i data-lucide="send" class="w-4 h-4"></i>Enviar</button>
+                <!-- 3. COMPOSITOR INFERIOR FIJO (SIEMPRE VISIBLE AL PIE) -->
+                <footer class="p-3 bg-[#f0f2f5] border-t border-slate-200 shrink-0 z-10 flex flex-col gap-1.5">
+                    <!-- Advertencia de Modo -->
+                    <div id="modo-warning" class="hidden text-[11px] px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 flex items-center justify-between">
+                        <span class="flex items-center gap-1.5">
+                            <i data-lucide="alert-circle" class="w-3.5 h-3.5 text-amber-600"></i>
+                            <span>El agente IA está activo. Si envías un mensaje, se recomienda tomar el control manual.</span>
+                        </span>
+                        <button onclick="tomarControl()" class="underline font-bold hover:text-amber-900 ml-2">Tomar control ahora</button>
                     </div>
-                    <p class="text-[11px] text-slate-400 mt-2">Los mensajes enviados desde aquí quedan auditados como HUMANO.</p>
-                </div>
+
+                    <!-- Fila de Entrada de Mensaje -->
+                    <div class="flex items-center gap-2">
+                        <div class="flex-1 bg-white rounded-2xl border border-slate-200 px-3 py-1.5 flex items-center gap-2 focus-within:ring-2 focus-within:ring-emerald-400 focus-within:border-emerald-400 shadow-xs transition-all">
+                            <textarea id="texto" rows="1" placeholder="Escribe un mensaje de WhatsApp... (Enter para enviar, Shift+Enter para salto)" class="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none max-h-28 py-1 placeholder-slate-400"></textarea>
+                        </div>
+                        <button id="btn-enviar" onclick="enviarMensaje()" class="w-10 h-10 rounded-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white flex items-center justify-center shrink-0 shadow-sm transition-all" title="Enviar mensaje">
+                            <i data-lucide="send" class="w-4 h-4 ml-0.5"></i>
+                        </button>
+                    </div>
+                    <div class="flex items-center justify-between px-1">
+                        <span class="text-[10px] text-slate-400 flex items-center gap-1">
+                            <i data-lucide="lock" class="w-3 h-3 text-slate-400"></i>
+                            <span>Canal WhatsApp Business oficial</span>
+                        </span>
+                        <span class="text-[10px] text-slate-400">Presiona <b>Enter</b> para enviar</span>
+                    </div>
+                </footer>
+
             </div>
         </section>
     </div>
@@ -79,6 +185,7 @@
 <script>
 let conversaciones = [];
 let actual = null;
+let resumenAbierto = true;
 const usuarioERP = {{ usuario|tojson }};
 
 function escapeHtml(value) {
@@ -88,12 +195,18 @@ function escapeHtml(value) {
 function modoBadge(modo) {
     const human = String(modo || '').toUpperCase() === 'HUMANO';
     return human
-        ? '<span class="text-xs font-bold px-2 py-1 rounded-full bg-amber-100 text-amber-800">HUMANO</span>'
-        : '<span class="text-xs font-bold px-2 py-1 rounded-full bg-blue-100 text-blue-800">AGENTE</span>';
+        ? '<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">HUMANO</span>'
+        : '<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">AGENTE</span>';
 }
 
 function normalizarLista(data) {
     return Array.isArray(data) ? data : (data.conversaciones || data.data || []);
+}
+
+function toggleResumen() {
+    resumenAbierto = !resumenAbierto;
+    const bar = document.getElementById('barra-resumen');
+    if (bar) bar.classList.toggle('hidden', !resumenAbierto);
 }
 
 async function api(url, options = {}) {
@@ -110,28 +223,57 @@ function renderStats() {
     const agent = total - human;
     const today = new Date().toISOString().slice(0,10);
     const active = conversaciones.filter(x => String(x.last_activity || x.ultima_actividad || '').startsWith(today)).length;
-    const errors = conversaciones.filter(x => Number(x.error_count || x.errores || 0) > 0).reduce((a,x) => a + Number(x.error_count || x.errores || 0), 0);
+    
     document.getElementById('stat-total').textContent = total;
     document.getElementById('stat-agent').textContent = agent;
     document.getElementById('stat-human').textContent = human;
     document.getElementById('stat-active').textContent = active;
-    document.getElementById('stat-errors').textContent = errors;
+}
+
+function formatHora(fechaStr) {
+    if (!fechaStr) return '';
+    try {
+        const d = new Date(fechaStr);
+        if (!isNaN(d.getTime())) {
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+    } catch (_) {}
+    return String(fechaStr).slice(-8, -3) || '';
 }
 
 function renderLista() {
     const box = document.getElementById('lista');
-    if (!conversaciones.length) { box.innerHTML = '<div class="p-8 text-center text-slate-400">No hay conversaciones registradas.</div>'; return; }
+    if (!conversaciones.length) {
+        box.innerHTML = '<div class="p-8 text-center text-slate-400 text-xs">No hay conversaciones registradas.</div>';
+        return;
+    }
     box.innerHTML = conversaciones.map(c => {
         const phone = c.phone || c.telefono || c.numero || '';
         const cedula = c.identification || c.identificacion || c.cedula || '';
         const mode = c.mode_current || c.modo || 'AGENTE';
         const selected = actual && String(actual.phone || actual.telefono || '') === String(phone);
-        return `<button onclick="seleccionar('${escapeHtml(String(phone))}')" class="w-full text-left p-4 hover:bg-slate-50 ${selected ? 'bg-blue-50' : ''}">
-            <div class="flex justify-between gap-3"><div class="font-bold text-slate-800">${escapeHtml(phone)}</div>${modoBadge(mode)}</div>
-            <div class="text-xs text-slate-500 mt-1">Cédula: ${escapeHtml(cedula || 'No detectada')}</div>
-            <div class="text-xs text-slate-400 mt-2">${escapeHtml(c.last_message || c.ultimo_mensaje || 'Sin mensaje reciente')}</div>
+        const lastMsg = c.last_message || c.ultimo_mensaje || 'Sin mensajes recientes';
+        const hora = formatHora(c.last_activity || c.ultima_actividad);
+
+        return `
+        <button onclick="seleccionar('${escapeHtml(String(phone))}')" class="w-full text-left p-3.5 hover:bg-slate-50 transition-colors flex items-center gap-3 ${selected ? 'bg-emerald-50/70 border-r-4 border-emerald-600' : ''}">
+            <div class="w-10 h-10 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-xs shrink-0">
+                ${phone.slice(-3) || 'WA'}
+            </div>
+            <div class="min-w-0 flex-1">
+                <div class="flex items-center justify-between gap-1">
+                    <span class="font-bold text-xs text-slate-900 truncate">${escapeHtml(phone)}</span>
+                    <span class="text-[10px] text-slate-400 shrink-0">${escapeHtml(hora)}</span>
+                </div>
+                <div class="flex items-center justify-between gap-1 mt-0.5">
+                    <span class="text-[11px] text-slate-500 truncate">CC: ${escapeHtml(cedula || 'No detectada')}</span>
+                    ${modoBadge(mode)}
+                </div>
+                <p class="text-[11px] text-slate-400 truncate mt-1">${escapeHtml(lastMsg)}</p>
+            </div>
         </button>`;
     }).join('');
+    if (window.lucide) lucide.createIcons();
 }
 
 async function cargarConversaciones() {
@@ -139,15 +281,18 @@ async function cargarConversaciones() {
         const buscar = encodeURIComponent(document.getElementById('buscar').value.trim());
         const data = await api(`/supervision-agente/api/conversaciones?limit=200&buscar=${buscar}`);
         conversaciones = normalizarLista(data);
-        document.getElementById('conexion').className = 'flex items-center gap-2 px-4 py-2 rounded-xl border bg-emerald-50 border-emerald-200 text-emerald-700';
-        document.getElementById('conexion-dot').className = 'w-2.5 h-2.5 rounded-full bg-emerald-500';
+        
+        document.getElementById('conexion').className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-emerald-50 border-emerald-200 text-emerald-700 text-xs font-medium';
+        document.getElementById('conexion-dot').className = 'w-2 h-2 rounded-full bg-emerald-500';
         document.getElementById('conexion-text').textContent = 'Agente conectado';
-        renderStats(); renderLista();
+        
+        renderStats();
+        renderLista();
     } catch (e) {
-        document.getElementById('conexion').className = 'flex items-center gap-2 px-4 py-2 rounded-xl border bg-rose-50 border-rose-200 text-rose-700';
-        document.getElementById('conexion-dot').className = 'w-2.5 h-2.5 rounded-full bg-rose-500';
-        document.getElementById('conexion-text').textContent = e.message;
-        document.getElementById('lista').innerHTML = `<div class="p-8 text-center text-rose-500">${escapeHtml(e.message)}<div class="text-xs text-slate-400 mt-2">Revisa AGENT_SUPERVISION_URL y la clave servidor-a-servidor.</div></div>`;
+        document.getElementById('conexion').className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-rose-50 border-rose-200 text-rose-700 text-xs font-medium';
+        document.getElementById('conexion-dot').className = 'w-2 h-2 rounded-full bg-rose-500';
+        document.getElementById('conexion-text').textContent = 'Agente no disponible';
+        document.getElementById('lista').innerHTML = `<div class="p-8 text-center text-rose-500 text-xs">${escapeHtml(e.message)}<div class="text-[10px] text-slate-400 mt-2">Verifica AGENT_SUPERVISION_URL en Render.</div></div>`;
     }
 }
 
@@ -156,70 +301,201 @@ async function seleccionar(phone) {
         const c = conversaciones.find(x => String(x.phone || x.telefono || x.numero || '') === String(phone)) || {phone};
         actual = c;
         renderLista();
+        
         document.getElementById('detalle-vacio').classList.add('hidden');
         document.getElementById('detalle').classList.remove('hidden');
+        
         const telefono = c.phone || c.telefono || c.numero || phone;
         document.getElementById('detalle-telefono').textContent = telefono;
-        const modo = c.mode_current || c.modo || 'AGENTE';
+        
+        const modo = String(c.mode_current || c.modo || 'AGENTE').toUpperCase();
         const badge = document.getElementById('detalle-modo');
-        badge.textContent = String(modo).toUpperCase();
-        badge.className = String(modo).toUpperCase() === 'HUMANO' ? 'text-xs font-bold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800' : 'text-xs font-bold px-2.5 py-1 rounded-full bg-blue-100 text-blue-800';
-        document.getElementById('detalle-meta').textContent = `Inicio: ${c.started_at || c.inicio || '-'} · Actualización: ${c.last_activity || c.ultima_actividad || '-'}`;
+        badge.textContent = modo;
+        badge.className = modo === 'HUMANO' 
+            ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200' 
+            : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200';
+        
+        document.getElementById('detalle-meta').textContent = `Iniciado: ${c.started_at || c.inicio || '-'} · Actualizado: ${c.last_activity || c.ultima_actividad || '-'}`;
         document.getElementById('d-cedula').textContent = c.identification || c.identificacion || c.cedula || 'No detectada';
-        document.getElementById('d-deuda').textContent = c.debt_state || c.estado_deuda || 'Sin evento registrado';
+        document.getElementById('d-deuda').textContent = c.debt_state || c.estado_deuda || 'Sin mora activa';
         document.getElementById('d-liquidacion').textContent = c.liquidation_state || c.estado_liquidacion || 'Sin liquidación';
         document.getElementById('d-ultima').textContent = c.last_activity || c.ultima_actividad || '-';
-        document.getElementById('btn-tomar').classList.toggle('hidden', String(modo).toUpperCase() === 'HUMANO');
-        document.getElementById('btn-devolver').classList.toggle('hidden', String(modo).toUpperCase() !== 'HUMANO');
+        
+        const isHumano = modo === 'HUMANO';
+        document.getElementById('btn-tomar').classList.toggle('hidden', isHumano);
+        document.getElementById('btn-devolver').classList.toggle('hidden', !isHumano);
+        document.getElementById('modo-warning').classList.toggle('hidden', isHumano);
+
         await cargarMensajes(telefono);
-    } catch (e) { alert(e.message); }
+        if (window.lucide) lucide.createIcons();
+    } catch (e) { 
+        alert(e.message); 
+    }
 }
 
 async function cargarMensajes(phone) {
+    const box = document.getElementById('mensajes');
     try {
         const data = await api(`/supervision-agente/api/conversaciones/${encodeURIComponent(phone)}/mensajes?limit=1000`);
         const mensajes = data.mensajes || data.messages || data.data || [];
-        document.getElementById('mensajes').innerHTML = mensajes.map(m => {
+        
+        if (!mensajes.length) {
+            box.innerHTML = '<div class="flex items-center justify-center h-full text-slate-400 text-xs">Sin mensajes en esta conversación.</div>';
+            return;
+        }
+
+        box.innerHTML = mensajes.map(m => {
             const direction = String(m.direction || m.direccion || '').toUpperCase();
             const author = String(m.author || m.autor || (direction === 'IN' || direction === 'INBOUND' ? 'DEUDOR' : 'AGENTE')).toUpperCase();
             const human = author === 'HUMANO';
             const system = author === 'SISTEMA';
             const right = !system && direction !== 'IN' && direction !== 'INBOUND';
-            const bubble = system ? 'bg-slate-100 border border-slate-200 text-slate-600 mx-auto' : human ? 'bg-amber-100 text-amber-900' : right ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-800';
-            return `<div class="flex ${right ? 'justify-end' : system ? 'justify-center' : 'justify-start'}"><div class="max-w-[85%] ${bubble} rounded-2xl px-4 py-3 shadow-sm"><div class="text-[10px] font-bold uppercase opacity-70 mb-1">${escapeHtml(author)} · ${escapeHtml(m.created_at || m.fecha || '')}</div><div class="text-sm whitespace-pre-wrap">${escapeHtml(m.content || m.contenido || m.mensaje || '')}</div></div></div>`;
-        }).join('') || '<div class="text-center text-slate-400 py-10">Sin mensajes.</div>';
-        const box = document.getElementById('mensajes'); box.scrollTop = box.scrollHeight;
-    } catch (e) { document.getElementById('mensajes').innerHTML = `<div class="text-center text-rose-500 py-10">${escapeHtml(e.message)}</div>`; }
+            const hora = formatHora(m.created_at || m.fecha);
+
+            if (system) {
+                return `
+                <div class="flex justify-center my-2">
+                    <div class="bg-white/80 border border-slate-200/80 rounded-full px-3 py-0.5 text-[10px] text-slate-500 shadow-xs">
+                        ${escapeHtml(m.content || m.contenido || m.mensaje || '')}
+                    </div>
+                </div>`;
+            }
+
+            // Burbujas estilo WhatsApp
+            if (right) {
+                // Outbound (Agente o Humano)
+                const isIA = !human;
+                const bubbleBg = isIA 
+                    ? 'bg-[#d9fdd3] text-emerald-950 border border-emerald-200/60' 
+                    : 'bg-amber-100 text-amber-950 border border-amber-200';
+                const labelText = isIA ? '🤖 Agente IA' : '👤 Tú (Control Humano)';
+                const labelColor = isIA ? 'text-emerald-800' : 'text-amber-800';
+
+                return `
+                <div class="flex justify-end">
+                    <div class="max-w-[82%] md:max-w-[70%] ${bubbleBg} rounded-2xl rounded-tr-xs px-3.5 py-2 shadow-xs relative">
+                        <div class="flex items-center justify-between gap-4 mb-1">
+                            <span class="text-[10px] font-bold ${labelColor}">${labelText}</span>
+                        </div>
+                        <div class="text-xs md:text-sm whitespace-pre-wrap leading-relaxed">${escapeHtml(m.content || m.contenido || m.mensaje || '')}</div>
+                        <div class="text-[10px] text-slate-400/90 text-right mt-1 flex items-center justify-end gap-1">
+                            <span>${escapeHtml(hora)}</span>
+                            <i data-lucide="check-check" class="w-3.5 h-3.5 text-emerald-600"></i>
+                        </div>
+                    </div>
+                </div>`;
+            } else {
+                // Inbound (Deudor)
+                return `
+                <div class="flex justify-start">
+                    <div class="max-w-[82%] md:max-w-[70%] bg-white text-slate-800 rounded-2xl rounded-tl-xs px-3.5 py-2 shadow-xs border border-slate-100 relative">
+                        <div class="flex items-center justify-between gap-4 mb-1">
+                            <span class="text-[10px] font-bold text-slate-500">Deudor (${escapeHtml(actual ? (actual.identification || actual.cedula || 'Contacto') : 'Contacto')})</span>
+                        </div>
+                        <div class="text-xs md:text-sm whitespace-pre-wrap leading-relaxed">${escapeHtml(m.content || m.contenido || m.mensaje || '')}</div>
+                        <div class="text-[10px] text-slate-400 text-right mt-1">
+                            <span>${escapeHtml(hora)}</span>
+                        </div>
+                    </div>
+                </div>`;
+            }
+        }).join('');
+
+        // Scrollear automáticamente hacia el final para ver los últimos mensajes
+        box.scrollTop = box.scrollHeight;
+        if (window.lucide) lucide.createIcons();
+    } catch (e) { 
+        box.innerHTML = `<div class="text-center text-rose-500 text-xs py-10">${escapeHtml(e.message)}</div>`; 
+    }
 }
 
-function telefonoActual() { return actual && (actual.phone || actual.telefono || actual.numero); }
+function telefonoActual() { 
+    return actual && (actual.phone || actual.telefono || actual.numero); 
+}
 
 async function tomarControl() {
-    const telefono = telefonoActual(); if (!telefono) return;
-    if (!confirm(`Tomar control de ${telefono}? La IA dejará de responder mientras HUMANO esté activo.`)) return;
-    try { await api('/supervision-agente/api/tomar-control', {method:'POST', body:JSON.stringify({telefono, usuario:usuarioERP})}); await cargarConversaciones(); await seleccionar(telefono); } catch (e) { alert(e.message); }
+    const telefono = telefonoActual(); 
+    if (!telefono) return;
+    if (!confirm(`¿Tomar control manual de ${telefono}?
+La IA pausará sus respuestas automáticas hasta que la reactives.`)) return;
+    try { 
+        await api('/supervision-agente/api/tomar-control', {
+            method:'POST', 
+            body: JSON.stringify({telefono, usuario: usuarioERP})
+        }); 
+        await cargarConversaciones(); 
+        await seleccionar(telefono); 
+    } catch (e) { 
+        alert(e.message); 
+    }
 }
 
 async function devolverAgente() {
-    const telefono = telefonoActual(); if (!telefono) return;
-    if (!confirm(`Devolver ${telefono} al agente?`)) return;
-    try { await api('/supervision-agente/api/devolver-agente', {method:'POST', body:JSON.stringify({telefono, usuario:usuarioERP})}); await cargarConversaciones(); await seleccionar(telefono); } catch (e) { alert(e.message); }
+    const telefono = telefonoActual(); 
+    if (!telefono) return;
+    if (!confirm(`¿Devolver la conversación de ${telefono} al agente IA?
+La IA reanudará la atención automática.`)) return;
+    try { 
+        await api('/supervision-agente/api/devolver-agente', {
+            method:'POST', 
+            body: JSON.stringify({telefono, usuario: usuarioERP})
+        }); 
+        await cargarConversaciones(); 
+        await seleccionar(telefono); 
+    } catch (e) { 
+        alert(e.message); 
+    }
 }
 
 async function enviarMensaje() {
-    const telefono = telefonoActual(); const texto = document.getElementById('texto').value.trim();
+    const telefono = telefonoActual(); 
+    const input = document.getElementById('texto');
+    const texto = input.value.trim();
     if (!telefono || !texto) return;
+
+    const btn = document.getElementById('btn-enviar');
+    btn.disabled = true;
+    btn.classList.add('opacity-50');
+
     try {
-        await api('/supervision-agente/api/mensaje', {method:'POST', body:JSON.stringify({telefono, mensaje:texto, usuario:usuarioERP})});
-        document.getElementById('texto').value = '';
+        await api('/supervision-agente/api/mensaje', {
+            method:'POST', 
+            body: JSON.stringify({telefono, mensaje: texto, usuario: usuarioERP})
+        });
+        input.value = '';
+        input.style.height = 'auto';
         await cargarMensajes(telefono);
         await cargarConversaciones();
-    } catch (e) { alert(e.message); }
+    } catch (e) { 
+        alert('Error enviando mensaje: ' + e.message); 
+    } finally {
+        btn.disabled = false;
+        btn.classList.remove('opacity-50');
+        input.focus();
+    }
 }
 
-document.getElementById('buscar').addEventListener('keydown', e => { if (e.key === 'Enter') cargarConversaciones(); });
+// Escuchador de teclado: Enter para enviar, Shift+Enter para salto de línea
+const inputTexto = document.getElementById('texto');
+inputTexto.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        enviarMensaje();
+    }
+});
+
+// Auto-ajuste de altura del textarea (hasta 4 renglones)
+inputTexto.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 110) + 'px';
+});
+
+document.getElementById('buscar').addEventListener('keydown', e => { 
+    if (e.key === 'Enter') cargarConversaciones(); 
+});
+
 cargarConversaciones();
-lucide.createIcons();
+if (window.lucide) lucide.createIcons();
 setInterval(cargarConversaciones, 15000);
 </script>
 {% endblock %}
