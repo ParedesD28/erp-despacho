@@ -1,21 +1,18 @@
-"""Puente seguro ERP -> agente de cobranza.
-
-El navegador nunca recibe la clave del agente. Todas las operaciones contra el
-agente se realizan servidor-a-servidor usando las variables de entorno de Render.
-"""
+"""Puente seguro ERP -> agente de cobranza (Supervisión WhatsApp)."""
 import os
 import requests
-from fastapi import Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-import main
+from fastapi.templating import Jinja2Templates
+
+router = APIRouter()
+templates = Jinja2Templates(directory="templates")
 
 _TIMEOUT = 20
 _DEFAULT_AGENT_URL = "https://bot-cobranzas-ph.onrender.com"
 
 
 def _agent_url():
-    # La variable de entorno sigue teniendo prioridad. El valor por defecto
-    # corresponde al servicio Render actual del agente de cobranza.
     return (os.getenv("AGENT_SUPERVISION_URL") or _DEFAULT_AGENT_URL).rstrip("/")
 
 
@@ -78,22 +75,22 @@ def _normalizar_conversaciones(data):
     return data
 
 
-@main.app.get("/supervision-agente")
+@router.get("/supervision-agente")
 def supervision_agente(request: Request):
-    return main.templates.TemplateResponse(
+    return templates.TemplateResponse(
         request=request,
         name="supervision_agente.html",
         context={"request": request, "usuario": _usuario(request), "configurado": True},
     )
 
 
-@main.app.get("/supervision-agente/api/estado")
+@router.get("/supervision-agente/api/estado")
 def supervision_estado():
     data, status = _proxy("GET", "/control/health")
     return JSONResponse(data, status_code=status)
 
 
-@main.app.get("/supervision-agente/api/conversaciones")
+@router.get("/supervision-agente/api/conversaciones")
 def supervision_conversaciones(limit: int = 200, buscar: str = ""):
     data, status = _proxy(
         "GET",
@@ -103,7 +100,7 @@ def supervision_conversaciones(limit: int = 200, buscar: str = ""):
     return JSONResponse(_normalizar_conversaciones(data), status_code=status)
 
 
-@main.app.get("/supervision-agente/api/conversaciones/{telefono}/mensajes")
+@router.get("/supervision-agente/api/conversaciones/{telefono}/mensajes")
 def supervision_mensajes(telefono: str, limit: int = 1000):
     data, status = _proxy(
         "GET",
@@ -113,13 +110,13 @@ def supervision_mensajes(telefono: str, limit: int = 1000):
     return JSONResponse(data, status_code=status)
 
 
-@main.app.get("/supervision-agente/api/conversaciones/{telefono}/control")
+@router.get("/supervision-agente/api/conversaciones/{telefono}/control")
 def supervision_control(telefono: str):
     data, status = _proxy("GET", f"/control/conversaciones/{telefono}/control")
     return JSONResponse(data, status_code=status)
 
 
-@main.app.post("/supervision-agente/api/tomar-control")
+@router.post("/supervision-agente/api/tomar-control")
 async def supervision_tomar_control(request: Request):
     payload = await request.json()
     payload["usuario"] = payload.get("usuario") or _usuario(request)
@@ -127,7 +124,7 @@ async def supervision_tomar_control(request: Request):
     return JSONResponse(data, status_code=status)
 
 
-@main.app.post("/supervision-agente/api/devolver-agente")
+@router.post("/supervision-agente/api/devolver-agente")
 async def supervision_devolver_agente(request: Request):
     payload = await request.json()
     payload["usuario"] = payload.get("usuario") or _usuario(request)
@@ -135,7 +132,7 @@ async def supervision_devolver_agente(request: Request):
     return JSONResponse(data, status_code=status)
 
 
-@main.app.post("/supervision-agente/api/mensaje")
+@router.post("/supervision-agente/api/mensaje")
 async def supervision_mensaje(request: Request):
     payload = await request.json()
     payload["usuario"] = payload.get("usuario") or _usuario(request)
@@ -143,12 +140,3 @@ async def supervision_mensaje(request: Request):
         payload["texto"] = payload["mensaje"]
     data, status = _proxy("POST", "/control/mensaje", json=payload)
     return JSONResponse(data, status_code=status)
-
-
-print(
-    "[SUPERVISION AGENTE] Puente ERP -> agente cargado | "
-    f"URL={'ENV' if os.getenv('AGENT_SUPERVISION_URL') else 'DEFAULT'} | "
-    f"DESTINO={_agent_url()} | "
-    f"CLAVE configurada={'SI' if (os.getenv('AGENT_SUPERVISION_KEY') or os.getenv('LIQUIDADOR_API_KEY')) else 'NO'}",
-    flush=True,
-)

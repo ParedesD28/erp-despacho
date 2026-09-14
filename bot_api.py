@@ -1,28 +1,59 @@
+"""API M2M para integración con el agente inteligente de cobranza (WhatsApp)."""
 import os
 import io
+import time
 import secrets
+import hashlib
+import hmac
+from pathlib import Path
 from datetime import datetime, date
 from typing import Any
 
-import psycopg2
-from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, FileResponse
 
-BOT_API_KEY = os.getenv("LIQUIDADOR_API_KEY")
-PUBLIC_BASE_URL = (
-    os.getenv("PUBLIC_BASE_URL")
-    or os.getenv("RENDER_EXTERNAL_URL")
+import liquidador
+import exportaciones
+
+router = APIRouter()
+
+BOT_API_KEY = (os.getenv("LIQUIDADOR_API_KEY") or "").strip().strip('"').strip("'")
+_TOKEN_TTL_SECONDS = int(os.getenv("BOT_PDF_URL_TTL", "900"))
+_PDF_SECRET = (
+    os.getenv("BOT_PDF_PUBLIC_SECRET")
+    or BOT_API_KEY
     or ""
-).rstrip("/")
+).strip().strip('"').strip("'")
+
+
+def _public_base_url() -> str:
+    return (
+        os.getenv("PUBLIC_BASE_URL")
+        or os.getenv("RENDER_EXTERNAL_URL")
+        or ""
+    ).rstrip("/")
 
 
 def _require_api_key(request: Request) -> None:
     expected = BOT_API_KEY
     supplied = request.headers.get("X-API-Key")
     if not expected:
-        raise HTTPException(status_code=503, detail="LIQUIDADOR_API_KEY no esta configurada")
+        raise HTTPException(status_code=503, detail="LIQUIDADOR_API_KEY no está configurada")
     if not supplied or not secrets.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="No autorizado")
+
+
+def _sign(filename: str, expires: int) -> str:
+    payload = f"{filename}|{expires}".encode("utf-8")
+    return hmac.new(_PDF_SECRET.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+
+def build_signed_pdf_url(filename: str, base_url: str) -> str:
+    if not _PDF_SECRET:
+        raise RuntimeError("BOT_PDF_PUBLIC_SECRET/LIQUIDADOR_API_KEY no está configurada")
+    expires = int(time.time()) + _TOKEN_TTL_SECONDS
+    token = _sign(filename, expires)
+    return f"{base_url.rstrip('/')}/api/bot/pdf/{filename}?expires={expires}&token={token}"
 
 
 def _parse_payload(payload: Any) -> tuple[int, date]:
@@ -50,9 +81,7 @@ def _parse_payload(payload: Any) -> tuple[int, date]:
 
 
 def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[list[dict], dict, tuple]:
-    import main
-
-    resultados, resumen, inm_info = main.motor_calculo_judicial(
+    resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
         inmueble_id,
         "usura",
         2.5,
@@ -60,17 +89,14 @@ def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[lis
         0.0,
         fecha_corte,
     )
-
     if not inm_info:
-        raise HTTPException(status_code=404, detail="No existe informacion del inmueble")
+        raise HTTPException(status_code=404, detail="No existe información del inmueble")
     if not resultados:
         raise HTTPException(status_code=404, detail="No hay movimientos para liquidar")
-
     return resultados, resumen, inm_info
 
 
 def _resumen_tasas(resultados: list[dict]) -> tuple[list[dict], str]:
-    """Expone al agente las tasas realmente usadas por el motor, sin recalcularlas."""
     tasas = []
     vistos = set()
     for fila in resultados:
@@ -95,92 +121,28 @@ def _resumen_tasas(resultados: list[dict]) -> tuple[list[dict], str]:
     return tasas, fuente
 
 
-def _generar_pdf(inmueble_id: int, fecha_corte: date, resultados: list[dict], resumen: dict, inm_info: tuple) -> str:
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    from reportlab.lib import colors
-
-    if not PUBLIC_BASE_URL:
-        raise HTTPException(status_code=500, detail="PUBLIC_BASE_URL/RENDER_EXTERNAL_URL no esta configurada")
-
-    os.makedirs("static/pdfs", exist_ok=True)
-    nombre_pdf = f"Estado_Cuenta_{secrets.token_urlsafe(18)}.pdf"
-    ruta = os.path.join("static", "pdfs", nombre_pdf)
-
-    styles = getSampleStyleSheet()
-    doc = SimpleDocTemplate(ruta, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
-    elementos = [
-        Paragraph("ESTADO DE CUENTA OFICIAL", styles["Title"]),
-        Spacer(1, 10),
-        Paragraph(f"Conjunto / Inmueble: {inm_info[0]} - {inm_info[1]}", styles["BodyText"]),
-        Paragraph(f"Deudor: {inm_info[2]}", styles["BodyText"]),
-        Paragraph(f"Identificacion: {inm_info[3]}", styles["BodyText"]),
-        Paragraph(f"Inmueble ID: {inmueble_id}", styles["BodyText"]),
-        Paragraph(f"Fecha de corte: {fecha_corte.isoformat()}", styles["BodyText"]),
-        Spacer(1, 14),
-    ]
-
-    def dinero(valor):
-        return f"${float(valor or 0):,.0f}"
-
-    resumen_data = [
-        ["Concepto", "Valor"],
-        ["Capital", dinero(resumen.get("capital"))],
-        ["Intereses de mora", dinero(resumen.get("intereses"))],
-        [f"Honorarios ({float(resumen.get('honorarios_pct', 0)):g}%)", dinero(resumen.get("honorarios"))],
-        ["Gastos procesales", dinero(resumen.get("gastos"))],
-        ["GRAN TOTAL", dinero(resumen.get("gran_total"))],
-    ]
-    tabla = Table(resumen_data, colWidths=[330, 130])
-    tabla.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-        ("ALIGN", (1, 1), (1, -1), "RIGHT"),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-    ]))
-    elementos.extend([tabla, Spacer(1, 16), Paragraph("Detalle mensual", styles["Heading2"])])
-
-    detalle = [["Periodo", "Capital", "Interes", "Capital + Interes"]]
-    for fila in resultados:
-        detalle.append([
-            str(fila.get("periodo", fila.get("mes", fila.get("desde", "")))),
-            dinero(fila.get("capital", fila.get("cap_mes", fila.get("capital_liquidable", 0)))),
-            dinero(fila.get("interes", fila.get("intereses", 0))),
-            dinero(fila.get("cap_int", 0)),
-        ])
-
-    tabla_detalle = Table(detalle, repeatRows=1, colWidths=[130, 110, 110, 110])
-    tabla_detalle.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
-        ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
-    elementos.append(tabla_detalle)
-    doc.build(elementos)
-
-    return f"{PUBLIC_BASE_URL}/static/pdfs/{nombre_pdf}"
+def _generar_pdf_unificado(inmueble_id: int, fecha_corte: date, resultados: list[dict], resumen: dict, inm_info: tuple) -> str:
+    base = _public_base_url()
+    if not base:
+        raise HTTPException(status_code=500, detail="PUBLIC_BASE_URL/RENDER_EXTERNAL_URL no está configurada")
+    pdf_path = exportaciones.generar_pdf_liquidacion(inmueble_id, fecha_corte, resultados, resumen, inm_info)
+    filename = os.path.basename(pdf_path)
+    return build_signed_pdf_url(filename, base)
 
 
+@router.post("/api/bot/liquidar")
 async def liquidar_para_bot(request: Request):
     _require_api_key(request)
     try:
         payload = await request.json()
     except Exception:
-        raise HTTPException(status_code=422, detail="El cuerpo debe ser JSON valido")
+        raise HTTPException(status_code=422, detail="El cuerpo debe ser JSON válido")
 
     inmueble_id, fecha_corte = _parse_payload(payload)
 
     try:
         resultados, resumen, inm_info = _obtener_datos_liquidacion(inmueble_id, fecha_corte)
-        url_pdf = _generar_pdf(inmueble_id, fecha_corte, resultados, resumen, inm_info)
+        url_pdf = _generar_pdf_unificado(inmueble_id, fecha_corte, resultados, resumen, inm_info)
         tasas_aplicadas, fuente_tasas = _resumen_tasas(resultados)
 
         print(
@@ -194,7 +156,7 @@ async def liquidar_para_bot(request: Request):
 
         return JSONResponse({
             "status": "success",
-            "mensaje": "Liquidacion generada correctamente",
+            "mensaje": "Liquidación generada correctamente",
             "datos": {
                 "inmueble_id": inmueble_id,
                 "deudor": inm_info[2],
@@ -214,9 +176,34 @@ async def liquidar_para_bot(request: Request):
         })
     except HTTPException:
         raise
-    except (psycopg2.Error, ValueError, KeyError, IndexError) as exc:
-        print(f"[BOT LIQUIDADOR] Error de datos: {repr(exc)}", flush=True)
-        raise HTTPException(status_code=500, detail="No fue posible generar la liquidacion")
     except Exception as exc:
-        print(f"[BOT LIQUIDADOR] Error inesperado: {repr(exc)}", flush=True)
-        raise HTTPException(status_code=500, detail="No fue posible generar la liquidacion")
+        print(f"[BOT LIQUIDADOR] Error generando liquidación: {exc!r}", flush=True)
+        raise HTTPException(status_code=500, detail="No fue posible generar la liquidación")
+
+
+@router.get("/api/bot/pdf/{filename}", include_in_schema=False)
+def servir_pdf_bot(filename: str, expires: int, token: str):
+    if not _PDF_SECRET:
+        raise HTTPException(status_code=503, detail="Servicio PDF no configurado")
+    if not filename or Path(filename).name != filename:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    try:
+        expires_int = int(expires)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=403, detail="Enlace inválido")
+    if expires_int < int(time.time()):
+        raise HTTPException(status_code=410, detail="Enlace expirado")
+    expected = _sign(filename, expires_int)
+    if not token or not hmac.compare_digest(expected, token):
+        raise HTTPException(status_code=403, detail="Enlace no autorizado")
+
+    path = Path("static") / "pdfs" / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+
+    return FileResponse(
+        path=str(path),
+        media_type="application/pdf",
+        filename=filename,
+        headers={"Cache-Control": "private, max-age=900"},
+    )
