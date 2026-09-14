@@ -209,6 +209,7 @@
                                 <form method="POST" action="/crm/anular" onsubmit="return confirm('¿Estás seguro de anular esta anotación? Desaparecerá de la vista, pero se conservará en auditoría interna.');">
                                     <input type="hidden" name="gestion_id" value="{{ h.id }}">
                                     <input type="hidden" name="inmueble_id" value="{{ inmueble_actual.id }}">
+                                    <input type="hidden" name="tabla_origen" value="{{ h.tabla_origen or 'gestiones_crm' }}">
                                     <button type="submit" class="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-md transition-all shadow-sm border border-transparent hover:border-red-200" title="Anular Anotación">
                                         <i data-lucide="trash-2" class="w-4 h-4"></i>
                                     </button>
