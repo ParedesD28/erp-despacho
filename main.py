@@ -229,7 +229,14 @@ def vista_login(request: Request):
 
 @app.get("/dashboard")
 def vista_dashboard(request: Request):
+    from observability import log_msg
+    import time
+
+    log_msg("🔍 [DASHBOARD]", "Petición recibida, solicitando conexión a BD...")
+    t0 = time.perf_counter()
     conn = db.get_connection()
+    log_msg("🔌 [DASHBOARD]", "Conexión a BD lista", ms=round((time.perf_counter() - t0) * 1000, 1))
+    
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # 1. Total Procesos Activos
@@ -242,7 +249,7 @@ def vista_dashboard(request: Request):
             row_i = cur.fetchone()
             total_inmuebles = row_i["total"] if row_i else 0
 
-            # 3. Acuerdos de Pago (Hoy, Vencidos, Próximos, Monto Total)
+            # 3. Acuerdos de Pago
             hoy = date.today()
             acuerdos_hoy = []
             acuerdos_vencidos = []
@@ -250,7 +257,6 @@ def vista_dashboard(request: Request):
             monto_acuerdos_vigentes = 0.0
 
             if expedientes_service._table_exists(cur, "acuerdos_pago"):
-                # Hoy
                 cur.execute("""
                     SELECT a.*, i.conjunto_residencial, i.torre_apto
                     FROM acuerdos_pago a
@@ -260,7 +266,6 @@ def vista_dashboard(request: Request):
                 """, (hoy,))
                 acuerdos_hoy = [dict(r) for r in cur.fetchall()]
 
-                # Vencidos / En mora
                 cur.execute("""
                     SELECT a.*, i.conjunto_residencial, i.torre_apto
                     FROM acuerdos_pago a
@@ -270,7 +275,6 @@ def vista_dashboard(request: Request):
                 """, (hoy,))
                 acuerdos_vencidos = [dict(r) for r in cur.fetchall()]
 
-                # Próximos (próximos 7 días)
                 cur.execute("""
                     SELECT a.*, i.conjunto_residencial, i.torre_apto
                     FROM acuerdos_pago a
@@ -280,7 +284,6 @@ def vista_dashboard(request: Request):
                 """, (hoy, hoy))
                 acuerdos_proximos = [dict(r) for r in cur.fetchall()]
 
-                # Monto total vigente
                 cur.execute("SELECT COALESCE(SUM(valor_acordado), 0) AS suma FROM acuerdos_pago WHERE estado = 'PENDIENTE'")
                 row_s = cur.fetchone()
                 monto_acuerdos_vigentes = float(row_s["suma"]) if row_s else 0.0
@@ -295,20 +298,25 @@ def vista_dashboard(request: Request):
                 """)
                 terminos_proximos = [dict(r) for r in cur.fetchall()]
 
-        return render_template(
-            "dashboard.html",
-            {
-                "request": request,
-                "total_procesos": total_procesos,
-                "total_inmuebles": total_inmuebles,
-                "acuerdos_hoy": acuerdos_hoy,
-                "acuerdos_vencidos": acuerdos_vencidos,
-                "acuerdos_proximos": acuerdos_proximos,
-                "monto_acuerdos_vigentes": monto_acuerdos_vigentes,
-                "terminos_proximos": terminos_proximos,
-                "hoy": str(hoy),
-            },
-        )
+            log_msg("📊 [DASHBOARD BD]", f"Procesos={total_procesos} | Inmuebles={total_inmuebles} | Acuerdos Hoy={len(acuerdos_hoy)}")
+
+            t_render = time.perf_counter()
+            resp = render_template(
+                "dashboard.html",
+                {
+                    "request": request,
+                    "total_procesos": total_procesos,
+                    "total_inmuebles": total_inmuebles,
+                    "acuerdos_hoy": acuerdos_hoy,
+                    "acuerdos_vencidos": acuerdos_vencidos,
+                    "acuerdos_proximos": acuerdos_proximos,
+                    "monto_acuerdos_vigentes": monto_acuerdos_vigentes,
+                    "terminos_proximos": terminos_proximos,
+                    "hoy": str(hoy),
+                },
+            )
+            log_msg("🎨 [DASHBOARD HTML]", "Plantilla generada exitosamente", ms=round((time.perf_counter() - t_render) * 1000, 1))
+            return resp
     finally:
         conn.release()
 
