@@ -2,44 +2,49 @@
 
 {% block contenido %}
 <div class="flex flex-col h-full overflow-hidden p-3 md:p-5 gap-3">
-    <!-- BARRA SUPERIOR COMPACTA -->
-    <div class="bg-white rounded-2xl border border-slate-200 px-4 py-3 shadow-xs flex flex-wrap items-center justify-between gap-3 shrink-0">
+    <!-- BARRA SUPERIOR COMPACTA CON LEYENDA CLARA -->
+    <div class="bg-white rounded-2xl border border-slate-200 px-4 py-2.5 shadow-xs flex flex-wrap items-center justify-between gap-3 shrink-0">
         <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shadow-xs">
+            <div class="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shadow-xs">
                 <i data-lucide="message-square-code" class="w-5 h-5"></i>
             </div>
             <div>
-                <h1 class="text-lg font-bold text-slate-900 leading-tight">Supervisión WhatsApp & Agente IA</h1>
-                <p class="text-xs text-slate-500">Monitoreo en tiempo real, auditoría de respuestas y toma de control humano</p>
+                <h1 class="text-base font-bold text-slate-900 leading-tight">Supervisión WhatsApp & Agente IA</h1>
+                <p class="text-[11px] text-slate-500">Monitoreo en tiempo real, auditoría y control de conversaciones</p>
             </div>
+        </div>
+
+        <!-- Leyenda Visual para Distinguir Mensajes -->
+        <div class="hidden md:flex items-center gap-2 px-3 py-1 bg-slate-50 border border-slate-200 rounded-xl text-[11px]">
+            <span class="font-bold text-slate-400 mr-1">Leyenda:</span>
+            <span class="inline-flex items-center gap-1 text-slate-700 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-white border border-slate-400"></span> Deudor (Izquierda)</span>
+            <span class="text-slate-300">|</span>
+            <span class="inline-flex items-center gap-1 text-emerald-800 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-[#dcf8c6] border border-emerald-500"></span> Agente IA (Derecha)</span>
+            <span class="text-slate-300">|</span>
+            <span class="inline-flex items-center gap-1 text-amber-900 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-amber-200 border border-amber-500"></span> Abogado (Derecha)</span>
         </div>
 
         <!-- Mini KPIs / Estado del Servicio -->
         <div class="flex flex-wrap items-center gap-2">
-            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium">
+            <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium">
                 <span class="text-slate-400">Total:</span>
                 <span id="stat-total" class="font-bold">0</span>
             </div>
-            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 text-xs font-medium">
+            <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-medium">
                 <span class="w-2 h-2 rounded-full bg-blue-500"></span>
-                <span>En Agente:</span>
+                <span>IA:</span>
                 <span id="stat-agent" class="font-bold">0</span>
             </div>
-            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 text-xs font-medium">
+            <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 text-xs font-medium">
                 <span class="w-2 h-2 rounded-full bg-amber-500"></span>
                 <span>Humano:</span>
                 <span id="stat-human" class="font-bold">0</span>
             </div>
-            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-medium">
-                <span class="text-emerald-500">✓</span>
-                <span>Activas hoy:</span>
-                <span id="stat-active" class="font-bold">0</span>
-            </div>
 
             <!-- Estado Conexión Agente -->
-            <div id="conexion" class="flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-slate-50 border-slate-200 text-slate-600 text-xs font-medium">
+            <div id="conexion" class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-slate-50 border-slate-200 text-slate-600 text-xs font-medium">
                 <span id="conexion-dot" class="w-2 h-2 rounded-full bg-slate-400 animate-pulse"></span>
-                <span id="conexion-text" class="font-semibold">Verificando...</span>
+                <span id="conexion-text" class="font-semibold">Conectando...</span>
             </div>
         </div>
     </div>
@@ -80,7 +85,7 @@
                     <i data-lucide="message-circle-dashed" class="w-10 h-10 opacity-70"></i>
                 </div>
                 <h3 class="text-base font-bold text-slate-800">Panel de Chat WhatsApp</h3>
-                <p class="text-xs text-slate-500 max-w-sm mt-1">Selecciona una conversación de la lista lateral para visualizar el historial, supervisar la IA o tomar el control manual.</p>
+                <p class="text-xs text-slate-500 max-w-sm mt-1">Selecciona una conversación de la lista lateral para supervisar los mensajes en vivo.</p>
                 <div class="mt-4 flex items-center gap-2 text-xs text-slate-400">
                     <i data-lucide="shield-check" class="w-4 h-4 text-emerald-500"></i>
                     <span>Comunicaciones auditadas y seguras</span>
@@ -93,7 +98,6 @@
                 <!-- 1. HEADER DEL CHAT FIJO ARRIBA -->
                 <header class="p-3 md:px-5 md:py-3 border-b border-slate-200 bg-white flex items-center justify-between gap-3 shrink-0 z-10 shadow-xs">
                     <div class="flex items-center gap-3 min-w-0">
-                        <!-- Avatar WhatsApp -->
                         <div class="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
                             <i data-lucide="user" class="w-5 h-5"></i>
                         </div>
@@ -108,11 +112,11 @@
 
                     <!-- Botones de Acción de Control -->
                     <div class="flex items-center gap-2 shrink-0">
-                        <button id="btn-tomar" onclick="tomarControl()" class="hidden px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5">
+                        <button id="btn-tomar" onclick="tomarControl()" class="hidden px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5">
                             <i data-lucide="hand" class="w-3.5 h-3.5"></i>
                             <span>Tomar control</span>
                         </button>
-                        <button id="btn-devolver" onclick="devolverAgente()" class="hidden px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5">
+                        <button id="btn-devolver" onclick="devolverAgente()" class="hidden px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5">
                             <i data-lucide="bot" class="w-3.5 h-3.5"></i>
                             <span>Devolver al agente</span>
                         </button>
@@ -142,38 +146,37 @@
                     </div>
                 </div>
 
-                <!-- 2. ÁREA DE MENSAJES CON SCROLL PROPIO (WHATSAPP STYLE) -->
-                <!-- Patrón de fondo sutil tipo chat -->
-                <div id="mensajes" class="flex-1 overflow-y-auto p-4 space-y-2.5 bg-[#eae6df] bg-opacity-40" style="background-image: radial-gradient(#cbd5e1 0.75px, transparent 0.75px); background-size: 16px 16px;">
+                <!-- 2. ÁREA DE MENSAJES CON SCROLL PROPIO (WHATSAPP STYLE CON BURBUJAS DE ALTO CONTRASTE) -->
+                <div id="mensajes" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-3.5 bg-[#efeae2]" style="background-image: radial-gradient(#d1d5db 0.8px, transparent 0.8px); background-size: 18px 18px;">
                     <!-- Los mensajes se inyectan dinámicamente aquí -->
                 </div>
 
                 <!-- 3. COMPOSITOR INFERIOR FIJO (SIEMPRE VISIBLE AL PIE) -->
                 <footer class="p-3 bg-[#f0f2f5] border-t border-slate-200 shrink-0 z-10 flex flex-col gap-1.5">
                     <!-- Advertencia de Modo -->
-                    <div id="modo-warning" class="hidden text-[11px] px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 flex items-center justify-between">
+                    <div id="modo-warning" class="hidden text-[11px] px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 flex items-center justify-between">
                         <span class="flex items-center gap-1.5">
                             <i data-lucide="alert-circle" class="w-3.5 h-3.5 text-amber-600"></i>
-                            <span>El agente IA está activo. Si envías un mensaje, se recomienda tomar el control manual.</span>
+                            <span>La IA está activa. Para chatear manualmente, presiona "Tomar control".</span>
                         </span>
-                        <button onclick="tomarControl()" class="underline font-bold hover:text-amber-900 ml-2">Tomar control ahora</button>
+                        <button onclick="tomarControl()" class="underline font-bold hover:text-amber-900 ml-2">Tomar control</button>
                     </div>
 
                     <!-- Fila de Entrada de Mensaje -->
                     <div class="flex items-center gap-2">
-                        <div class="flex-1 bg-white rounded-2xl border border-slate-200 px-3 py-1.5 flex items-center gap-2 focus-within:ring-2 focus-within:ring-emerald-400 focus-within:border-emerald-400 shadow-xs transition-all">
-                            <textarea id="texto" rows="1" placeholder="Escribe un mensaje de WhatsApp... (Enter para enviar, Shift+Enter para salto)" class="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none max-h-28 py-1 placeholder-slate-400"></textarea>
+                        <div class="flex-1 bg-white rounded-2xl border border-slate-200 px-3.5 py-1.5 flex items-center gap-2 focus-within:ring-2 focus-within:ring-emerald-400 focus-within:border-emerald-400 shadow-xs transition-all">
+                            <textarea id="texto" rows="1" placeholder="Escribe un mensaje de WhatsApp... (Enter para enviar)" class="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none max-h-28 py-1 placeholder-slate-400"></textarea>
                         </div>
                         <button id="btn-enviar" onclick="enviarMensaje()" class="w-10 h-10 rounded-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white flex items-center justify-center shrink-0 shadow-sm transition-all" title="Enviar mensaje">
                             <i data-lucide="send" class="w-4 h-4 ml-0.5"></i>
                         </button>
                     </div>
-                    <div class="flex items-center justify-between px-1">
-                        <span class="text-[10px] text-slate-400 flex items-center gap-1">
-                            <i data-lucide="lock" class="w-3 h-3 text-slate-400"></i>
-                            <span>Canal WhatsApp Business oficial</span>
+                    <div class="flex items-center justify-between px-1 text-[10px] text-slate-400">
+                        <span class="flex items-center gap-1">
+                            <i data-lucide="lock" class="w-3 h-3"></i>
+                            <span>Canal WhatsApp Business</span>
                         </span>
-                        <span class="text-[10px] text-slate-400">Presiona <b>Enter</b> para enviar</span>
+                        <span><b>Enter</b> envía · <b>Shift+Enter</b> salto</span>
                     </div>
                 </footer>
 
@@ -221,13 +224,9 @@ function renderStats() {
     const total = conversaciones.length;
     const human = conversaciones.filter(x => String(x.mode_current || x.modo || '').toUpperCase() === 'HUMANO').length;
     const agent = total - human;
-    const today = new Date().toISOString().slice(0,10);
-    const active = conversaciones.filter(x => String(x.last_activity || x.ultima_actividad || '').startsWith(today)).length;
-    
     document.getElementById('stat-total').textContent = total;
     document.getElementById('stat-agent').textContent = agent;
     document.getElementById('stat-human').textContent = human;
-    document.getElementById('stat-active').textContent = active;
 }
 
 function formatHora(fechaStr) {
@@ -256,7 +255,7 @@ function renderLista() {
         const hora = formatHora(c.last_activity || c.ultima_actividad);
 
         return `
-        <button onclick="seleccionar('${escapeHtml(String(phone))}')" class="w-full text-left p-3.5 hover:bg-slate-50 transition-colors flex items-center gap-3 ${selected ? 'bg-emerald-50/70 border-r-4 border-emerald-600' : ''}">
+        <button onclick="seleccionar('${escapeHtml(String(phone))}')" class="w-full text-left p-3 hover:bg-slate-50 transition-colors flex items-center gap-3 ${selected ? 'bg-emerald-50/70 border-r-4 border-emerald-600' : ''}">
             <div class="w-10 h-10 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-xs shrink-0">
                 ${phone.slice(-3) || 'WA'}
             </div>
@@ -282,17 +281,17 @@ async function cargarConversaciones() {
         const data = await api(`/supervision-agente/api/conversaciones?limit=200&buscar=${buscar}`);
         conversaciones = normalizarLista(data);
         
-        document.getElementById('conexion').className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-emerald-50 border-emerald-200 text-emerald-700 text-xs font-medium';
+        document.getElementById('conexion').className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-emerald-50 border-emerald-200 text-emerald-700 text-xs font-medium';
         document.getElementById('conexion-dot').className = 'w-2 h-2 rounded-full bg-emerald-500';
-        document.getElementById('conexion-text').textContent = 'Agente conectado';
+        document.getElementById('conexion-text').textContent = 'Conectado';
         
         renderStats();
         renderLista();
     } catch (e) {
-        document.getElementById('conexion').className = 'flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-rose-50 border-rose-200 text-rose-700 text-xs font-medium';
+        document.getElementById('conexion').className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-rose-50 border-rose-200 text-rose-700 text-xs font-medium';
         document.getElementById('conexion-dot').className = 'w-2 h-2 rounded-full bg-rose-500';
-        document.getElementById('conexion-text').textContent = 'Agente no disponible';
-        document.getElementById('lista').innerHTML = `<div class="p-8 text-center text-rose-500 text-xs">${escapeHtml(e.message)}<div class="text-[10px] text-slate-400 mt-2">Verifica AGENT_SUPERVISION_URL en Render.</div></div>`;
+        document.getElementById('conexion-text').textContent = 'Desconectado';
+        document.getElementById('lista').innerHTML = `<div class="p-8 text-center text-rose-500 text-xs">${escapeHtml(e.message)}</div>`;
     }
 }
 
@@ -333,6 +332,61 @@ async function seleccionar(phone) {
     }
 }
 
+/**
+ * DETERMINACIÓN PRECISA Y RIGUROSA DEL EMISOR DEL MENSAJE:
+ * - DEUDOR (Inbound / Cliente) -> Izquierda, Burbuja Blanca.
+ * - AGENTE (Outbound / Bot IA) -> Derecha, Burbuja Verde WhatsApp (#dcf8c6).
+ * - HUMANO (Outbound / Abogado) -> Derecha, Burbuja Ámbar (#fef3c7).
+ * - SISTEMA (Eventos internos) -> Centro, Píldora Gris.
+ */
+function clasificarEmisor(m) {
+    const role = String(m.role || m.rol || '').toUpperCase().trim();
+    const direction = String(m.direction || m.direccion || m.type || m.tipo || '').toUpperCase().trim();
+    const author = String(m.author || m.autor || m.sender || m.remitente || m.from || '').toUpperCase().trim();
+    const content = String(m.content || m.contenido || m.mensaje || '').trim();
+    const fromMe = m.from_me !== undefined ? m.from_me : (m.fromMe !== undefined ? m.fromMe : m.is_from_me);
+
+    // 1. Mensajes internos del sistema
+    if (author === 'SISTEMA' || author === 'SYSTEM' || role === 'SYSTEM' || role === 'SISTEMA' || 
+        content.startsWith('[SISTEMA') || content.startsWith('[SYSTEM') || content.startsWith('[PROMPT') || content.startsWith('[INTERNAL')) {
+        return 'SISTEMA';
+    }
+
+    // 2. Mensajes manuales enviados por el Abogado (Humano)
+    if (author === 'HUMANO' || author === 'HUMAN' || author === 'ABOGADO' || author === 'SUPERVISOR' || 
+        role === 'HUMANO' || role === 'HUMAN' || m.human === true || (m.usuario_humano && direction !== 'IN' && direction !== 'INBOUND')) {
+        return 'HUMANO';
+    }
+
+    // 3. Mensajes del Deudor (Entrantes / Inbound / User)
+    const esInboundDirection = ['IN', 'INBOUND', 'INCOMING', 'ENTRANTE', 'ENTRADA', 'RECEIVED'].includes(direction);
+    const esUserRole = ['USER', 'CLIENTE', 'CLIENT', 'DEUDOR', 'DEBTOR', 'CUSTOMER', 'CONTACT'].includes(role);
+    const esUserAuthor = ['USER', 'CLIENTE', 'CLIENT', 'DEUDOR', 'DEBTOR', 'CUSTOMER', 'CONTACT'].includes(author);
+    const esPhoneAuthor = actual && String(actual.phone || actual.telefono || '').replace(/\D/g, '') === author.replace(/\D/g, '') && author.length > 5;
+
+    if (esInboundDirection || esUserRole || esUserAuthor || esPhoneAuthor || fromMe === false) {
+        return 'DEUDOR';
+    }
+
+    // 4. Mensajes del Agente IA (Salientes / Outbound / Assistant)
+    const esOutboundDirection = ['OUT', 'OUTBOUND', 'SALIENTE', 'OUTGOING', 'SENT'].includes(direction);
+    const esAssistantRole = ['ASSISTANT', 'BOT', 'AGENT', 'AGENTE', 'IA', 'AI'].includes(role);
+    const esAgentAuthor = ['AGENTE', 'AGENT', 'BOT', 'IA', 'AI', 'ASSISTANT'].includes(author);
+
+    if (esOutboundDirection || esAssistantRole || esAgentAuthor || fromMe === true) {
+        return 'AGENTE';
+    }
+
+    // 5. Si no se puede determinar por metadatos, analizamos el contenido:
+    // Por ejemplo, los PDFs o avisos enviados por el bot suelen decir "[Documento PDF enviado]"
+    if (content.includes('[Documento PDF enviado]') || content.includes('liquidación') && content.includes('propuesta')) {
+        return 'AGENTE';
+    }
+
+    // Por descarte seguro: si el mensaje proviene del contacto, se trata del Deudor
+    return 'DEUDOR';
+}
+
 async function cargarMensajes(phone) {
     const box = document.getElementById('mensajes');
     try {
@@ -340,65 +394,102 @@ async function cargarMensajes(phone) {
         const mensajes = data.mensajes || data.messages || data.data || [];
         
         if (!mensajes.length) {
-            box.innerHTML = '<div class="flex items-center justify-center h-full text-slate-400 text-xs">Sin mensajes en esta conversación.</div>';
+            box.innerHTML = '<div class="flex items-center justify-center h-full text-slate-400 text-xs">Sin mensajes registrados en esta conversación.</div>';
             return;
         }
 
-        box.innerHTML = mensajes.map(m => {
-            const direction = String(m.direction || m.direccion || '').toUpperCase();
-            const author = String(m.author || m.autor || (direction === 'IN' || direction === 'INBOUND' ? 'DEUDOR' : 'AGENTE')).toUpperCase();
-            const human = author === 'HUMANO';
-            const system = author === 'SISTEMA';
-            const right = !system && direction !== 'IN' && direction !== 'INBOUND';
-            const hora = formatHora(m.created_at || m.fecha);
+        const nombreDeudor = actual ? (actual.name || actual.nombre || actual.identification || actual.cedula || 'Deudor') : 'Deudor';
 
-            if (system) {
+        box.innerHTML = mensajes.map(m => {
+            const emisor = clasificarEmisor(m);
+            const hora = formatHora(m.created_at || m.fecha);
+            const content = escapeHtml(m.content || m.contenido || m.mensaje || '');
+
+            // ==========================================
+            // CASO 1: SISTEMA INTERNO (Píldora centrada)
+            // ==========================================
+            if (emisor === 'SISTEMA') {
                 return `
-                <div class="flex justify-center my-2">
-                    <div class="bg-white/80 border border-slate-200/80 rounded-full px-3 py-0.5 text-[10px] text-slate-500 shadow-xs">
-                        ${escapeHtml(m.content || m.contenido || m.mensaje || '')}
+                <div class="flex justify-center my-3">
+                    <div class="max-w-[90%] md:max-w-[80%] bg-slate-200/90 text-slate-700 text-[11px] rounded-xl px-4 py-2 shadow-xs border border-slate-300/60 leading-relaxed font-mono">
+                        <div class="flex items-center gap-1 font-bold text-slate-600 mb-0.5">
+                            <i data-lucide="info" class="w-3 h-3"></i>
+                            <span>REGISTRO DEL SISTEMA</span>
+                        </div>
+                        <div class="whitespace-pre-wrap">${content}</div>
                     </div>
                 </div>`;
             }
 
-            // Burbujas estilo WhatsApp
-            if (right) {
-                // Outbound (Agente o Humano)
-                const isIA = !human;
-                const bubbleBg = isIA 
-                    ? 'bg-[#d9fdd3] text-emerald-950 border border-emerald-200/60' 
-                    : 'bg-amber-100 text-amber-950 border border-amber-200';
-                const labelText = isIA ? '🤖 Agente IA' : '👤 Tú (Control Humano)';
-                const labelColor = isIA ? 'text-emerald-800' : 'text-amber-800';
-
+            // ==========================================
+            // CASO 2: DEUDOR / CLIENTE (IZQUIERDA, BLANCA)
+            // ==========================================
+            if (emisor === 'DEUDOR') {
                 return `
-                <div class="flex justify-end">
-                    <div class="max-w-[82%] md:max-w-[70%] ${bubbleBg} rounded-2xl rounded-tr-xs px-3.5 py-2 shadow-xs relative">
-                        <div class="flex items-center justify-between gap-4 mb-1">
-                            <span class="text-[10px] font-bold ${labelColor}">${labelText}</span>
+                <div class="flex justify-start my-1">
+                    <div class="max-w-[85%] md:max-w-[72%] bg-white text-slate-800 rounded-2xl rounded-tl-xs px-4 py-2.5 shadow-xs border border-slate-200 relative">
+                        <!-- Etiqueta clara de Deudor -->
+                        <div class="flex items-center gap-1.5 mb-1 pb-0.5 border-b border-slate-100">
+                            <span class="w-2 h-2 rounded-full bg-slate-400"></span>
+                            <span class="text-[11px] font-bold text-slate-700">Deudor (${escapeHtml(nombreDeudor)})</span>
                         </div>
-                        <div class="text-xs md:text-sm whitespace-pre-wrap leading-relaxed">${escapeHtml(m.content || m.contenido || m.mensaje || '')}</div>
-                        <div class="text-[10px] text-slate-400/90 text-right mt-1 flex items-center justify-end gap-1">
-                            <span>${escapeHtml(hora)}</span>
-                            <i data-lucide="check-check" class="w-3.5 h-3.5 text-emerald-600"></i>
-                        </div>
-                    </div>
-                </div>`;
-            } else {
-                // Inbound (Deudor)
-                return `
-                <div class="flex justify-start">
-                    <div class="max-w-[82%] md:max-w-[70%] bg-white text-slate-800 rounded-2xl rounded-tl-xs px-3.5 py-2 shadow-xs border border-slate-100 relative">
-                        <div class="flex items-center justify-between gap-4 mb-1">
-                            <span class="text-[10px] font-bold text-slate-500">Deudor (${escapeHtml(actual ? (actual.identification || actual.cedula || 'Contacto') : 'Contacto')})</span>
-                        </div>
-                        <div class="text-xs md:text-sm whitespace-pre-wrap leading-relaxed">${escapeHtml(m.content || m.contenido || m.mensaje || '')}</div>
+                        <!-- Contenido -->
+                        <div class="text-xs md:text-sm whitespace-pre-wrap text-slate-900 leading-relaxed font-normal">${content}</div>
+                        <!-- Hora -->
                         <div class="text-[10px] text-slate-400 text-right mt-1">
                             <span>${escapeHtml(hora)}</span>
                         </div>
                     </div>
                 </div>`;
             }
+
+            // ==========================================
+            // CASO 3: CONTROL HUMANO / ABOGADO (DERECHA, ÁMBAR)
+            // ==========================================
+            if (emisor === 'HUMANO') {
+                return `
+                <div class="flex justify-end my-1">
+                    <div class="max-w-[85%] md:max-w-[72%] bg-amber-100 text-amber-950 rounded-2xl rounded-tr-xs px-4 py-2.5 shadow-xs border border-amber-300/80 relative">
+                        <!-- Etiqueta clara de Abogado -->
+                        <div class="flex items-center justify-between gap-3 mb-1 pb-0.5 border-b border-amber-200/70">
+                            <span class="text-[11px] font-bold text-amber-900 flex items-center gap-1">
+                                <span>⚖️</span>
+                                <span>Tú (Control Humano / Abogado)</span>
+                            </span>
+                        </div>
+                        <!-- Contenido -->
+                        <div class="text-xs md:text-sm whitespace-pre-wrap text-amber-950 leading-relaxed">${content}</div>
+                        <!-- Hora y check -->
+                        <div class="text-[10px] text-amber-800/80 text-right mt-1 flex items-center justify-end gap-1">
+                            <span>${escapeHtml(hora)}</span>
+                            <i data-lucide="check-check" class="w-3.5 h-3.5 text-amber-700"></i>
+                        </div>
+                    </div>
+                </div>`;
+            }
+
+            // ==========================================
+            // CASO 4: AGENTE IA / BOT (DERECHA, VERDE WHATSAPP)
+            // ==========================================
+            return `
+            <div class="flex justify-end my-1">
+                <div class="max-w-[85%] md:max-w-[72%] bg-[#dcf8c6] text-emerald-950 rounded-2xl rounded-tr-xs px-4 py-2.5 shadow-xs border border-emerald-300/70 relative">
+                    <!-- Etiqueta clara de Agente IA -->
+                    <div class="flex items-center justify-between gap-3 mb-1 pb-0.5 border-b border-emerald-200/70">
+                        <span class="text-[11px] font-bold text-emerald-800 flex items-center gap-1">
+                            <span>🤖</span>
+                            <span>Agente IA (Cobranzas)</span>
+                        </span>
+                    </div>
+                    <!-- Contenido -->
+                    <div class="text-xs md:text-sm whitespace-pre-wrap text-emerald-950 leading-relaxed">${content}</div>
+                    <!-- Hora y check -->
+                    <div class="text-[10px] text-emerald-700/80 text-right mt-1 flex items-center justify-end gap-1">
+                        <span>${escapeHtml(hora)}</span>
+                        <i data-lucide="check-check" class="w-3.5 h-3.5 text-emerald-600"></i>
+                    </div>
+                </div>
+            </div>`;
         }).join('');
 
         // Scrollear automáticamente hacia el final para ver los últimos mensajes
