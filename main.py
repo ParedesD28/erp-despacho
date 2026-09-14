@@ -152,8 +152,11 @@ async def production_security_middleware(request: Request, call_next):
 # HELPERS COMUNES
 # ==============================================================================
 def _redirect(path: str, **params) -> RedirectResponse:
+    if not params:
+        return RedirectResponse(url=path, status_code=303)
+    sep = "&" if "?" in path else "?"
     query = urlencode(params)
-    return RedirectResponse(url=f"{path}?{query}" if query else path, status_code=303)
+    return RedirectResponse(url=f"{path}{sep}{query}", status_code=303)
 
 
 def cargar_inmuebles_ph(conn=None) -> list[dict]:
@@ -885,7 +888,7 @@ def _ensure_crm_and_vencimientos_schema():
 
 
 @app.get("/crm")
-def crm(request: Request, buscar_inmueble: int | None = None):
+def crm(request: Request, buscar_inmueble: str | None = None):
     conn = db.get_connection()
     try:
         inmuebles = cargar_inmuebles_ph(conn)
@@ -896,8 +899,16 @@ def crm(request: Request, buscar_inmueble: int | None = None):
                 "id": item.get("id"),
                 "nombre": f"{item.get('torre_apto') or ''} - {item.get('nombre') or ''} ({item.get('cedula') or ''})".strip(" -"),
             })
+        
+        # Limpiar buscar_inmueble de caracteres espurios
+        inmueble_id_limpio = None
+        if buscar_inmueble:
+            m_id = re.search(r"\d+", str(buscar_inmueble))
+            if m_id:
+                inmueble_id_limpio = m_id.group(0)
+
         inmueble_actual = next(
-            (x for x in inmuebles if buscar_inmueble and str(x.get("id")) == str(buscar_inmueble)),
+            (x for x in inmuebles if inmueble_id_limpio and str(x.get("id")) == str(inmueble_id_limpio)),
             None,
         )
         propietarios, historial = [], []
@@ -915,11 +926,16 @@ def crm(request: Request, buscar_inmueble: int | None = None):
                     "SELECT id, tipo_contacto AS tipo, identificacion_deudor AS deudor_nombre, "
                     "resumen, promesa_pago_fecha AS promesa, usuario, fecha "
                     "FROM gestiones_crm "
-                    "WHERE inmueble_id=%s AND COALESCE(anulado,FALSE)=FALSE "
+                    "WHERE (inmueble_id=%s OR identificacion_deudor=%s) AND COALESCE(anulado,FALSE)=FALSE "
                     "ORDER BY fecha DESC LIMIT 200",
-                    (buscar_inmueble,),
+                    (inmueble_id_limpio, str(cedula).strip()),
                 )
-                historial = [dict(r) for r in cur.fetchall()]
+                historial = []
+                for r in cur.fetchall():
+                    row_d = dict(r)
+                    row_d["tabla_origen"] = "gestiones_crm"
+                    historial.append(row_d)
+
                 if expedientes_service._table_exists(cur, "gestiones_cartera") and cedula:
                     cur.execute(
                         "SELECT * FROM gestiones_cartera "
@@ -929,6 +945,9 @@ def crm(request: Request, buscar_inmueble: int | None = None):
                     )
                     for r in cur.fetchall():
                         d = dict(r)
+                        # Filtrar anulados si existen columnas anulado o estado
+                        if d.get("anulado") is True or str(d.get("estado", "")).upper() == "ANULADO":
+                            continue
                         gestion_fecha = next(
                             (
                                 d.get(name)
@@ -940,14 +959,16 @@ def crm(request: Request, buscar_inmueble: int | None = None):
                             ),
                             None,
                         )
+                        g_id = d.get("id") or d.get("id_gestion") or d.get("gestion_id")
                         historial.append({
-                            "id": d.get("id"),
+                            "id": g_id,
                             "tipo": d.get("tipo_contacto") or "WhatsApp IA",
                             "deudor_nombre": d.get("identificacion_deudor") or cedula,
                             "resumen": d.get("resumen", ""),
                             "promesa": d.get("promesa_pago_fecha"),
                             "usuario": d.get("usuario", "Bot Claude"),
                             "fecha": gestion_fecha,
+                            "tabla_origen": "gestiones_cartera",
                         })
                     historial.sort(key=lambda x: str(x.get("fecha") or ""), reverse=True)
         return render_template("crm.html", {"request": request, "conjuntos": conjuntos, "json_filtro": json.dumps(filtro, ensure_ascii=False), "conjunto_actual": "TODOS", "inmueble_actual": inmueble_actual, "propietarios": propietarios, "historial": historial})
@@ -983,30 +1004,50 @@ def crm_guardar(
 
 
 @app.post("/crm/anular")
-def crm_anular(gestion_id: int = Form(...), inmueble_id: int = Form(...)):
-    _ensure_crm_and_vencimientos_schema()
+def crm_anular(
+    gestion_id: int = Form(...),
+    inmueble_id: str | None = Form(None),
+    tabla_origen: str = Form("gestiones_crm"),
+):
     conn = db.get_connection()
     try:
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT id FROM gestiones_crm WHERE id=%s AND inmueble_id=%s LIMIT 1", (gestion_id, inmueble_id))
-                if not cur.fetchone():
-                    return _redirect(f"/crm?buscar_inmueble={inmueble_id}", error="Gestion+no+encontrada")
-                cols = expedientes_service._cols(cur, "gestiones_crm")
-                if "estado" in cols:
-                    cur.execute(
-                        "UPDATE gestiones_crm SET anulado=TRUE, estado='ANULADO' WHERE id=%s AND inmueble_id=%s",
-                        (gestion_id, inmueble_id),
-                    )
-                else:
-                    cur.execute(
-                        "UPDATE gestiones_crm SET anulado=TRUE WHERE id=%s AND inmueble_id=%s",
-                        (gestion_id, inmueble_id),
-                    )
-        return _redirect(f"/crm?buscar_inmueble={inmueble_id}", mensaje="Gestion+anulada")
+                anulado = False
+                # 1. Anular en gestiones_crm
+                if tabla_origen == "gestiones_crm" or not anulado:
+                    cur.execute("SELECT id FROM gestiones_crm WHERE id=%s LIMIT 1", (gestion_id,))
+                    if cur.fetchone():
+                        cols = expedientes_service._cols(cur, "gestiones_crm")
+                        if "estado" in cols:
+                            cur.execute("UPDATE gestiones_crm SET anulado=TRUE, estado='ANULADO' WHERE id=%s", (gestion_id,))
+                        else:
+                            cur.execute("UPDATE gestiones_crm SET anulado=TRUE WHERE id=%s", (gestion_id,))
+                        anulado = True
+
+                # 2. Anular en gestiones_cartera
+                if not anulado and expedientes_service._table_exists(cur, "gestiones_cartera"):
+                    cols_c = expedientes_service._cols(cur, "gestiones_cartera")
+                    id_col = "id" if "id" in cols_c else ("id_gestion" if "id_gestion" in cols_c else "gestion_id")
+                    if id_col in cols_c:
+                        cur.execute(f"SELECT {id_col} FROM gestiones_cartera WHERE {id_col}=%s LIMIT 1", (gestion_id,))
+                        if cur.fetchone():
+                            if "anulado" in cols_c:
+                                cur.execute(f"UPDATE gestiones_cartera SET anulado=TRUE WHERE {id_col}=%s", (gestion_id,))
+                            elif "estado" in cols_c:
+                                cur.execute(f"UPDATE gestiones_cartera SET estado='ANULADO' WHERE {id_col}=%s", (gestion_id,))
+                            else:
+                                cur.execute(f"DELETE FROM gestiones_cartera WHERE {id_col}=%s", (gestion_id,))
+                            anulado = True
+
+                dest = f"/crm?buscar_inmueble={inmueble_id}" if inmueble_id else "/crm"
+                if not anulado:
+                    return _redirect(dest, error="Gestión no encontrada")
+        return _redirect(dest, mensaje="Gestión anulada exitosamente")
     except Exception as exc:
-        print(f"[CRM] Error anulando gestion: {exc}", flush=True)
-        return _redirect(f"/crm?buscar_inmueble={inmueble_id}", error="No+fue+posible+anular+la+gestion")
+        print(f"[CRM] Error anulando gestion: {exc!r}", flush=True)
+        dest = f"/crm?buscar_inmueble={inmueble_id}" if inmueble_id else "/crm"
+        return _redirect(dest, error="No fue posible anular la gestión")
     finally:
         conn.release()
 
@@ -1233,7 +1274,7 @@ def descargar_excel():
 @app.get("/liquidador")
 def vista_liquidador(
     request: Request,
-    inmueble_id: int = None,
+    inmueble_id: str | None = None,
     tipo_tasa: str = "Máxima Legal",
     tasa_fija: float = 2.5,
     honorarios_pct: float = 23.8,
@@ -1243,10 +1284,15 @@ def vista_liquidador(
     resultados = []
     resumen = {}
     lista_inmuebles = cargar_inmuebles_ph()
+    inm_id_clean = None
     if inmueble_id:
+        m = re.search(r"\d+", str(inmueble_id))
+        if m:
+            inm_id_clean = int(m.group(0))
+    if inm_id_clean:
         try:
             resultados, resumen, _ = liquidador.motor_calculo_judicial(
-                inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte_obj
+                inm_id_clean, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte_obj
             )
         except Exception as e:
             print(f"[LIQUIDADOR] Error en auto-cálculo: {e}", flush=True)
