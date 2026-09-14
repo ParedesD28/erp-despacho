@@ -57,6 +57,9 @@ import agent_supervision
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
 
+import api_recaudos
+
+app.include_router(api_recaudos.router)
 
 def render_template(name: str, context: dict, status_code: int = 200):
     """Renderiza plantillas Jinja2 siendo compatible con cualquier versión de Starlette/FastAPI."""
