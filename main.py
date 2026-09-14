@@ -57,6 +57,15 @@ import agent_supervision
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
 
+
+def render_template(name: str, context: dict, status_code: int = 200):
+    """Renderiza plantillas Jinja2 siendo compatible con cualquier versión de Starlette/FastAPI."""
+    try:
+        return templates.TemplateResponse(name, context, status_code=status_code)
+    except TypeError:
+        return templates.TemplateResponse(request=context.get("request"), name=name, context=context, status_code=status_code)
+
+
 # Montaje de archivos estáticos
 os.makedirs("static/pdfs", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -91,12 +100,7 @@ async def production_security_middleware(request: Request, call_next):
             email = str(form.get("email") or "").strip().lower()
             password = str(form.get("password") or "")
             if not email or not password:
-                return templates.TemplateResponse(
-                    request=request,
-                    name="login.html",
-                    context={"request": request, "error": "Credenciales incorrectas."},
-                    status_code=401,
-                )
+                return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
 
             conn = db.get_connection()
             try:
@@ -111,12 +115,7 @@ async def production_security_middleware(request: Request, call_next):
 
             if not usuario or not verify_password(password, usuario.get("password")):
                 _json_log("INFO", "login_failed")
-                return templates.TemplateResponse(
-                    request=request,
-                    name="login.html",
-                    context={"request": request, "error": "Credenciales incorrectas."},
-                    status_code=401,
-                )
+                return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
 
             response = RedirectResponse(url="/dashboard", status_code=303)
             set_session_cookie(response, str(usuario["id"]))
@@ -124,12 +123,7 @@ async def production_security_middleware(request: Request, call_next):
             return response
         except Exception:
             _json_log("ERROR", "login_error")
-            return templates.TemplateResponse(
-                request=request,
-                name="login.html",
-                context={"request": request, "error": "No fue posible iniciar sesión."},
-                status_code=500,
-            )
+            return render_template("login.html", {"request": request, "error": "No fue posible iniciar sesión."}, status_code=500)
 
     if path == "/logout":
         response = RedirectResponse(url="/login", status_code=303)
@@ -182,7 +176,7 @@ def cargar_inmuebles_ph() -> list[dict]:
             ORDER BY expediente DESC, nombre ASC
         """)
         lista = [
-            {"id": r[0], "conjunto_residencial": r[1], "torre_apto": r[2], "cedula": r[3], "nombre": r[4], "expediente": r[5]}
+            {"id": r[0], "conjunto_residencial": r[1], "torre_apto": r[2], "apto": r[2], "cedula": r[3], "nombre": r[4], "expediente": r[5]}
             for r in cur.fetchall()
         ]
         cur.close()
@@ -231,12 +225,12 @@ def health():
 @app.head("/login", include_in_schema=False)
 @app.get("/login")
 def vista_login(request: Request):
-    return templates.TemplateResponse(request=request, name="login.html", context={"request": request})
+    return render_template("login.html", {"request": request})
 
 
 @app.get("/dashboard")
 def vista_dashboard(request: Request):
-    return templates.TemplateResponse(request=request, name="dashboard.html", context={"request": request})
+    return render_template("dashboard.html", {"request": request})
 
 
 @app.get("/logout")
@@ -258,7 +252,7 @@ def contactos(request: Request, buscar_cedula: str | None = None):
             wanted = ["id", "identificacion", "nombre", "tipo", "telefono", "email", "direccion", "ciudad"]
             select_cols = [c for c in wanted if c in cols]
             if not select_cols:
-                raise RuntimeError("La tabla contactos no tiene columnas consultables")
+                select_cols = ["id", "identificacion", "nombre", "tipo", "telefono", "email", "direccion", "ciudad"]
             sql = f"SELECT {', '.join(select_cols)} FROM contactos"
             args = []
             if buscar_cedula:
@@ -269,11 +263,7 @@ def contactos(request: Request, buscar_cedula: str | None = None):
             cur.execute(sql, args)
             rows = [dict(r) for r in cur.fetchall()]
             contacto_actual = rows[0] if buscar_cedula and rows else None
-            return templates.TemplateResponse(
-                request=request,
-                name="contactos.html",
-                context={"request": request, "lista_contactos": rows, "contacto_actual": contacto_actual},
-            )
+            return render_template("contactos.html", {"request": request, "lista_contactos": rows, "contacto_actual": contacto_actual})
     finally:
         conn.release()
 
@@ -341,16 +331,7 @@ def procesos(request: Request):
             contrapartes = [dict(r) for r in cur.fetchall()]
             cur.execute("SELECT id, nombre FROM abogados ORDER BY nombre")
             abogados = [dict(r) for r in cur.fetchall()]
-        return templates.TemplateResponse(
-            request=request,
-            name="procesos.html",
-            context={
-                "request": request,
-                "contactos_clientes": clientes,
-                "contactos_contrapartes": contrapartes,
-                "abogados": abogados,
-            },
-        )
+        return render_template("procesos.html", {"request": request, "contactos_clientes": clientes, "contactos_contrapartes": contrapartes, "abogados": abogados})
     finally:
         conn.release()
 
@@ -552,7 +533,7 @@ async def crear_proceso_cascada(
 @app.get("/expedientes")
 def ver_expedientes(request: Request):
     procesos_lista = expedientes_service.cargar_procesos_general_sin_duplicados()
-    return templates.TemplateResponse(request=request, name="expedientes.html", context={"request": request, "procesos": procesos_lista})
+    return render_template("expedientes.html", {"request": request, "procesos": procesos_lista})
 
 
 @app.get("/expediente/{radicado}", include_in_schema=False)
@@ -575,23 +556,7 @@ def detalle_expediente(request: Request, radicado: str):
                 ids = [x.get("identificacion") for x in demandantes + demandados]
                 acuerdos = expedientes_service._get_crm_agreements(cur, proceso.get("inmueble_id"), ids)
                 audit = expedientes_service._audit(cur, radicado)
-                return templates.TemplateResponse(
-                    request=request,
-                    name="detalle_expediente_v4.html",
-                    context={
-                        "request": request,
-                        "proceso": proceso,
-                        "demandantes": demandantes,
-                        "demandados": demandados,
-                        "contactos": contactos_opts,
-                        "abogados": abogados_opts,
-                        "actuaciones": actuaciones,
-                        "acuerdos_crm": acuerdos,
-                        "audit_ediciones": audit,
-                        "demandante_ids": {str(x.get("identificacion")) for x in demandantes if x.get("identificacion")},
-                        "demandado_ids": {str(x.get("identificacion")) for x in demandados if x.get("identificacion")},
-                    },
-                )
+                return render_template("detalle_expediente_v4.html", {"request": request, "proceso": proceso, "demandantes": demandantes, "demandados": demandados, "contactos": contactos_opts, "abogados": abogados_opts, "actuaciones": actuaciones, "acuerdos_crm": acuerdos, "audit_ediciones": audit, "demandante_ids": {str(x.get("identificacion")) for x in demandantes if x.get("identificacion")}, "demandado_ids": {str(x.get("identificacion")) for x in demandados if x.get("identificacion")}})
     finally:
         conn.release()
 
@@ -885,19 +850,7 @@ def crm(request: Request, buscar_inmueble: int | None = None):
                             "fecha": gestion_fecha,
                         })
                     historial.sort(key=lambda x: str(x.get("fecha") or ""), reverse=True)
-        return templates.TemplateResponse(
-            request=request,
-            name="crm.html",
-            context={
-                "request": request,
-                "conjuntos": conjuntos,
-                "json_filtro": json.dumps(filtro, ensure_ascii=False),
-                "conjunto_actual": "TODOS",
-                "inmueble_actual": inmueble_actual,
-                "propietarios": propietarios,
-                "historial": historial,
-            },
-        )
+        return render_template("crm.html", {"request": request, "conjuntos": conjuntos, "json_filtro": json.dumps(filtro, ensure_ascii=False), "conjunto_actual": "TODOS", "inmueble_actual": inmueble_actual, "propietarios": propietarios, "historial": historial})
     finally:
         conn.release()
 
@@ -973,11 +926,7 @@ def vencimientos(request: Request):
                 "SELECT * FROM vencimientos WHERE completado=FALSE ORDER BY fecha_vencimiento ASC, id ASC"
             )
             pendientes = [dict(r) for r in cur.fetchall()]
-        return templates.TemplateResponse(
-            request=request,
-            name="vencimientos.html",
-            context={"request": request, "radicados": radicados, "vencimientos": pendientes},
-        )
+        return render_template("vencimientos.html", {"request": request, "radicados": radicados, "vencimientos": pendientes})
     finally:
         conn.release()
 
@@ -1032,16 +981,7 @@ def informes(request: Request):
             total_contactos = int(cur.fetchone()["n"])
             cur.execute("SELECT COUNT(*) AS n FROM inmuebles_ph")
             total_inmuebles = int(cur.fetchone()["n"])
-        return templates.TemplateResponse(
-            request=request,
-            name="informes.html",
-            context={
-                "request": request,
-                "total_procesos": total,
-                "total_contactos": total_contactos,
-                "total_inmuebles": total_inmuebles,
-            },
-        )
+        return render_template("informes.html", {"request": request, "total_procesos": total, "total_contactos": total_contactos, "total_inmuebles": total_inmuebles})
     finally:
         conn.release()
 
@@ -1083,23 +1023,7 @@ def vista_liquidador(
             )
         except Exception as e:
             print(f"[LIQUIDADOR] Error en auto-cálculo: {e}", flush=True)
-    return templates.TemplateResponse(
-        request=request,
-        name="liquidador.html",
-        context={
-            "inmuebles": lista_inmuebles,
-            "resultados": resultados,
-            "resumen": resumen,
-            "parametros": {
-                "inmueble_id": inmueble_id,
-                "tipo_tasa": tipo_tasa,
-                "tasa_fija": tasa_fija,
-                "honorarios_pct": honorarios_pct,
-                "gastos": gastos,
-                "fecha_corte": fecha_corte_obj.strftime("%Y-%m-%d"),
-            },
-        },
-    )
+    return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte_obj.strftime("%Y-%m-%d")}})
 
 
 @app.post("/liquidador")
@@ -1116,28 +1040,8 @@ def calcular_liquidador(
         inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
     )
     if not resultados:
-        return templates.TemplateResponse(
-            request=request,
-            name="liquidador.html",
-            context={"inmuebles": cargar_inmuebles_ph(), "error": "No hay deudas.", "resultados": None},
-        )
-    return templates.TemplateResponse(
-        request=request,
-        name="liquidador.html",
-        context={
-            "inmuebles": cargar_inmuebles_ph(),
-            "resultados": resultados,
-            "resumen": resumen,
-            "parametros": {
-                "inmueble_id": inmueble_id,
-                "tipo_tasa": tipo_tasa,
-                "tasa_fija": tasa_fija,
-                "honorarios_pct": honorarios_pct,
-                "gastos": gastos,
-                "fecha_corte": fecha_corte.strftime("%Y-%m-%d"),
-            },
-        },
-    )
+        return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "error": "No hay deudas.", "resultados": None})
+    return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
 
 
 @app.post("/liquidador/actualizar")
@@ -1393,20 +1297,4 @@ async def carga_masiva_excel(
         inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
     )
     lista_inmuebles = cargar_inmuebles_ph()
-    return templates.TemplateResponse(
-        request=request,
-        name="liquidador.html",
-        context={
-            "inmuebles": lista_inmuebles,
-            "resultados": resultados,
-            "resumen": resumen,
-            "parametros": {
-                "inmueble_id": inmueble_id,
-                "tipo_tasa": tipo_tasa,
-                "tasa_fija": tasa_fija,
-                "honorarios_pct": honorarios_pct,
-                "gastos": gastos,
-                "fecha_corte": fecha_corte.strftime("%Y-%m-%d"),
-            },
-        },
-    )
+    return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
