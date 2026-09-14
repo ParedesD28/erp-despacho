@@ -25,6 +25,11 @@ import expediente_cursor_hardening  # noqa: F401,E402
 import expediente_workflow_hardening  # noqa: F401,E402
 import expediente_stage_hardening  # noqa: F401,E402
 import expediente_ui_patch  # noqa: F401,E402
+
+# El middleware legacy de main.py se neutraliza antes de instalar la capa de
+# sesión HMAC de start.py. Así existe una única política de autenticación.
+import security_architecture_patch  # noqa: F401,E402
+
 import production_checks  # noqa: F401,E402
 
 # El antiguo sitecustomize.py registraba esta ruta por efectos colaterales del
