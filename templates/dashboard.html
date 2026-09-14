@@ -1,22 +1,243 @@
 {% extends "base.html" %}
 
 {% block contenido %}
-<header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm">
-    <h2 class="text-xl font-semibold text-slate-800">Dashboard Principal</h2>
-</header>
+<div class="p-6 md:p-8 space-y-6 h-full overflow-y-auto bg-slate-50/50">
 
-<div class="p-8">
-    <div class="bg-white p-10 rounded-lg shadow-sm border border-slate-200 text-center mt-10 max-w-2xl mx-auto">
-        <div class="w-20 h-20 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border border-blue-100">
-            <i data-lucide="layout-dashboard" class="w-10 h-10"></i>
+    <!-- CABECERA PRINCIPAL CON ESTADO OPERATIVO -->
+    <header class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div>
+            <div class="flex items-center gap-2 mb-1">
+                <span class="text-xs font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                    Torre de Control · Despacho Judicial
+                </span>
+                <span class="text-xs text-slate-400 font-medium">Pereira, Colombia · {{ hoy }}</span>
+            </div>
+            <h1 class="text-2xl font-bold text-slate-900">Panel General de Gestión y Cobranzas</h1>
+            <p class="text-xs text-slate-500 mt-1">Supervisión integral de procesos ejecutivos, cartera PH y acuerdos pactados por el Agente IA.</p>
         </div>
-        <h3 class="text-2xl font-bold text-slate-800 mb-3">¡Bienvenido a tu nuevo Ecosistema LegalTech!</h3>
-        <p class="text-slate-600 text-lg">
-            Tu servidor FastAPI y Tailwind CSS están funcionando a la perfección. 
-        </p>
-        <div class="mt-8 text-sm text-slate-500 bg-slate-50 p-4 rounded-md border border-slate-100">
-            Utiliza el menú lateral para navegar hacia tus <b class="text-slate-700">Expedientes</b> o auditar el trabajo de tu Agente de IA en el módulo de <b class="text-slate-700">CRM Cartera</b>.
+
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="/supervision-agente" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all">
+                <i data-lucide="bot" class="w-4 h-4"></i>
+                <span>Supervisión Agente WhatsApp</span>
+            </a>
+            <a href="/vencimientos" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-xs transition-all">
+                <i data-lucide="calendar" class="w-4 h-4"></i>
+                <span>Calendario de Pagos</span>
+            </a>
         </div>
+    </header>
+
+    <!-- METRICAS EJECUTIVAS (4 TARJETAS) -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        
+        <!-- 1. Acuerdos para Hoy -->
+        <div class="bg-white rounded-2xl border {% if acuerdos_hoy %}border-amber-400 bg-amber-50/40{% else %}border-slate-200{% endif %} p-5 shadow-xs relative overflow-hidden">
+            <div class="flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Pagos para Hoy</span>
+                <div class="w-8 h-8 rounded-xl {% if acuerdos_hoy %}bg-amber-500 text-white animate-pulse{% else %}bg-slate-100 text-slate-500{% endif %} flex items-center justify-center">
+                    <i data-lucide="calendar-check" class="w-4 h-4"></i>
+                </div>
+            </div>
+            <div class="text-3xl font-bold text-slate-900 mt-3">{{ acuerdos_hoy|length }}</div>
+            <p class="text-xs text-slate-500 mt-1">
+                {% if acuerdos_hoy %}
+                <span class="text-amber-700 font-bold">¡Atención!</span> Hay compromisos para verificar hoy.
+                {% else %}
+                Sin compromisos pactados para hoy.
+                {% endif %}
+            </p>
+        </div>
+
+        <!-- 2. Cartera Pactada Vigente -->
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs relative overflow-hidden">
+            <div class="flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Monto en Acuerdos</span>
+                <div class="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                    <i data-lucide="dollar-sign" class="w-4 h-4"></i>
+                </div>
+            </div>
+            <div class="text-2xl lg:text-3xl font-bold text-emerald-700 mt-3">${{ "{:,.0f}".format(monto_acuerdos_vigentes) }}</div>
+            <p class="text-xs text-slate-500 mt-1">Total compromisos activos pendientes de recaudo</p>
+        </div>
+
+        <!-- 3. Procesos Ejecutivos Activos -->
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs relative overflow-hidden">
+            <div class="flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Procesos Judiciales</span>
+                <div class="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                    <i data-lucide="scale" class="w-4 h-4"></i>
+                </div>
+            </div>
+            <div class="text-3xl font-bold text-slate-900 mt-3">{{ total_procesos }}</div>
+            <p class="text-xs text-slate-500 mt-1">Expedientes activos en despacho judicial</p>
+        </div>
+
+        <!-- 4. Inmuebles Registrados -->
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs relative overflow-hidden">
+            <div class="flex items-center justify-between">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Inmuebles en PH</span>
+                <div class="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                    <i data-lucide="home" class="w-4 h-4"></i>
+                </div>
+            </div>
+            <div class="text-3xl font-bold text-slate-900 mt-3">{{ total_inmuebles }}</div>
+            <p class="text-xs text-slate-500 mt-1">Unidades bajo gestión de cartera inmobiliaria</p>
+        </div>
+
     </div>
+
+    <!-- SECCIÓN CRÍTICA: COMPROMISOS DE PAGO DEL DÍA -->
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-5 border-b border-slate-200 bg-slate-50/70 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                    <i data-lucide="badge-check" class="w-4 h-4"></i>
+                </div>
+                <div>
+                    <h2 class="text-base font-bold text-slate-900">Compromisos de Pago para Hoy</h2>
+                    <p class="text-xs text-slate-500">Deudores que acordaron realizar abonos o pagos en la fecha actual</p>
+                </div>
+            </div>
+            <span class="text-xs font-bold px-3 py-1 rounded-full {% if acuerdos_hoy %}bg-emerald-100 text-emerald-800 border border-emerald-200{% else %}bg-slate-100 text-slate-500{% endif %}">
+                {{ acuerdos_hoy|length }} Compromiso(s)
+            </span>
+        </div>
+
+        {% if acuerdos_hoy %}
+        <div class="divide-y divide-slate-100">
+            {% for a in acuerdos_hoy %}
+            <div class="p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-emerald-50/40 transition-colors">
+                <div class="flex items-start gap-3 min-w-0">
+                    <div class="w-10 h-10 rounded-full bg-emerald-100 text-emerald-800 font-bold flex items-center justify-center shrink-0">
+                        {{ (a.nombre_deudor or a.identificacion_deudor)[:2]|upper }}
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-bold text-sm text-slate-900">{{ a.nombre_deudor or 'Deudor sin nombre' }}</span>
+                            <span class="text-xs text-slate-500">CC: {{ a.identificacion_deudor }}</span>
+                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">HOY</span>
+                        </div>
+                        <p class="text-xs text-slate-600 mt-0.5 font-medium">
+                            {{ a.conjunto_residencial or 'Copropiedad' }} · {{ a.torre_apto or 'Inmueble #' ~ a.inmueble_id }}
+                        </p>
+                        <p class="text-xs text-slate-500 mt-1 italic">"{{ a.observaciones or 'Pactado por WhatsApp con Agente' }}"</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-4 shrink-0 justify-between md:justify-end">
+                    <div class="text-right">
+                        <span class="text-[10px] uppercase font-bold text-slate-400 block">Valor Acordado</span>
+                        <span class="text-base font-bold text-emerald-700">${{ "{:,.0f}".format(a.valor_acordado) }}</span>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        {% if a.telefono %}
+                        <a href="https://wa.me/{{ a.telefono|replace('+', '')|replace(' ', '') }}?text=Hola%20{{ a.nombre_deudor|urlencode }},%20te%20saludamos%20del%20despacho%20judicial.%20Te%20recordamos%20el%20compromiso%20de%20pago%20pactado%20para%20el%20d%C3%ADa%20de%20hoy." target="_blank" class="p-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-600 hover:text-white transition-all shadow-xs" title="Enviar recordatorio WhatsApp">
+                            <i data-lucide="message-circle" class="w-4 h-4"></i>
+                        </a>
+                        {% endif %}
+
+                        <form method="POST" action="/acuerdos/cumplir" onsubmit="return confirm('¿Confirmas que el deudor realizó el pago acordado?');">
+                            <input type="hidden" name="acuerdo_id" value="{{ a.id }}">
+                            <button type="submit" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1.5">
+                                <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                                <span>Marcar Pagado</span>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="p-10 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
+            <div class="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
+                <i data-lucide="coffee" class="w-6 h-6"></i>
+            </div>
+            <p class="text-sm font-semibold text-slate-700">Sin compromisos programados para hoy</p>
+            <p class="text-xs text-slate-500 max-w-sm">Los deudores que negocien fechas con el Agente de IA para el día de hoy aparecerán listados aquí con botón directo para validar el pago.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- DOS COLUMNAS: ACUERDOS EN MORA / PRÓXIMOS TÉRMINOS JUDICIALES -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        <!-- Columna 1: Acuerdos Vencidos / Incumplidos -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex flex-col">
+            <div class="p-4 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="alert-triangle" class="w-4 h-4 text-rose-500"></i>
+                    <h3 class="text-sm font-bold text-slate-900">Acuerdos Vencidos / Sin Cumplir</h3>
+                </div>
+                <span class="text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full">
+                    {{ acuerdos_vencidos|length }}
+                </span>
+            </div>
+
+            <div class="divide-y divide-slate-100 overflow-y-auto max-h-80 flex-1">
+                {% if acuerdos_vencidos %}
+                    {% for av in acuerdos_vencidos %}
+                    <div class="p-3.5 hover:bg-rose-50/30 transition-colors flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <p class="font-bold text-xs text-slate-800 truncate">{{ av.nombre_deudor or av.identificacion_deudor }}</p>
+                            <p class="text-[11px] text-slate-500 truncate">{{ av.conjunto_residencial or 'PH' }} · {{ av.torre_apto or 'Inmueble' }}</p>
+                            <span class="text-[10px] font-bold text-rose-600">Venció: {{ av.fecha_compromiso }}</span>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <span class="text-xs font-bold text-slate-800 block">${{ "{:,.0f}".format(av.valor_acordado) }}</span>
+                            <form method="POST" action="/acuerdos/cumplir" onsubmit="return confirm('¿Confirmas el pago tardío de este acuerdo?');">
+                                <input type="hidden" name="acuerdo_id" value="{{ av.id }}">
+                                <button type="submit" class="text-[10px] font-bold text-emerald-600 hover:text-emerald-800 underline mt-0.5">Registrar Pago</button>
+                            </form>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="p-8 text-center text-slate-400 text-xs">
+                        No hay acuerdos vencidos pendientes de recaudo.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Columna 2: Próximos Vencimientos y Términos Judiciales -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex flex-col">
+            <div class="p-4 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="clock" class="w-4 h-4 text-blue-500"></i>
+                    <h3 class="text-sm font-bold text-slate-900">Términos Judiciales Próximos</h3>
+                </div>
+                <a href="/vencimientos" class="text-xs font-bold text-blue-600 hover:text-blue-800">Ver Calendario →</a>
+            </div>
+
+            <div class="divide-y divide-slate-100 overflow-y-auto max-h-80 flex-1">
+                {% if terminos_proximos %}
+                    {% for t in terminos_proximos %}
+                    <div class="p-3.5 hover:bg-blue-50/30 transition-colors flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <span class="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded border border-slate-200">{{ t.radicado_interno }}</span>
+                            <p class="font-bold text-xs text-slate-800 mt-1 truncate">{{ t.titulo }}</p>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <span class="text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 block">{{ t.fecha_vencimiento }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="p-8 text-center text-slate-400 text-xs">
+                        No hay términos judiciales pendientes para esta semana.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+    </div>
+
 </div>
+
+<script>
+    if (window.lucide) lucide.createIcons();
+</script>
 {% endblock %}

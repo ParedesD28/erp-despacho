@@ -1,75 +1,400 @@
 {% extends "base.html" %}
 
 {% block contenido %}
-<header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm justify-between">
-    <h2 class="text-xl font-semibold text-slate-800">Control de Vencimientos y Términos</h2>
-    <span class="bg-red-50 text-red-700 text-xs font-bold px-3 py-1 rounded-full border border-red-200 shadow-sm flex items-center gap-2">
-        <i data-lucide="alarm-clock" class="w-4 h-4"></i> Alarmas Activas: {{ vencimientos|length }}
-    </span>
-</header>
+<div class="flex flex-col h-full overflow-hidden p-4 md:p-6 gap-4 bg-slate-50/50">
 
-<div class="p-8 grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 sticky top-8">
-        <h3 class="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2 border-b border-slate-100 pb-3">
-            <i data-lucide="calendar-plus" class="w-5 h-5 text-blue-600"></i> Programar Término
-        </h3>
-        <form method="POST" action="/vencimientos/guardar" class="space-y-4">
+    <!-- BARRA SUPERIOR DE ACCIONES Y FILTROS -->
+    <header class="bg-white rounded-2xl border border-slate-200 px-5 py-4 shadow-xs flex flex-wrap items-center justify-between gap-4 shrink-0">
+        <div>
+            <div class="flex items-center gap-2 mb-0.5">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                <h1 class="text-lg font-bold text-slate-900">Agenda Judicial y Calendario de Acuerdos</h1>
+            </div>
+            <p class="text-xs text-slate-500">Supervisión integrada de términos procesales y acuerdos de pago del Agente IA</p>
+        </div>
+
+        <!-- Botones para agregar manual -->
+        <div class="flex flex-wrap items-center gap-2">
+            <button onclick="toggleModal('modal-acuerdo')" class="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1.5">
+                <i data-lucide="handshake" class="w-4 h-4"></i>
+                <span>Nuevo Acuerdo</span>
+            </button>
+            <button onclick="toggleModal('modal-termino')" class="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1.5">
+                <i data-lucide="calendar-plus" class="w-4 h-4"></i>
+                <span>Nuevo Término</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- CUERPO PRINCIPAL CON CALENDARIO Y PANEL LATERAL -->
+    <div class="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-12 gap-4 overflow-hidden">
+        
+        <!-- CALENDARIO MENSUAL INTERACTIVO (COLUMNA IZQUIERDA/CENTRAL) -->
+        <section class="xl:col-span-8 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col h-full overflow-hidden p-4 md:p-5">
+            <!-- Barra de navegación del mes -->
+            <div class="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+                <div class="flex items-center gap-3">
+                    <h2 id="cal-mes-ano" class="text-base md:text-lg font-bold text-slate-900 capitalize"></h2>
+                    <button onclick="irHoy()" class="px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold shadow-2xs">
+                        Hoy
+                    </button>
+                </div>
+
+                <!-- Leyenda de colores del calendario -->
+                <div class="hidden sm:flex items-center gap-3 text-xs">
+                    <span class="inline-flex items-center gap-1 text-emerald-800 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Acuerdos Pago</span>
+                    <span class="inline-flex items-center gap-1 text-blue-800 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-blue-500"></span> Términos Judiciales</span>
+                </div>
+
+                <div class="flex items-center gap-1">
+                    <button onclick="cambiarMes(-1)" class="p-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 shadow-2xs" title="Mes anterior">
+                        <i data-lucide="chevron-left" class="w-4 h-4"></i>
+                    </button>
+                    <button onclick="cambiarMes(1)" class="p-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 shadow-2xs" title="Mes siguiente">
+                        <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Nombres de los días de la semana -->
+            <div class="grid grid-cols-7 gap-1 text-center py-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider shrink-0 border-b border-slate-100">
+                <div>Lun</div>
+                <div>Mar</div>
+                <div>Mié</div>
+                <div>Jue</div>
+                <div>Vie</div>
+                <div>Sáb</div>
+                <div>Dom</div>
+            </div>
+
+            <!-- Cuadrícula de días generada dinámicamente -->
+            <div id="cal-grid" class="grid grid-cols-7 grid-rows-6 gap-1 flex-1 min-h-0 pt-1 overflow-y-auto">
+                <!-- Se inyectan las celdas aquí con JavaScript -->
+            </div>
+        </section>
+
+        <!-- PANEL LATERAL: EVENTOS DEL DÍA SELECCIONADO Y ACCIONES -->
+        <section class="xl:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col h-full overflow-hidden">
+            <!-- Header del panel lateral -->
+            <div class="p-4 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between shrink-0">
+                <div>
+                    <h3 id="panel-fecha-titulo" class="text-sm font-bold text-slate-900">Eventos de la fecha</h3>
+                    <p id="panel-fecha-sub" class="text-[11px] text-slate-500">Selecciona un día del calendario</p>
+                </div>
+                <button onclick="mostrarTodos()" class="text-xs font-bold text-emerald-600 hover:text-emerald-800 underline">
+                    Ver Todos
+                </button>
+            </div>
+
+            <!-- Lista de eventos filtrados -->
+            <div id="panel-eventos-lista" class="divide-y divide-slate-100 overflow-y-auto flex-1 p-3 space-y-2.5">
+                <!-- Se inyectan los eventos con JavaScript -->
+            </div>
+        </section>
+    </div>
+</div>
+
+<!-- ========================================================================= -->
+<!-- MODAL: REGISTRAR ACUERDO DE PAGO MANUAL                                  -->
+<!-- ========================================================================= -->
+<div id="modal-acuerdo" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+            <h3 class="text-base font-bold text-slate-900 flex items-center gap-2">
+                <i data-lucide="handshake" class="w-5 h-5 text-emerald-600"></i>
+                <span>Registrar Acuerdo de Pago</span>
+            </h3>
+            <button onclick="toggleModal('modal-acuerdo')" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+        </div>
+
+        <form method="POST" action="/acuerdos/guardar" class="space-y-3.5">
             <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Expediente</label>
-                <select name="radicado_interno" required class="w-full border border-slate-300 rounded-md p-2.5 text-sm text-slate-700 bg-slate-50">
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Cédula del Deudor *</label>
+                <input type="text" name="identificacion_deudor" required placeholder="Ej: 1088265132" class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400">
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Nombre Completo</label>
+                <input type="text" name="nombre_deudor" placeholder="Ej: Breiner Leandro Valencia" class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Valor Acordado ($) *</label>
+                    <input type="number" step="0.01" name="valor_acordado" required placeholder="500000" class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Fecha Límite *</label>
+                    <input type="date" name="fecha_compromiso" required class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400 text-slate-700">
+                </div>
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Teléfono WhatsApp</label>
+                <input type="text" name="telefono" placeholder="Ej: 573202937064" class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400">
+            </div>
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Observaciones / Condiciones</label>
+                <textarea name="observaciones" rows="2" placeholder="Detalles de la negociación o forma de pago..." class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400"></textarea>
+            </div>
+            <div class="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button type="button" onclick="toggleModal('modal-acuerdo')" class="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50">Cancelar</button>
+                <button type="submit" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs">Guardar Acuerdo</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ========================================================================= -->
+<!-- MODAL: REGISTRAR TÉRMINO JUDICIAL                                        -->
+<!-- ========================================================================= -->
+<div id="modal-termino" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+            <h3 class="text-base font-bold text-slate-900 flex items-center gap-2">
+                <i data-lucide="scale" class="w-5 h-5 text-blue-600"></i>
+                <span>Programar Término Judicial</span>
+            </h3>
+            <button onclick="toggleModal('modal-termino')" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+        </div>
+
+        <form method="POST" action="/vencimientos/guardar" class="space-y-3.5">
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Expediente *</label>
+                <select name="radicado_interno" required class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none bg-slate-50 text-slate-700">
                     {% for rad in radicados %}<option value="{{ rad }}">{{ rad }}</option>{% endfor %}
                 </select>
             </div>
             <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Descripción / Tarea</label>
-                <input type="text" name="titulo" required placeholder="Ej: Presentar recurso de reposición" class="w-full border border-slate-300 rounded-md p-2.5 text-sm">
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Tarea / Vencimiento *</label>
+                <input type="text" name="titulo" required placeholder="Ej: Contestar excepciones de mérito" class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-blue-400">
             </div>
             <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Fecha Límite</label>
-                <input type="date" name="fecha_vencimiento" required class="w-full border border-slate-300 rounded-md p-2.5 text-sm text-slate-700">
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Fecha Límite *</label>
+                <input type="date" name="fecha_vencimiento" required class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-blue-400 text-slate-700">
             </div>
             <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Observaciones</label>
-                <textarea name="observaciones" rows="3" placeholder="Detalles adicionales..." class="w-full border border-slate-300 rounded-md p-2.5 text-sm"></textarea>
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Observaciones</label>
+                <textarea name="observaciones" rows="2" placeholder="Anotaciones para el abogado a cargo..." class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-blue-400"></textarea>
             </div>
-            <button type="submit" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 rounded-md flex items-center justify-center gap-2 shadow-sm">
-                <i data-lucide="save" class="w-4 h-4"></i> Agendar Vencimiento
-            </button>
+            <div class="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button type="button" onclick="toggleModal('modal-termino')" class="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50">Cancelar</button>
+                <button type="submit" class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs">Guardar Término</button>
+            </div>
         </form>
     </div>
+</div>
 
-    <div class="lg:col-span-2 space-y-4">
-        <h3 class="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2">
-            <i data-lucide="bell-ring" class="w-5 h-5 text-red-500"></i> Alarmas Pendientes
-        </h3>
-        {% if vencimientos %}
-            {% for v in vencimientos %}
-            <div class="bg-white border border-slate-200 rounded-lg p-5 hover:border-red-300 hover:shadow-md transition-all">
-                <div class="flex justify-between items-start mb-3">
-                    <div>
-                        <span class="bg-slate-100 text-slate-600 text-xs font-bold px-2.5 py-1 rounded border border-slate-200">{{ v.radicado_interno }}</span>
-                        <h4 class="font-bold text-slate-800 mt-2 text-lg">{{ v.titulo }}</h4>
-                    </div>
-                    <span class="bg-red-50 text-red-700 text-xs font-bold px-3 py-1.5 rounded-md border border-red-200">Límite: {{ v.fecha_vencimiento }}</span>
+<script>
+const eventos = {{ json_eventos | safe }};
+let fechaActual = new Date();
+let diaSeleccionado = null;
+
+const meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+function toggleModal(id) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('hidden');
+    if (window.lucide) lucide.createIcons();
+}
+
+function cambiarMes(delta) {
+    fechaActual.setMonth(fechaActual.getMonth() + delta);
+    renderizarCalendario();
+}
+
+function irHoy() {
+    fechaActual = new Date();
+    diaSeleccionado = formatearFecha(fechaActual);
+    renderizarCalendario();
+    filtrarEventosPorFecha(diaSeleccionado);
+}
+
+function formatearFecha(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+function renderizarCalendario() {
+    const grid = document.getElementById('cal-grid');
+    const title = document.getElementById('cal-mes-ano');
+    
+    const year = fechaActual.getFullYear();
+    const month = fechaActual.getMonth();
+    
+    title.textContent = `${meses[month]} ${year}`;
+    grid.innerHTML = '';
+
+    // Primer día del mes (0=Dom, 1=Lun...) en Colombia Lun=0
+    const primerDia = new Date(year, month, 1);
+    let diaSemanaPrimer = (primerDia.getDay() + 6) % 7; // Convertir Dom(0) a 6, Lun(1) a 0
+
+    const diasEnMes = new Date(year, month + 1, 0).getDate();
+    const diasEnMesAnterior = new Date(year, month, 0).getDate();
+
+    const hoyStr = formatearFecha(new Date());
+
+    // Celdas del mes anterior
+    for (let i = diaSemanaPrimer - 1; i >= 0; i--) {
+        const diaNum = diasEnMesAnterior - i;
+        grid.innerHTML += `<div class="p-1.5 text-[10px] text-slate-300 rounded-lg bg-slate-50/50 flex flex-col justify-between border border-transparent select-none min-h-[60px]">${diaNum}</div>`;
+    }
+
+    // Celdas del mes actual
+    for (let dia = 1; dia <= diasEnMes; dia++) {
+        const fechaStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+        const esHoy = fechaStr === hoyStr;
+        const esSeleccionado = fechaStr === diaSeleccionado;
+
+        // Buscar eventos de este día
+        const evtsDia = eventos.filter(e => e.fecha === fechaStr);
+        const acuerdos = evtsDia.filter(e => e.tipo === 'ACUERDO_PAGO');
+        const terminos = evtsDia.filter(e => e.tipo === 'TERMINO_JUDICIAL');
+
+        let badges = '';
+        if (acuerdos.length > 0) {
+            badges += `<span class="block px-1 py-0.5 mt-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 truncate" title="${acuerdos.length} acuerdo(s)">🤝 ${acuerdos.length} pago(s)</span>`;
+        }
+        if (terminos.length > 0) {
+            badges += `<span class="block px-1 py-0.5 mt-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-800 truncate" title="${terminos.length} término(s)">⚖️ ${terminos.length} término</span>`;
+        }
+
+        const borderStyle = esSeleccionado 
+            ? 'border-emerald-500 ring-2 ring-emerald-300 bg-emerald-50/30' 
+            : esHoy 
+            ? 'border-amber-400 bg-amber-50/30 font-bold' 
+            : 'border-slate-100 hover:border-slate-300 hover:bg-slate-50';
+
+        grid.innerHTML += `
+        <div onclick="seleccionarDia('${fechaStr}')" class="p-1.5 rounded-xl border ${borderStyle} flex flex-col justify-between cursor-pointer transition-all min-h-[60px] select-none">
+            <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold ${esHoy ? 'text-amber-700 font-extrabold' : 'text-slate-700'}">${dia}</span>
+                ${esHoy ? '<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>' : ''}
+            </div>
+            <div class="space-y-0.5 overflow-hidden">
+                ${badges}
+            </div>
+        </div>`;
+    }
+
+    // Rellenar días restantes para completar la grilla
+    const totalCeldas = diaSemanaPrimer + diasEnMes;
+    const celdasRestantes = (totalCeldas % 7 === 0) ? 0 : 7 - (totalCeldas % 7);
+    for (let dia = 1; dia <= celdasRestantes; dia++) {
+        grid.innerHTML += `<div class="p-1.5 text-[10px] text-slate-300 rounded-lg bg-slate-50/50 flex flex-col justify-between border border-transparent select-none min-h-[60px]">${dia}</div>`;
+    }
+}
+
+function seleccionarDia(fechaStr) {
+    diaSeleccionado = fechaStr;
+    renderizarCalendario();
+    filtrarEventosPorFecha(fechaStr);
+}
+
+function filtrarEventosPorFecha(fechaStr) {
+    const box = document.getElementById('panel-eventos-lista');
+    const title = document.getElementById('panel-fecha-titulo');
+    const sub = document.getElementById('panel-fecha-sub');
+
+    title.textContent = `Eventos del ${fechaStr}`;
+    const evts = eventos.filter(e => e.fecha === fechaStr);
+    sub.textContent = `${evts.length} registro(s) para esta fecha`;
+
+    if (!evts.length) {
+        box.innerHTML = `
+        <div class="p-8 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
+            <i data-lucide="calendar-x" class="w-8 h-8 opacity-40"></i>
+            <span>No hay compromisos ni términos programados para esta fecha.</span>
+        </div>`;
+        if (window.lucide) lucide.createIcons();
+        return;
+    }
+
+    renderizarListaEventos(evts);
+}
+
+function mostrarTodos() {
+    diaSeleccionado = null;
+    renderizarCalendario();
+    document.getElementById('panel-fecha-titulo').textContent = 'Todos los Eventos Activos';
+    document.getElementById('panel-fecha-sub').textContent = `${eventos.length} registros totales`;
+    renderizarListaEventos(eventos);
+}
+
+function renderizarListaEventos(lista) {
+    const box = document.getElementById('panel-eventos-lista');
+    box.innerHTML = lista.map(e => {
+        const esAcuerdo = e.tipo === 'ACUERDO_PAGO';
+        const idNum = e.id.split('-')[1];
+
+        if (esAcuerdo) {
+            const cumplido = e.estado === 'CUMPLIDO';
+            return `
+            <div class="p-3 rounded-xl border border-emerald-200 bg-emerald-50/40 text-xs space-y-2">
+                <div class="flex items-center justify-between gap-2">
+                    <span class="font-bold text-emerald-900 flex items-center gap-1">
+                        <i data-lucide="handshake" class="w-3.5 h-3.5 text-emerald-600"></i>
+                        <span>Acuerdo de Pago</span>
+                    </span>
+                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${cumplido ? 'bg-emerald-200 text-emerald-900' : 'bg-amber-100 text-amber-900'}">${e.estado}</span>
                 </div>
-                <p class="text-sm text-slate-600 mb-4 bg-slate-50 p-3 rounded border border-slate-100">{{ v.observaciones or "Sin observaciones registradas." }}</p>
-                <div class="flex gap-2 justify-end">
+                <div>
+                    <p class="font-bold text-slate-800">${escapeHtml(e.deudor)}</p>
+                    <p class="text-[11px] text-slate-500">${escapeHtml(e.inmueble || 'Copropiedad')}</p>
+                    <p class="text-sm font-bold text-emerald-700 mt-1">$${(e.valor || 0).toLocaleString('es-CO')}</p>
+                </div>
+                ${e.observaciones ? `<p class="text-[11px] text-slate-600 italic bg-white/70 p-2 rounded-lg border border-emerald-100">"${escapeHtml(e.observaciones)}"</p>` : ''}
+                
+                <div class="flex items-center justify-between pt-1 border-t border-emerald-100">
+                    <span class="text-[10px] text-slate-400">Fecha: <b>${e.fecha}</b></span>
+                    <div class="flex items-center gap-1.5">
+                        ${e.telefono ? `<a href="https://wa.me/${e.telefono.replace(/\D/g,'')}?text=Hola,%20te%20escribimos%20del%20despacho%20judicial%20para%20recordarte%20el%20compromiso%20de%20pago." target="_blank" class="p-1 rounded bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100" title="WhatsApp"><i data-lucide="message-circle" class="w-3.5 h-3.5"></i></a>` : ''}
+                        ${!cumplido ? `
+                        <form method="POST" action="/acuerdos/cumplir" onsubmit="return confirm('¿Marcar pago como cumplido?');">
+                            <input type="hidden" name="acuerdo_id" value="${idNum}">
+                            <button type="submit" class="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px] hover:bg-emerald-700">Pagado</button>
+                        </form>` : ''}
+                    </div>
+                </div>
+            </div>`;
+        } else {
+            return `
+            <div class="p-3 rounded-xl border border-blue-200 bg-blue-50/40 text-xs space-y-2">
+                <div class="flex items-center justify-between gap-2">
+                    <span class="font-bold text-blue-900 flex items-center gap-1">
+                        <i data-lucide="scale" class="w-3.5 h-3.5 text-blue-600"></i>
+                        <span>Término Judicial</span>
+                    </span>
+                    <span class="text-[10px] font-bold bg-white text-slate-600 px-2 py-0.5 rounded border border-blue-200">${escapeHtml(e.radicado)}</span>
+                </div>
+                <div>
+                    <p class="font-bold text-slate-800">${escapeHtml(e.titulo)}</p>
+                    ${e.observaciones ? `<p class="text-[11px] text-slate-500 mt-0.5">${escapeHtml(e.observaciones)}</p>` : ''}
+                </div>
+                <div class="flex items-center justify-between pt-1 border-t border-blue-100">
+                    <span class="text-[10px] text-slate-400">Límite: <b>${e.fecha}</b></span>
                     <form method="POST" action="/vencimientos/completar">
-                        <input type="hidden" name="vencimiento_id" value="{{ v.id }}">
-                        <button type="submit" class="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1.5">
-                            <i data-lucide="check-circle" class="w-4 h-4"></i> Marcar Completado
-                        </button>
+                        <input type="hidden" name="vencimiento_id" value="${idNum}">
+                        <button type="submit" class="px-2 py-1 rounded bg-blue-600 text-white font-bold text-[10px] hover:bg-blue-700">Completar</button>
                     </form>
                 </div>
-            </div>
-            {% endfor %}
-        {% else %}
-            <div class="bg-emerald-50 border-2 border-dashed border-emerald-200 rounded-xl p-10 text-center">
-                <div class="w-16 h-16 bg-white text-emerald-500 rounded-full flex items-center justify-center shadow-sm mb-4 mx-auto"><i data-lucide="check" class="w-8 h-8"></i></div>
-                <h4 class="text-lg font-bold text-emerald-800">¡Agenda limpia!</h4>
-                <p class="text-emerald-600 text-sm mt-1">No tienes términos ni vencimientos pendientes por gestionar.</p>
-            </div>
-        {% endif %}
-    </div>
-</div>
+            </div>`;
+        }
+    }).join('');
+
+    if (window.lucide) lucide.createIcons();
+}
+
+function escapeHtml(str) {
+    return String(str || '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+
+// Inicialización
+document.addEventListener('DOMContentLoaded', () => {
+    irHoy();
+});
+</script>
 {% endblock %}
