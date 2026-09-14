@@ -6,7 +6,7 @@ import secrets
 import hashlib
 import hmac
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -207,3 +207,161 @@ def servir_pdf_bot(filename: str, expires: int, token: str):
         filename=filename,
         headers={"Cache-Control": "private, max-age=900"},
     )
+
+
+@router.post("/api/bot/acuerdo")
+async def registrar_acuerdo_bot(request: Request):
+    """Permite al agente conversacional registrar compromisos y acuerdos de pago en el ERP."""
+    _require_api_key(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="El cuerpo debe ser JSON válido")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Payload inválido")
+
+    identificacion = str(payload.get("identificacion") or payload.get("cedula") or "").strip()
+    if not identificacion:
+        raise HTTPException(status_code=422, detail="identificacion es requerida")
+
+    fecha_texto = str(payload.get("fecha_compromiso") or payload.get("fecha_pago") or "")
+    try:
+        fecha_compromiso = datetime.strptime(fecha_texto, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=422, detail="fecha_compromiso debe tener formato YYYY-MM-DD")
+
+    try:
+        valor = float(payload.get("valor_acordado") or payload.get("valor") or 0.0)
+    except (ValueError, TypeError):
+        valor = 0.0
+
+    inmueble_id = payload.get("inmueble_id")
+    try:
+        inmueble_id = int(inmueble_id) if inmueble_id else None
+    except (ValueError, TypeError):
+        inmueble_id = None
+
+    telefono = str(payload.get("telefono") or "").strip()
+    nombre_deudor = str(payload.get("nombre_deudor") or payload.get("nombre") or "").strip()
+    observaciones = str(payload.get("observaciones") or payload.get("resumen") or "Acuerdo de pago pactado vía WhatsApp con Agente IA").strip()
+    numero_cuotas = int(payload.get("numero_cuotas") or 1)
+    cuota_actual = int(payload.get("cuota_actual") or 1)
+
+    import db
+    from psycopg2.extras import RealDictCursor
+
+    conn = db.get_connection()
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # 1. Si no viene el nombre, buscarlo en contactos o inmueble
+                if not nombre_deudor:
+                    cur.execute("SELECT nombre, telefono FROM contactos WHERE identificacion=%s LIMIT 1", (identificacion,))
+                    c_row = cur.fetchone()
+                    if c_row:
+                        nombre_deudor = c_row.get("nombre") or ""
+                        if not telefono:
+                            telefono = c_row.get("telefono") or ""
+
+                # 2. Insertar en acuerdos_pago
+                cur.execute("""
+                    INSERT INTO acuerdos_pago (
+                        inmueble_id, identificacion_deudor, nombre_deudor, telefono,
+                        valor_acordado, numero_cuotas, cuota_actual, fecha_compromiso,
+                        estado, origen, observaciones
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDIENTE', 'ROBOT_IA', %s)
+                    RETURNING id
+                """, (
+                    inmueble_id, identificacion, nombre_deudor, telefono,
+                    valor, numero_cuotas, cuota_actual, fecha_compromiso, observaciones
+                ))
+                row_ac = cur.fetchone()
+                acuerdo_id = int(row_ac["id"]) if row_ac and str(row_ac.get("id","0")).isdigit() else 1
+
+                # 3. Asentar anotación en gestiones_crm
+                cur.execute("""
+                    INSERT INTO gestiones_crm (
+                        inmueble_id, identificacion_deudor, tipo_contacto,
+                        resumen, promesa_pago_fecha, usuario, estado
+                    ) VALUES (%s, %s, 'WhatsApp IA - Acuerdo', %s, %s, 'Bot Claude', 'ACTIVO')
+                """, (
+                    inmueble_id, identificacion,
+                    f"🤝 [ACUERDO DE PAGO #{acuerdo_id}] Cuota {cuota_actual}/{numero_cuotas} por ${valor:,.0f} para el {fecha_compromiso}. {observaciones}",
+                    fecha_compromiso
+                ))
+
+                # 4. Insertar en vencimientos para agenda judicial unificada
+                radicado = "ACUERDO-PAGO"
+                if inmueble_id:
+                    cur.execute("SELECT radicado_interno FROM procesos WHERE inmueble_id=%s LIMIT 1", (inmueble_id,))
+                    p_row = cur.fetchone()
+                    if p_row and p_row.get("radicado_interno"):
+                        radicado = p_row["radicado_interno"]
+
+                cur.execute("""
+                    INSERT INTO vencimientos (
+                        radicado_interno, titulo, fecha_vencimiento, observaciones,
+                        completado, tipo, valor, inmueble_id
+                    ) VALUES (%s, %s, %s, %s, FALSE, 'ACUERDO_PAGO', %s, %s)
+                """, (
+                    radicado,
+                    f"Cobro Cuota #{cuota_actual} ({nombre_deudor or identificacion}) - ${valor:,.0f}",
+                    fecha_compromiso,
+                    f"Acuerdo #{acuerdo_id}. Tel: {telefono}. Obs: {observaciones}",
+                    valor,
+                    inmueble_id
+                ))
+
+        print(f"[BOT ACUERDO] Registrado acuerdo #{acuerdo_id} para {identificacion} por ${valor:,.0f} al {fecha_compromiso}", flush=True)
+
+        return JSONResponse({
+            "status": "success",
+            "mensaje": "Acuerdo de pago registrado y sincronizado en ERP",
+            "acuerdo_id": acuerdo_id,
+            "datos": {
+                "identificacion": identificacion,
+                "nombre_deudor": nombre_deudor,
+                "fecha_compromiso": str(fecha_compromiso),
+                "valor_acordado": valor,
+                "estado": "PENDIENTE",
+            }
+        })
+    except Exception as exc:
+        print(f"[BOT ACUERDO] Error registrando acuerdo: {exc!r}", flush=True)
+        raise HTTPException(status_code=500, detail="Error interno al registrar acuerdo en ERP")
+    finally:
+        conn.release()
+
+
+@router.get("/api/bot/recordatorios/pendientes")
+def consultar_recordatorios_pendientes(request: Request, dias_anticipacion: int = 1):
+    """Consulta acuerdos de pago próximos para disparar recordatorios programados."""
+    _require_api_key(request)
+    import db
+    from psycopg2.extras import RealDictCursor
+    conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            hoy = date.today()
+            limite = hoy + timedelta(days=dias_anticipacion)
+            cur.execute("""
+                SELECT a.id, a.inmueble_id, a.identificacion_deudor, a.nombre_deudor, a.telefono,
+                       a.valor_acordado, a.fecha_compromiso, a.cuota_actual, a.numero_cuotas,
+                       a.recordatorio_previo_enviado, a.recordatorio_dia_enviado, a.recordatorio_mora_enviado,
+                       i.conjunto_residencial, i.torre_apto
+                FROM acuerdos_pago a
+                LEFT JOIN inmuebles_ph i ON a.inmueble_id = i.id
+                WHERE a.estado = 'PENDIENTE'
+                  AND a.fecha_compromiso BETWEEN %s AND %s
+                ORDER BY a.fecha_compromiso ASC
+            """, (hoy, limite))
+            acuerdos = [dict(r) for r in cur.fetchall()]
+            for a in acuerdos:
+                if a.get("valor_acordado") is not None:
+                    a["valor_acordado"] = float(a["valor_acordado"])
+                if a.get("fecha_compromiso"):
+                    a["fecha_compromiso"] = str(a["fecha_compromiso"])
+        return JSONResponse({"status": "success", "total": len(acuerdos), "acuerdos": acuerdos})
+    finally:
+        conn.release()

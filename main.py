@@ -82,9 +82,9 @@ observability.install_exception_handling(app)
 # MIDDLEWARE DE SEGURIDAD PRODUCTIVA
 # ==============================================================================
 def _is_public_path(path: str) -> bool:
-    if path in ("/login", "/health", "/api/bot/liquidar"):
+    if path in ("/login", "/health"):
         return True
-    if path.startswith("/static/") or path.startswith("/api/bot/pdf/"):
+    if path.startswith("/static/") or path.startswith("/api/bot/"):
         return True
     return False
 
@@ -223,7 +223,88 @@ def vista_login(request: Request):
 
 @app.get("/dashboard")
 def vista_dashboard(request: Request):
-    return render_template("dashboard.html", {"request": request})
+    conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # 1. Total Procesos Activos
+            cur.execute("SELECT COUNT(*) AS total FROM procesos WHERE COALESCE(estado, 'Activo') ILIKE 'Activo'")
+            row_p = cur.fetchone()
+            total_procesos = row_p["total"] if row_p else 0
+
+            # 2. Total Inmuebles
+            cur.execute("SELECT COUNT(*) AS total FROM inmuebles_ph")
+            row_i = cur.fetchone()
+            total_inmuebles = row_i["total"] if row_i else 0
+
+            # 3. Acuerdos de Pago (Hoy, Vencidos, Próximos, Monto Total)
+            hoy = date.today()
+            acuerdos_hoy = []
+            acuerdos_vencidos = []
+            acuerdos_proximos = []
+            monto_acuerdos_vigentes = 0.0
+
+            if expedientes_service._table_exists(cur, "acuerdos_pago"):
+                # Hoy
+                cur.execute("""
+                    SELECT a.*, i.conjunto_residencial, i.torre_apto
+                    FROM acuerdos_pago a
+                    LEFT JOIN inmuebles_ph i ON a.inmueble_id = i.id
+                    WHERE a.fecha_compromiso = %s AND a.estado = 'PENDIENTE'
+                    ORDER BY a.valor_acordado DESC
+                """, (hoy,))
+                acuerdos_hoy = [dict(r) for r in cur.fetchall()]
+
+                # Vencidos / En mora
+                cur.execute("""
+                    SELECT a.*, i.conjunto_residencial, i.torre_apto
+                    FROM acuerdos_pago a
+                    LEFT JOIN inmuebles_ph i ON a.inmueble_id = i.id
+                    WHERE a.fecha_compromiso < %s AND a.estado = 'PENDIENTE'
+                    ORDER BY a.fecha_compromiso DESC LIMIT 20
+                """, (hoy,))
+                acuerdos_vencidos = [dict(r) for r in cur.fetchall()]
+
+                # Próximos (próximos 7 días)
+                cur.execute("""
+                    SELECT a.*, i.conjunto_residencial, i.torre_apto
+                    FROM acuerdos_pago a
+                    LEFT JOIN inmuebles_ph i ON a.inmueble_id = i.id
+                    WHERE a.fecha_compromiso > %s AND a.fecha_compromiso <= %s + INTERVAL '7 days' AND a.estado = 'PENDIENTE'
+                    ORDER BY a.fecha_compromiso ASC LIMIT 20
+                """, (hoy, hoy))
+                acuerdos_proximos = [dict(r) for r in cur.fetchall()]
+
+                # Monto total vigente
+                cur.execute("SELECT COALESCE(SUM(valor_acordado), 0) AS suma FROM acuerdos_pago WHERE estado = 'PENDIENTE'")
+                row_s = cur.fetchone()
+                monto_acuerdos_vigentes = float(row_s["suma"]) if row_s else 0.0
+
+            # 4. Términos Judiciales Próximos
+            terminos_proximos = []
+            if expedientes_service._table_exists(cur, "vencimientos"):
+                cur.execute("""
+                    SELECT * FROM vencimientos
+                    WHERE completado = FALSE AND COALESCE(tipo, 'PROCESAL') = 'PROCESAL'
+                    ORDER BY fecha_vencimiento ASC LIMIT 10
+                """)
+                terminos_proximos = [dict(r) for r in cur.fetchall()]
+
+        return render_template(
+            "dashboard.html",
+            {
+                "request": request,
+                "total_procesos": total_procesos,
+                "total_inmuebles": total_inmuebles,
+                "acuerdos_hoy": acuerdos_hoy,
+                "acuerdos_vencidos": acuerdos_vencidos,
+                "acuerdos_proximos": acuerdos_proximos,
+                "monto_acuerdos_vigentes": monto_acuerdos_vigentes,
+                "terminos_proximos": terminos_proximos,
+                "hoy": str(hoy),
+            },
+        )
+    finally:
+        conn.release()
 
 
 @app.get("/logout")
@@ -767,9 +848,36 @@ def _ensure_crm_and_vencimientos_schema():
                 """)
                 cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS completado BOOLEAN NOT NULL DEFAULT FALSE")
                 cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP")
+                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'PROCESAL'")
+                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS valor NUMERIC(14,2) DEFAULT 0")
+                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS inmueble_id INTEGER")
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS acuerdos_pago (
+                        id BIGSERIAL PRIMARY KEY,
+                        inmueble_id INTEGER,
+                        identificacion_deudor TEXT NOT NULL,
+                        nombre_deudor TEXT,
+                        telefono TEXT,
+                        valor_acordado NUMERIC(14,2) NOT NULL DEFAULT 0,
+                        numero_cuotas INTEGER NOT NULL DEFAULT 1,
+                        cuota_actual INTEGER NOT NULL DEFAULT 1,
+                        fecha_compromiso DATE NOT NULL,
+                        estado TEXT NOT NULL DEFAULT 'PENDIENTE',
+                        origen TEXT NOT NULL DEFAULT 'ROBOT_IA',
+                        observaciones TEXT,
+                        recordatorio_previo_enviado BOOLEAN NOT NULL DEFAULT FALSE,
+                        recordatorio_dia_enviado BOOLEAN NOT NULL DEFAULT FALSE,
+                        recordatorio_mora_enviado BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_vencimientos_fecha ON vencimientos (fecha_vencimiento, completado)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_gestiones_crm_inmueble ON gestiones_crm (inmueble_id, fecha DESC)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_gestiones_crm_identificacion ON gestiones_crm (identificacion_deudor, fecha DESC)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_fecha ON acuerdos_pago (fecha_compromiso, estado)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_deudor ON acuerdos_pago (identificacion_deudor)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_inmueble ON acuerdos_pago (inmueble_id)")
     except Exception as exc:
         print(f"[SCHEMA] Error asegurando tablas auxiliares: {exc!r}", flush=True)
     finally:
@@ -917,7 +1025,136 @@ def vencimientos(request: Request):
                 "SELECT * FROM vencimientos WHERE completado=FALSE ORDER BY fecha_vencimiento ASC, id ASC"
             )
             pendientes = [dict(r) for r in cur.fetchall()]
-        return render_template("vencimientos.html", {"request": request, "radicados": radicados, "vencimientos": pendientes})
+
+            acuerdos = []
+            if expedientes_service._table_exists(cur, "acuerdos_pago"):
+                cur.execute("""
+                    SELECT a.*, i.conjunto_residencial, i.torre_apto
+                    FROM acuerdos_pago a
+                    LEFT JOIN inmuebles_ph i ON a.inmueble_id = i.id
+                    ORDER BY a.fecha_compromiso DESC LIMIT 200
+                """)
+                acuerdos = [dict(r) for r in cur.fetchall()]
+
+            # Eventos unificados para el calendario
+            eventos_calendario = []
+            for v in pendientes:
+                eventos_calendario.append({
+                    "id": f"v-{v['id']}",
+                    "tipo": "TERMINO_JUDICIAL",
+                    "titulo": v.get("titulo") or "Término Judicial",
+                    "fecha": str(v.get("fecha_vencimiento")),
+                    "radicado": v.get("radicado_interno") or "",
+                    "observaciones": v.get("observaciones") or "",
+                    "completado": v.get("completado", False),
+                })
+            for a in acuerdos:
+                val = float(a.get("valor_acordado") or 0)
+                eventos_calendario.append({
+                    "id": f"a-{a['id']}",
+                    "tipo": "ACUERDO_PAGO",
+                    "titulo": f"Pago: {a.get('nombre_deudor') or a.get('identificacion_deudor')} (${val:,.0f})",
+                    "fecha": str(a.get("fecha_compromiso")),
+                    "valor": val,
+                    "estado": a.get("estado", "PENDIENTE"),
+                    "deudor": a.get("nombre_deudor") or a.get("identificacion_deudor"),
+                    "telefono": a.get("telefono") or "",
+                    "inmueble": f"{a.get('conjunto_residencial') or ''} {a.get('torre_apto') or ''}".strip(),
+                    "observaciones": a.get("observaciones") or "",
+                })
+
+        return render_template(
+            "vencimientos.html",
+            {
+                "request": request,
+                "radicados": radicados,
+                "vencimientos": pendientes,
+                "acuerdos": acuerdos,
+                "json_eventos": json.dumps(eventos_calendario, ensure_ascii=False, default=str),
+            },
+        )
+    finally:
+        conn.release()
+
+
+@app.post("/acuerdos/cumplir")
+def cumplir_acuerdo(request: Request, acuerdo_id: int = Form(...)):
+    conn = db.get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE acuerdos_pago SET estado='CUMPLIDO', updated_at=CURRENT_TIMESTAMP WHERE id=%s", (acuerdo_id,))
+                cur.execute("UPDATE vencimientos SET completado=TRUE WHERE tipo='ACUERDO_PAGO' AND observaciones ILIKE %s", (f"%Acuerdo #{acuerdo_id}%",))
+        return _redirect("/vencimientos", mensaje="Acuerdo+marcado+como+cumplido")
+    finally:
+        conn.release()
+
+
+@app.post("/acuerdos/incumplir")
+def incumplir_acuerdo(request: Request, acuerdo_id: int = Form(...)):
+    conn = db.get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE acuerdos_pago SET estado='INCUMPLIDO', updated_at=CURRENT_TIMESTAMP WHERE id=%s", (acuerdo_id,))
+        return _redirect("/vencimientos", mensaje="Acuerdo+marcado+como+incumplido")
+    finally:
+        conn.release()
+
+
+@app.post("/acuerdos/guardar")
+def guardar_acuerdo_manual(
+    request: Request,
+    identificacion_deudor: str = Form(...),
+    fecha_compromiso: str = Form(...),
+    valor_acordado: float = Form(0.0),
+    nombre_deudor: str = Form(""),
+    telefono: str = Form(""),
+    inmueble_id: int | None = Form(None),
+    observaciones: str = Form(""),
+):
+    conn = db.get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO acuerdos_pago (
+                        inmueble_id, identificacion_deudor, nombre_deudor, telefono,
+                        valor_acordado, fecha_compromiso, estado, origen, observaciones
+                    ) VALUES (%s, %s, %s, %s, %s, %s, 'PENDIENTE', 'ABOGADO_HUMANO', %s)
+                    RETURNING id
+                """, (
+                    inmueble_id, identificacion_deudor.strip(), nombre_deudor.strip(), telefono.strip(),
+                    valor_acordado, fecha_compromiso, observaciones.strip()
+                ))
+                acuerdo_id = cur.fetchone()[0]
+
+                # Registrar en gestiones CRM
+                cur.execute("""
+                    INSERT INTO gestiones_crm (
+                        inmueble_id, identificacion_deudor, tipo_contacto,
+                        resumen, promesa_pago_fecha, usuario, estado
+                    ) VALUES (%s, %s, 'Acuerdo Manual', %s, %s, 'Abogado ERP', 'ACTIVO')
+                """, (
+                    inmueble_id, identificacion_deudor.strip(),
+                    f"🤝 [ACUERDO DE PAGO #{acuerdo_id}] Pactado por ${valor_acordado:,.0f} para el {fecha_compromiso}. {observaciones}",
+                    fecha_compromiso
+                ))
+
+                # Registrar en vencimientos
+                cur.execute("""
+                    INSERT INTO vencimientos (
+                        radicado_interno, titulo, fecha_vencimiento, observaciones,
+                        completado, tipo, valor, inmueble_id
+                    ) VALUES ('ACUERDO-PAGO', %s, %s, %s, FALSE, 'ACUERDO_PAGO', %s, %s)
+                """, (
+                    f"Pago acordado ({nombre_deudor or identificacion_deudor}) - ${valor_acordado:,.0f}",
+                    fecha_compromiso,
+                    f"Acuerdo #{acuerdo_id}. Tel: {telefono}. Obs: {observaciones}",
+                    valor_acordado,
+                    inmueble_id
+                ))
+        return _redirect("/vencimientos", mensaje="Acuerdo+registrado+exitosamente")
     finally:
         conn.release()
 
