@@ -887,6 +887,14 @@ def _ensure_crm_and_vencimientos_schema():
         conn.release()
 
 
+@app.on_event("startup")
+def startup_schema_init():
+    """Garantiza la creación y actualización de tablas e índices en Neon automáticamente al iniciar."""
+    print("[STARTUP] Verificando y asegurando esquema de base de datos...", flush=True)
+    _ensure_crm_and_vencimientos_schema()
+    print("[STARTUP] Esquema verificado y asegurado correctamente.", flush=True)
+
+
 @app.get("/crm")
 def crm(request: Request, buscar_inmueble: str | None = None):
     conn = db.get_connection()
