@@ -2,43 +2,339 @@
 {% block contenido %}
 <div class="flex flex-col h-full overflow-hidden p-4 md:p-6 gap-4 bg-slate-50/50">
   <header class="bg-white rounded-2xl border border-slate-200 px-5 py-4 shadow-sm flex flex-wrap items-center justify-between gap-4 shrink-0">
-    <div><div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span><h1 class="text-lg font-bold text-slate-900">Agenda y Calendario</h1></div><p class="text-xs text-slate-500">Vencimientos, acuerdos por cuotas y otros compromisos.</p></div>
-    <div class="flex flex-wrap gap-2"><button onclick="abrirModal('acuerdo')" class="px-3 py-2 rounded-xl bg-emerald-600 text-white font-bold text-xs">🤝 Nuevo Acuerdo</button><button onclick="abrirModal('termino')" class="px-3 py-2 rounded-xl bg-slate-900 text-white font-bold text-xs">⚖️ Nuevo Vencimiento</button><button onclick="abrirModal('otro')" class="px-3 py-2 rounded-xl bg-indigo-600 text-white font-bold text-xs">＋ Otros</button></div>
+    <div>
+      <div class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+        <h1 class="text-lg font-bold text-slate-900">Agenda y Calendario</h1>
+      </div>
+      <p class="text-xs text-slate-500">Vencimientos, acuerdos por cuotas y otros compromisos.</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <button onclick="abrirModal('acuerdo')" class="px-3 py-2 rounded-xl bg-emerald-600 text-white font-bold text-xs">🤝 Nuevo Acuerdo</button>
+      <button onclick="abrirModal('termino')" class="px-3 py-2 rounded-xl bg-slate-900 text-white font-bold text-xs">⚖️ Nuevo Vencimiento</button>
+      <button onclick="abrirModal('otro')" class="px-3 py-2 rounded-xl bg-indigo-600 text-white font-bold text-xs">＋ Otros</button>
+    </div>
   </header>
 
   <div class="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-12 gap-4 overflow-hidden">
     <section class="xl:col-span-8 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-full overflow-hidden p-4 md:p-5">
-      <div class="flex items-center justify-between pb-3 border-b border-slate-100"><div class="flex items-center gap-3"><h2 id="cal-mes-ano" class="text-base md:text-lg font-bold capitalize"></h2><button onclick="irHoy()" class="px-2.5 py-1 rounded-lg border text-xs">Hoy</button></div><div class="hidden sm:flex gap-3 text-[11px]"><span class="text-emerald-800 font-semibold">● Acuerdos</span><span class="text-blue-800 font-semibold">● Vencimientos</span><span class="text-indigo-800 font-semibold">● Otros</span></div><div class="flex gap-1"><button onclick="cambiarMes(-1)" class="p-1.5 rounded-xl border">‹</button><button onclick="cambiarMes(1)" class="p-1.5 rounded-xl border">›</button></div></div>
-      <div class="grid grid-cols-7 gap-1 text-center py-2 text-[11px] font-bold text-slate-400 uppercase border-b"><div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div><div>Dom</div></div>
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div class="flex items-center gap-3">
+          <h2 id="cal-mes-ano" class="text-base md:text-lg font-bold capitalize">Cargando calendario…</h2>
+          <button onclick="irHoy()" class="px-2.5 py-1 rounded-lg border text-xs">Hoy</button>
+        </div>
+        <div class="hidden sm:flex gap-3 text-[11px]">
+          <span class="text-emerald-800 font-semibold">● Acuerdos</span>
+          <span class="text-blue-800 font-semibold">● Vencimientos</span>
+          <span class="text-indigo-800 font-semibold">● Otros</span>
+        </div>
+        <div class="flex gap-1">
+          <button onclick="cambiarMes(-1)" class="p-1.5 rounded-xl border">‹</button>
+          <button onclick="cambiarMes(1)" class="p-1.5 rounded-xl border">›</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-7 gap-1 text-center py-2 text-[11px] font-bold text-slate-400 uppercase border-b">
+        <div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div><div>Dom</div>
+      </div>
       <div id="cal-grid" class="grid grid-cols-7 gap-1 flex-1 min-h-0 pt-1 overflow-y-auto"></div>
     </section>
-    <section class="xl:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-full overflow-hidden"><div class="p-4 border-b bg-slate-50/70"><h3 id="panel-fecha-titulo" class="text-sm font-bold">Eventos</h3><p id="panel-fecha-sub" class="text-[11px] text-slate-500"></p></div><div id="panel-eventos-lista" class="overflow-y-auto flex-1 p-3 space-y-2.5"></div></section>
+
+    <section class="xl:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-full overflow-hidden">
+      <div class="p-4 border-b bg-slate-50/70">
+        <h3 id="panel-fecha-titulo" class="text-sm font-bold">Eventos</h3>
+        <p id="panel-fecha-sub" class="text-[11px] text-slate-500"></p>
+      </div>
+      <div id="panel-eventos-lista" class="overflow-y-auto flex-1 p-3 space-y-2.5"></div>
+    </section>
   </div>
 </div>
 
-<div id="modal-agenda" class="hidden fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4"><div class="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6"><div class="flex justify-between items-center border-b pb-3 mb-4"><h3 id="modal-titulo" class="font-black text-lg">Agenda</h3><button onclick="cerrarModal()">✕</button></div>
-  <div class="flex gap-2 mb-5"><button onclick="cambiarModal('acuerdo')" class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">🤝 Acuerdo</button><button onclick="cambiarModal('termino')" class="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">⚖️ Vencimiento</button><button onclick="cambiarModal('otro')" class="px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold">＋ Otros</button></div>
-  <div id="modal-acuerdo"><form method="POST" action="/acuerdos/guardar" class="space-y-3"><input type="hidden" id="a-ident" name="identificacion_deudor"><input type="hidden" id="a-nombre" name="nombre_deudor"><input type="hidden" id="a-tel" name="telefono"><input type="hidden" id="a-inmueble" name="inmueble_id"><input id="a-buscar" list="lista-contactos" required class="w-full border rounded-xl p-3" placeholder="Buscar por nombre o cédula" oninput="seleccionarContacto(this.value)"><datalist id="lista-contactos">{% for c in contactos %}<option value="{{ c.identificacion }} - {{ c.nombre }}"></option>{% endfor %}</datalist><div id="a-confirm" class="text-xs text-emerald-700 font-semibold"></div><div class="grid grid-cols-1 sm:grid-cols-3 gap-3"><input type="number" step="0.01" name="valor_acordado" required class="border rounded-xl p-3" placeholder="Valor total"><input type="number" name="numero_cuotas" min="1" max="120" value="1" required class="border rounded-xl p-3" placeholder="Cuotas"><select name="frecuencia" class="border rounded-xl p-3"><option value="MENSUAL">Mensual</option><option value="QUINCENAL">Quincenal</option><option value="SEMANAL">Semanal</option></select></div><input type="date" name="fecha_compromiso" required class="w-full border rounded-xl p-3"><textarea name="observaciones" rows="3" class="w-full border rounded-xl p-3" placeholder="Observaciones"></textarea><button class="w-full bg-emerald-600 text-white rounded-xl py-3 font-black">Guardar acuerdo y generar cuotas</button></form></div>
-  <div id="modal-termino" class="hidden"><form method="POST" action="/vencimientos/guardar" class="space-y-3"><select name="radicado_interno" required class="w-full border rounded-xl p-3">{% for rad in radicados %}<option value="{{ rad }}">{{ rad }}</option>{% endfor %}</select><input name="titulo" required class="w-full border rounded-xl p-3" placeholder="Título del vencimiento"><input type="date" name="fecha_vencimiento" required class="w-full border rounded-xl p-3"><textarea name="observaciones" rows="3" class="w-full border rounded-xl p-3" placeholder="Observaciones"></textarea><input type="hidden" name="categoria" value="TERMINO"><button class="w-full bg-slate-900 text-white rounded-xl py-3 font-black">Guardar vencimiento</button></form></div>
-  <div id="modal-otro" class="hidden"><form method="POST" action="/vencimientos/guardar" class="space-y-3"><input type="hidden" name="radicado_interno" value="OTROS"><input name="titulo" required class="w-full border rounded-xl p-3" placeholder="Título o categoría"><input type="date" name="fecha_vencimiento" required class="w-full border rounded-xl p-3"><textarea name="observaciones" rows="3" class="w-full border rounded-xl p-3" placeholder="Observaciones"></textarea><input type="hidden" name="categoria" value="OTROS"><button class="w-full bg-indigo-600 text-white rounded-xl py-3 font-black">Guardar en Otros</button></form></div>
-</div></div>
+<div id="modal-agenda" class="hidden fixed inset-0 bg-slate-950/60 z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6">
+    <div class="flex justify-between items-center border-b pb-3 mb-4">
+      <h3 id="modal-titulo" class="font-black text-lg">Agenda</h3>
+      <button onclick="cerrarModal()">✕</button>
+    </div>
+
+    <div class="flex gap-2 mb-5">
+      <button onclick="cambiarModal('acuerdo')" class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">🤝 Acuerdo</button>
+      <button onclick="cambiarModal('termino')" class="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">⚖️ Vencimiento</button>
+      <button onclick="cambiarModal('otro')" class="px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold">＋ Otros</button>
+    </div>
+
+    <div id="modal-acuerdo">
+      <form method="POST" action="/acuerdos/guardar" class="space-y-3">
+        <input type="hidden" id="a-ident" name="identificacion_deudor">
+        <input type="hidden" id="a-nombre" name="nombre_deudor">
+        <input type="hidden" id="a-tel" name="telefono">
+        <input type="hidden" id="a-inmueble" name="inmueble_id">
+        <input id="a-buscar" list="lista-contactos" required class="w-full border rounded-xl p-3" placeholder="Buscar por nombre o cédula" oninput="seleccionarContacto(this.value)">
+        <datalist id="lista-contactos">
+          {% for c in contactos %}<option value="{{ c.identificacion }} - {{ c.nombre }}"></option>{% endfor %}
+        </datalist>
+        <div id="a-confirm" class="text-xs text-emerald-700 font-semibold"></div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <input type="number" step="0.01" name="valor_acordado" required class="border rounded-xl p-3" placeholder="Valor total">
+          <input type="number" name="numero_cuotas" min="1" max="120" value="1" required class="border rounded-xl p-3" placeholder="Cuotas">
+          <select name="frecuencia" class="border rounded-xl p-3">
+            <option value="MENSUAL">Mensual</option>
+            <option value="QUINCENAL">Quincenal</option>
+            <option value="SEMANAL">Semanal</option>
+          </select>
+        </div>
+        <input type="date" name="fecha_compromiso" required class="w-full border rounded-xl p-3">
+        <textarea name="observaciones" rows="3" class="w-full border rounded-xl p-3" placeholder="Observaciones"></textarea>
+        <button class="w-full bg-emerald-600 text-white rounded-xl py-3 font-black">Guardar acuerdo y generar cuotas</button>
+      </form>
+    </div>
+
+    <div id="modal-termino" class="hidden">
+      <form method="POST" action="/vencimientos/guardar" class="space-y-3">
+        <select name="radicado_interno" required class="w-full border rounded-xl p-3">
+          {% for rad in radicados %}<option value="{{ rad }}">{{ rad }}</option>{% endfor %}
+        </select>
+        <input name="titulo" required class="w-full border rounded-xl p-3" placeholder="Título del vencimiento">
+        <input type="date" name="fecha_vencimiento" required class="w-full border rounded-xl p-3">
+        <textarea name="observaciones" rows="3" class="w-full border rounded-xl p-3" placeholder="Observaciones"></textarea>
+        <input type="hidden" name="categoria" value="TERMINO">
+        <button class="w-full bg-slate-900 text-white rounded-xl py-3 font-black">Guardar vencimiento</button>
+      </form>
+    </div>
+
+    <div id="modal-otro" class="hidden">
+      <form method="POST" action="/vencimientos/guardar" class="space-y-3">
+        <input type="hidden" name="radicado_interno" value="OTROS">
+        <input name="titulo" required class="w-full border rounded-xl p-3" placeholder="Título o categoría">
+        <input type="date" name="fecha_vencimiento" required class="w-full border rounded-xl p-3">
+        <textarea name="observaciones" rows="3" class="w-full border rounded-xl p-3" placeholder="Observaciones"></textarea>
+        <input type="hidden" name="categoria" value="OTROS">
+        <button class="w-full bg-indigo-600 text-white rounded-xl py-3 font-black">Guardar en Otros</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!--
+  Los datos se transportan como JSON puro dentro de un bloque dedicado.
+  Esto evita que un nombre, observación o carácter especial pueda romper
+  el JavaScript inline del calendario.
+-->
+<script type="application/json" id="agenda-eventos-data">{{ json_eventos }}</script>
+<script type="application/json" id="agenda-contactos-data">{{ contactos_json }}</script>
 
 <script>
-const eventos={{ json_eventos|safe }};
-const contactos={{ contactos_json|safe }};
-let fechaActual=new Date(),diaSeleccionado=null;
-const meses=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-function abrirModal(tipo){document.getElementById('modal-agenda').classList.remove('hidden');cambiarModal(tipo)}
-function cerrarModal(){document.getElementById('modal-agenda').classList.add('hidden')}
-function cambiarModal(tipo){['acuerdo','termino','otro'].forEach(x=>document.getElementById('modal-'+x).classList.toggle('hidden',x!==tipo));document.getElementById('modal-titulo').textContent=tipo==='acuerdo'?'Registrar Acuerdo de Pago':tipo==='termino'?'Programar Vencimiento':'Registrar en Otros'}
-function seleccionarContacto(valor){const id=String(valor||'').split(' - ')[0].trim();const p=contactos.find(x=>String(x.identificacion||'')===id)||contactos.find(x=>String(x.nombre||'').toLowerCase()===String(valor||'').toLowerCase());if(!p){document.getElementById('a-ident').value='';document.getElementById('a-confirm').textContent='';return}document.getElementById('a-ident').value=p.identificacion||'';document.getElementById('a-nombre').value=p.nombre||'';document.getElementById('a-tel').value=p.telefono||'';document.getElementById('a-confirm').textContent=`Persona vinculada: ${p.nombre||''} · ${p.identificacion||''}`}
-function fmt(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
-function renderizarCalendario(){const grid=document.getElementById('cal-grid'),title=document.getElementById('cal-mes-ano'),y=fechaActual.getFullYear(),m=fechaActual.getMonth();title.textContent=`${meses[m]} ${y}`;grid.innerHTML='';const start=(new Date(y,m,1).getDay()+6)%7,days=new Date(y,m+1,0).getDate(),prev=new Date(y,m,0).getDate();for(let i=start-1;i>=0;i--)grid.innerHTML+=`<div class="p-1.5 text-[10px] text-slate-300 rounded-lg bg-slate-50 min-h-[58px]">${prev-i}</div>`;for(let d=1;d<=days;d++){const f=`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`,sel=f===diaSeleccionado,ev=eventos.filter(e=>e.fecha===f),a=ev.filter(e=>e.tipo==='ACUERDO_PAGO'),v=ev.filter(e=>e.tipo==='TERMINO_JUDICIAL'),o=ev.filter(e=>e.tipo==='OTRO');let badges='';if(a.length)badges+=`<span class="block px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-bold truncate">🤝 ${a.length} cuota(s)</span>`;if(v.length)badges+=`<span class="block px-1 py-0.5 rounded bg-blue-100 text-blue-800 text-[9px] font-bold truncate">⚖️ ${v.length} venc.</span>`;if(o.length)badges+=`<span class="block px-1 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[9px] font-bold truncate">＋ ${o.length} otros</span>`;grid.innerHTML+=`<div onclick="seleccionarDia('${f}')" class="p-1.5 rounded-xl border ${sel?'border-emerald-500 ring-2 ring-emerald-200':'border-slate-100 hover:border-slate-300'} min-h-[58px] cursor-pointer"><div class="text-xs font-semibold text-slate-700">${d}</div><div class="space-y-0.5 mt-1">${badges}</div></div>`}}
-function seleccionarDia(f){diaSeleccionado=f;renderizarCalendario();renderEventos(eventos.filter(e=>e.fecha===f))}
-function irHoy(){fechaActual=new Date();diaSeleccionado=fmt(fechaActual);renderizarCalendario();renderEventos(eventos.filter(e=>e.fecha===diaSeleccionado))}
-function cambiarMes(delta){fechaActual.setMonth(fechaActual.getMonth()+delta);renderizarCalendario()}
-function renderEventos(lista){const box=document.getElementById('panel-eventos-lista');document.getElementById('panel-fecha-titulo').textContent=lista.length?'Eventos seleccionados':'Sin eventos';document.getElementById('panel-fecha-sub').textContent=lista.length+` registro(s)`;box.innerHTML=lista.length?lista.map(e=>{if(e.tipo==='ACUERDO_PAGO'){return `<div class="p-3 rounded-xl border border-emerald-200 bg-emerald-50/40 text-xs"><div class="flex justify-between gap-2"><div><b>🤝 ${escapeHtml(e.titulo)}</b><div class="text-[11px] text-slate-500">${escapeHtml(e.inmueble||'')} · $${Number(e.valor||0).toLocaleString('es-CO')}</div></div><form method="POST" action="/acuerdos/anular" onsubmit="return confirm('¿Anular todo el acuerdo y sus cuotas?');"><input type="hidden" name="acuerdo_id" value="${e.acuerdo_id}"><button class="px-2 py-1 rounded bg-red-600 text-white font-bold text-[10px]">Anular</button></form></div><div class="mt-2 flex items-center justify-between"><span>Fecha: <b>${e.fecha}</b></span>${e.estado==='CUMPLIDO'?'✅ Cumplida':`<form method="POST" action="/acuerdos/cumplir"><input type="hidden" name="acuerdo_id" value="${e.acuerdo_id}"><input type="hidden" name="cuota_id" value="${e.cuota_id}"><button class="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px]">Pagada</button></form>`}</div></div>`}const id=e.id.split('-')[1];return `<div class="p-3 rounded-xl border ${e.tipo==='OTRO'?'border-indigo-200 bg-indigo-50/40':'border-blue-200 bg-blue-50/40'} text-xs"><div class="flex justify-between gap-2"><div><b>${e.tipo==='OTRO'?'＋':'⚖️'} ${escapeHtml(e.titulo)}</b><div class="text-[11px] text-slate-500">${escapeHtml(e.radicado||'')}</div></div><form method="POST" action="/vencimientos/anular"><input type="hidden" name="vencimiento_id" value="${id}"><button class="px-2 py-1 rounded bg-red-600 text-white font-bold text-[10px]">Anular</button></form></div>${e.observaciones?`<div class="mt-2 text-[11px] text-slate-600">${escapeHtml(e.observaciones)}</div>`:''}<div class="mt-2">Fecha: <b>${e.fecha}</b></div></div>`}).join(''):'<div class="p-8 text-center text-slate-400 text-xs">No hay eventos.</div>'}
-function escapeHtml(str){return String(str||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
-document.addEventListener('DOMContentLoaded',()=>irHoy());
+(function () {
+  'use strict';
+
+  const eventosEl = document.getElementById('agenda-eventos-data');
+  const contactosEl = document.getElementById('agenda-contactos-data');
+
+  let eventos = [];
+  let contactos = [];
+
+  try {
+    eventos = JSON.parse(eventosEl ? eventosEl.textContent || '[]' : '[]');
+  } catch (error) {
+    console.error('[AGENDA] Error leyendo eventos:', error);
+    eventos = [];
+  }
+
+  try {
+    contactos = JSON.parse(contactosEl ? contactosEl.textContent || '[]' : '[]');
+  } catch (error) {
+    console.error('[AGENDA] Error leyendo contactos:', error);
+    contactos = [];
+  }
+
+  let fechaActual = new Date();
+  let diaSeleccionado = null;
+
+  const meses = [
+    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
+  ];
+
+  window.abrirModal = function (tipo) {
+    const modal = document.getElementById('modal-agenda');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    cambiarModal(tipo);
+  };
+
+  window.cerrarModal = function () {
+    const modal = document.getElementById('modal-agenda');
+    if (modal) modal.classList.add('hidden');
+  };
+
+  window.cambiarModal = function (tipo) {
+    ['acuerdo', 'termino', 'otro'].forEach(function (x) {
+      const el = document.getElementById('modal-' + x);
+      if (el) el.classList.toggle('hidden', x !== tipo);
+    });
+    const titulo = document.getElementById('modal-titulo');
+    if (titulo) {
+      titulo.textContent = tipo === 'acuerdo'
+        ? 'Registrar Acuerdo de Pago'
+        : tipo === 'termino'
+          ? 'Programar Vencimiento'
+          : 'Registrar en Otros';
+    }
+  };
+
+  window.seleccionarContacto = function (valor) {
+    const id = String(valor || '').split(' - ')[0].trim();
+    const buscado = String(valor || '').trim().toLowerCase();
+    const persona = contactos.find(function (x) {
+      return String(x.identificacion || '') === id;
+    }) || contactos.find(function (x) {
+      return String(x.nombre || '').trim().toLowerCase() === buscado;
+    });
+
+    const ident = document.getElementById('a-ident');
+    const nombre = document.getElementById('a-nombre');
+    const tel = document.getElementById('a-tel');
+    const confirm = document.getElementById('a-confirm');
+
+    if (!persona) {
+      if (ident) ident.value = '';
+      if (nombre) nombre.value = '';
+      if (tel) tel.value = '';
+      if (confirm) confirm.textContent = '';
+      return;
+    }
+
+    if (ident) ident.value = persona.identificacion || '';
+    if (nombre) nombre.value = persona.nombre || '';
+    if (tel) tel.value = persona.telefono || '';
+    if (confirm) confirm.textContent = 'Persona vinculada: ' + (persona.nombre || '') + ' · ' + (persona.identificacion || '');
+  };
+
+  function fmt(d) {
+    return d.getFullYear() + '-' +
+      String(d.getMonth() + 1).padStart(2, '0') + '-' +
+      String(d.getDate()).padStart(2, '0');
+  }
+
+  function escapeHtml(str) {
+    return String(str || '').replace(/[&<>'\"]/g, function (c) {
+      return {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;'
+      }[c];
+    });
+  }
+
+  function renderizarCalendario() {
+    const grid = document.getElementById('cal-grid');
+    const title = document.getElementById('cal-mes-ano');
+    if (!grid || !title) return;
+
+    const y = fechaActual.getFullYear();
+    const m = fechaActual.getMonth();
+    title.textContent = meses[m] + ' ' + y;
+    grid.innerHTML = '';
+
+    const start = (new Date(y, m, 1).getDay() + 6) % 7;
+    const days = new Date(y, m + 1, 0).getDate();
+    const prev = new Date(y, m, 0).getDate();
+
+    for (let i = start - 1; i >= 0; i--) {
+      grid.innerHTML += '<div class="p-1.5 text-[10px] text-slate-300 rounded-lg bg-slate-50 min-h-[58px]">' + (prev - i) + '</div>';
+    }
+
+    for (let d = 1; d <= days; d++) {
+      const f = y + '-' + String(m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+      const sel = f === diaSeleccionado;
+      const ev = eventos.filter(function (e) { return e.fecha === f; });
+      const a = ev.filter(function (e) { return e.tipo === 'ACUERDO_PAGO'; });
+      const v = ev.filter(function (e) { return e.tipo === 'TERMINO_JUDICIAL' || e.tipo === 'LEGACY_ACUERDO'; });
+      const o = ev.filter(function (e) { return e.tipo === 'OTRO'; });
+
+      let badges = '';
+      if (a.length) badges += '<span class="block px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-bold truncate">🤝 ' + a.length + ' cuota(s)</span>';
+      if (v.length) badges += '<span class="block px-1 py-0.5 rounded bg-blue-100 text-blue-800 text-[9px] font-bold truncate">⚖️ ' + v.length + ' venc.</span>';
+      if (o.length) badges += '<span class="block px-1 py-0.5 rounded bg-indigo-100 text-indigo-800 text-[9px] font-bold truncate">＋ ' + o.length + ' otros</span>';
+
+      grid.innerHTML += '<div onclick="seleccionarDia(\'' + f + '\')" class="p-1.5 rounded-xl border ' +
+        (sel ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-slate-100 hover:border-slate-300') +
+        ' min-h-[58px] cursor-pointer">' +
+        '<div class="text-xs font-semibold text-slate-700">' + d + '</div>' +
+        '<div class="space-y-0.5 mt-1">' + badges + '</div></div>';
+    }
+  }
+
+  window.seleccionarDia = function (f) {
+    diaSeleccionado = f;
+    renderizarCalendario();
+    renderEventos(eventos.filter(function (e) { return e.fecha === f; }));
+  };
+
+  window.irHoy = function () {
+    fechaActual = new Date();
+    diaSeleccionado = fmt(fechaActual);
+    renderizarCalendario();
+    renderEventos(eventos.filter(function (e) { return e.fecha === diaSeleccionado; }));
+  };
+
+  window.cambiarMes = function (delta) {
+    fechaActual.setMonth(fechaActual.getMonth() + delta);
+    renderizarCalendario();
+  };
+
+  function renderEventos(lista) {
+    const box = document.getElementById('panel-eventos-lista');
+    const titulo = document.getElementById('panel-fecha-titulo');
+    const sub = document.getElementById('panel-fecha-sub');
+    if (!box || !titulo || !sub) return;
+
+    titulo.textContent = lista.length ? 'Eventos seleccionados' : 'Sin eventos';
+    sub.textContent = lista.length + ' registro(s)';
+
+    if (!lista.length) {
+      box.innerHTML = '<div class="p-8 text-center text-slate-400 text-xs">No hay eventos para esta fecha.</div>';
+      return;
+    }
+
+    box.innerHTML = lista.map(function (e) {
+      if (e.tipo === 'ACUERDO_PAGO') {
+        return '<div class="p-3 rounded-xl border border-emerald-200 bg-emerald-50/40 text-xs">' +
+          '<div class="flex justify-between gap-2"><div><b>🤝 ' + escapeHtml(e.titulo) + '</b>' +
+          '<div class="text-[11px] text-slate-500">' + escapeHtml(e.inmueble || '') + ' · $' + Number(e.valor || 0).toLocaleString('es-CO') + '</div></div>' +
+          '<form method="POST" action="/acuerdos/anular" onsubmit="return confirm(\'¿Anular todo el acuerdo y sus cuotas?\');">' +
+          '<input type="hidden" name="acuerdo_id" value="' + e.acuerdo_id + '"><button class="px-2 py-1 rounded bg-red-600 text-white font-bold text-[10px]">Anular</button></form></div>' +
+          '<div class="mt-2 flex items-center justify-between"><span>Fecha: <b>' + escapeHtml(e.fecha) + '</b></span>' +
+          (e.estado === 'CUMPLIDO'
+            ? '✅ Cumplida'
+            : '<form method="POST" action="/acuerdos/cumplir"><input type="hidden" name="acuerdo_id" value="' + e.acuerdo_id + '"><input type="hidden" name="cuota_id" value="' + e.cuota_id + '"><button class="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px]">Pagada</button></form>') +
+          '</div></div>';
+      }
+
+      const id = String(e.id || '').split('-')[1] || '';
+      const esOtro = e.tipo === 'OTRO';
+      return '<div class="p-3 rounded-xl border ' +
+        (esOtro ? 'border-indigo-200 bg-indigo-50/40' : 'border-blue-200 bg-blue-50/40') +
+        ' text-xs"><div class="flex justify-between gap-2"><div><b>' +
+        (esOtro ? '＋' : '⚖️') + ' ' + escapeHtml(e.titulo) + '</b><div class="text-[11px] text-slate-500">' + escapeHtml(e.radicado || '') + '</div></div>' +
+        '<form method="POST" action="/vencimientos/anular"><input type="hidden" name="vencimiento_id" value="' + id + '"><button class="px-2 py-1 rounded bg-red-600 text-white font-bold text-[10px]">Anular</button></form></div>' +
+        (e.observaciones ? '<div class="mt-2 text-[11px] text-slate-600">' + escapeHtml(e.observaciones) + '</div>' : '') +
+        '<div class="mt-2">Fecha: <b>' + escapeHtml(e.fecha) + '</b></div></div>';
+    }).join('');
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    try {
+      irHoy();
+    } catch (error) {
+      console.error('[AGENDA] Error renderizando calendario:', error);
+      const grid = document.getElementById('cal-grid');
+      const title = document.getElementById('cal-mes-ano');
+      if (title) title.textContent = 'Calendario';
+      if (grid) grid.innerHTML = '<div class="col-span-7 p-8 text-center text-red-500 text-sm">No fue posible cargar el calendario. Revise los registros del servidor.</div>';
+    }
+  });
+})();
 </script>
 {% endblock %}
