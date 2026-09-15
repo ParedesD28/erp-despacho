@@ -4,9 +4,12 @@ from datetime import date, datetime
 import json
 import unicodedata
 import time
+
 import pandas as pd
 from psycopg2.extras import RealDictCursor
+
 import db
+
 
 CANONICAL_STAGES = [
     "1. Presentación de la demanda",
@@ -21,6 +24,7 @@ CANONICAL_STAGES = [
     "Terminación del Proceso",
 ]
 CANONICAL = set(CANONICAL_STAGES)
+TIPOS_CARTERA = {"PREJURIDICO", "JURIDICO"}
 
 
 def _row_value(row, key_or_index, default=None):
@@ -39,7 +43,111 @@ def _row_value(row, key_or_index, default=None):
         return default
 
 
+def _ensure_cartera_schema(cur):
+    """Asegura la clasificación central de cartera sin depender de migraciones manuales.
+
+    La columna vive en procesos, que es el registro central del ERP. La migración inicial
+    aprovecha los datos históricos que ya existen en radicado_rama: PREJURIDICO y sus
+    variantes se convierten en PREJURIDICO; el resto queda como JURIDICO.
+    """
+    cur.execute("""
+        ALTER TABLE procesos
+        ADD COLUMN IF NOT EXISTS tipo_cartera VARCHAR(20)
+    """)
+
+    cur.execute("""
+        UPDATE procesos
+        SET tipo_cartera = CASE
+            WHEN UPPER(TRIM(COALESCE(radicado_rama, ''))) = 'PREJURIDICO'
+              OR UPPER(TRIM(COALESCE(radicado_rama, ''))) LIKE 'PREJURIDICO-%'
+              OR UPPER(TRIM(COALESCE(radicado_rama, ''))) LIKE 'PREJ-%'
+                THEN 'PREJURIDICO'
+            ELSE 'JURIDICO'
+        END
+        WHERE tipo_cartera IS NULL
+           OR UPPER(TRIM(tipo_cartera)) NOT IN ('PREJURIDICO', 'JURIDICO')
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_procesos_tipo_cartera
+        ON procesos (tipo_cartera)
+    """)
+
+    # La clasificación se mantiene coherente con el identificador judicial.
+    cur.execute("""
+        CREATE OR REPLACE FUNCTION fn_sync_tipo_cartera_proceso()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+            IF UPPER(TRIM(COALESCE(NEW.radicado_rama, ''))) = 'PREJURIDICO'
+               OR UPPER(TRIM(COALESCE(NEW.radicado_rama, ''))) LIKE 'PREJURIDICO-%'
+               OR UPPER(TRIM(COALESCE(NEW.radicado_rama, ''))) LIKE 'PREJ-%'
+            THEN
+                NEW.tipo_cartera := 'PREJURIDICO';
+            ELSIF NULLIF(TRIM(COALESCE(NEW.radicado_rama, '')), '') IS NOT NULL THEN
+                NEW.tipo_cartera := 'JURIDICO';
+            END IF;
+            RETURN NEW;
+        END;
+        $$
+    """)
+
+    cur.execute("DROP TRIGGER IF EXISTS trg_sync_tipo_cartera_proceso ON procesos")
+    cur.execute("""
+        CREATE TRIGGER trg_sync_tipo_cartera_proceso
+        BEFORE INSERT OR UPDATE OF radicado_rama ON procesos
+        FOR EACH ROW
+        EXECUTE FUNCTION fn_sync_tipo_cartera_proceso()
+    """)
+
+    # Nadie puede crear actuaciones procesales mientras el expediente sea PREJURIDICO.
+    if _table_exists_without_cartera(cur, "actuaciones"):
+        cur.execute("""
+            CREATE OR REPLACE FUNCTION fn_bloquear_actuaciones_prejuridicas()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            DECLARE
+                v_tipo TEXT;
+            BEGIN
+                SELECT tipo_cartera
+                  INTO v_tipo
+                  FROM procesos
+                 WHERE radicado_interno = NEW.radicado_interno
+                 LIMIT 1;
+
+                IF UPPER(COALESCE(v_tipo, '')) = 'PREJURIDICO' THEN
+                    RAISE EXCEPTION 'El expediente PREJURIDICO no admite actuaciones procesales hasta pasar a JURIDICO';
+                END IF;
+
+                RETURN NEW;
+            END;
+            $$
+        """)
+        cur.execute("DROP TRIGGER IF EXISTS trg_bloquear_actuaciones_prejuridicas ON actuaciones")
+        cur.execute("""
+            CREATE TRIGGER trg_bloquear_actuaciones_prejuridicas
+            BEFORE INSERT ON actuaciones
+            FOR EACH ROW
+            EXECUTE FUNCTION fn_bloquear_actuaciones_prejuridicas()
+        """)
+
+
+def _table_exists_without_cartera(cur, table):
+    cur.execute(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema='public' AND table_name=%s)",
+        (table,),
+    )
+    row = cur.fetchone()
+    return bool(_row_value(row, 0, False))
+
+
 def _cols(cur, table):
+    if table == "procesos":
+        _ensure_cartera_schema(cur)
+
     cur.execute(
         "SELECT column_name FROM information_schema.columns "
         "WHERE table_schema='public' AND table_name=%s",
@@ -96,6 +204,11 @@ def _stage_from_act(etapa, descripcion, tipificacion):
 
 def _sync_stage(cur, radicado):
     cols = _cols(cur, "procesos")
+    if "tipo_cartera" in cols:
+        cur.execute("SELECT tipo_cartera FROM procesos WHERE radicado_interno=%s LIMIT 1", (radicado,))
+        row_tipo = cur.fetchone()
+        if row_tipo and str(_row_value(row_tipo, "tipo_cartera", _row_value(row_tipo, 0)) or "").upper() == "PREJURIDICO":
+            return None
     if "etapa_actual" not in cols or not _table_exists(cur, "actuaciones"):
         return None
     act_cols = _cols(cur, "actuaciones")
@@ -114,11 +227,7 @@ def _sync_stage(cur, radicado):
     if not act:
         return None
     values = {name: _row_value(act, name, _row_value(act, idx)) for idx, name in enumerate(available)}
-    stage = _stage_from_act(
-        values.get("etapa"),
-        values.get("descripcion"),
-        values.get("tipificacion_sugerida"),
-    )
+    stage = _stage_from_act(values.get("etapa"), values.get("descripcion"), values.get("tipificacion_sugerida"))
     if not stage:
         return None
     cur.execute("UPDATE procesos SET etapa_actual=%s WHERE radicado_interno=%s", (stage, radicado))
@@ -167,10 +276,10 @@ def _ensure_audit_table(cur):
 def _get_process(cur, radicado):
     cols = _cols(cur, "procesos")
     wanted = [
-        "radicado_interno", "radicado_rama", "naturaleza", "juzgado",
+        "radicado_interno", "radicado_rama", "tipo_cartera", "naturaleza", "juzgado",
         "etapa_actual", "estado", "pretensiones", "medidas_cautelares",
         "id_cliente", "demandante", "id_demandado", "demandado",
-        "abogado_id", "inmueble_id", "fecha_radicacion",
+        "abogado_id", "inmueble_id", "fecha_radicacion", "torre_apto",
     ]
     avail = [c for c in wanted if c in cols]
     if not avail:
@@ -247,10 +356,7 @@ def _get_demandados(cur, radicado):
             for idx, ident in enumerate(ids):
                 if ident not in seen:
                     seen.add(ident)
-                    out.append({
-                        "identificacion": ident,
-                        "nombre": noms[idx] if idx < len(noms) else ident,
-                    })
+                    out.append({"identificacion": ident, "nombre": noms[idx] if idx < len(noms) else ident})
     return out
 
 
@@ -331,73 +437,53 @@ def _audit(cur, radicado):
         (radicado,),
     )
     return [
-        {
-            "id": _row_value(r, "id"),
-            "fecha": _row_value(r, "fecha"),
-            "usuario": _row_value(r, "usuario"),
-            "accion": _row_value(r, "accion"),
-        }
+        {"id": _row_value(r, "id"), "fecha": _row_value(r, "fecha"), "usuario": _row_value(r, "usuario"), "accion": _row_value(r, "accion")}
         for r in cur.fetchall()
     ]
 
 
 def cargar_procesos_general_sin_duplicados():
-    """Carga la lista completa de expedientes sin duplicados utilizando cursores directos ultra rápidos."""
+    """Carga el índice completo de expedientes sin duplicados."""
     hora = time.strftime("%H:%M:%S")
     print(f"[{hora} UTC] 📂 [EXPEDIENTES] Consultando base de datos...", flush=True)
     t0 = time.perf_counter()
     conn = db.get_connection()
     try:
-        query = """
-            SELECT
-                p.radicado_interno,
-                p.radicado_rama,
-                p.naturaleza,
-                p.juzgado,
-                p.etapa_actual,
-                p.estado,
-                p.pretensiones,
-                p.medidas_cautelares,
-                p.id_cliente,
-                c_dem.nombre AS demandante_db,
-                a.nombre AS abogado_asignado,
-                STRING_AGG(
-                    DISTINCT NULLIF(TRIM(c_ddo.nombre), ''),
-                    ' | '
-                ) AS demandado,
-                STRING_AGG(
-                    DISTINCT NULLIF(TRIM(pl.identificacion_demandado), ''),
-                    ' | '
-                ) AS id_demandado
-            FROM procesos p
-            LEFT JOIN contactos c_dem
-                ON p.id_cliente = c_dem.identificacion
-            LEFT JOIN abogados a
-                ON p.abogado_id = a.id
-            LEFT JOIN procesos_litisconsorcio pl
-                ON p.radicado_interno = pl.radicado_interno
-            LEFT JOIN contactos c_ddo
-                ON pl.identificacion_demandado = c_ddo.identificacion
-            GROUP BY
-                p.radicado_interno,
-                p.radicado_rama,
-                p.naturaleza,
-                p.juzgado,
-                p.etapa_actual,
-                p.estado,
-                p.pretensiones,
-                p.medidas_cautelares,
-                p.id_cliente,
-                c_dem.nombre,
-                a.nombre
-            ORDER BY p.radicado_interno DESC
-        """
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            _cols(cur, "procesos")
+            query = """
+                SELECT
+                    p.radicado_interno,
+                    p.radicado_rama,
+                    p.tipo_cartera,
+                    p.naturaleza,
+                    p.juzgado,
+                    p.etapa_actual,
+                    p.estado,
+                    p.pretensiones,
+                    p.medidas_cautelares,
+                    p.id_cliente,
+                    c_dem.nombre AS demandante_db,
+                    a.nombre AS abogado_asignado,
+                    STRING_AGG(DISTINCT NULLIF(TRIM(c_ddo.nombre), ''), ' | ') AS demandado,
+                    STRING_AGG(DISTINCT NULLIF(TRIM(pl.identificacion_demandado), ''), ' | ') AS id_demandado
+                FROM procesos p
+                LEFT JOIN contactos c_dem ON p.id_cliente = c_dem.identificacion
+                LEFT JOIN abogados a ON p.abogado_id = a.id
+                LEFT JOIN procesos_litisconsorcio pl ON p.radicado_interno = pl.radicado_interno
+                LEFT JOIN contactos c_ddo ON pl.identificacion_demandado = c_ddo.identificacion
+                GROUP BY
+                    p.radicado_interno, p.radicado_rama, p.tipo_cartera, p.naturaleza,
+                    p.juzgado, p.etapa_actual, p.estado, p.pretensiones, p.medidas_cautelares,
+                    p.id_cliente, c_dem.nombre, a.nombre
+                ORDER BY p.radicado_interno DESC
+            """
             cur.execute(query)
             rows = cur.fetchall()
             lista = []
             for r in rows:
                 d = dict(r)
+                d["tipo_cartera"] = str(d.get("tipo_cartera") or "JURIDICO").upper()
                 for k, v in d.items():
                     if v is None:
                         d[k] = ""
