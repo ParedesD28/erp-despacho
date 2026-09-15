@@ -163,7 +163,7 @@ def _redirect(path: str, **params) -> RedirectResponse:
         return RedirectResponse(url=path, status_code=303)
     sep = "&" if "?" in path else "?"
     query = urlencode(params)
-    return RedirectResponse(url=f"{path}{sep}{query}")
+    return RedirectResponse(url=f"{path}{sep}{query}", status_code=303)
 
 
 def cargar_inmuebles_ph(conn=None) -> list[dict]:
