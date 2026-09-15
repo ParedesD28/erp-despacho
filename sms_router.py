@@ -654,8 +654,12 @@ def _candidatos_cartera(
         where.append("i.id = ANY(%s)")
         params.append(ids)
 
-    cur.execute("SELECT to_regclass('public.inmueble_propietarios');")
-    tiene_tabla_multiple = cur.fetchone()[0] is not None
+    cur.execute("SELECT to_regclass('public.inmueble_propietarios') AS tabla;")
+    fila_tabla = cur.fetchone()
+    if isinstance(fila_tabla, dict):
+        tiene_tabla_multiple = fila_tabla.get("tabla") is not None
+    else:
+        tiene_tabla_multiple = fila_tabla is not None and fila_tabla[0] is not None
 
     if tiene_tabla_multiple:
         propietarios_cte = """
