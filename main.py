@@ -91,6 +91,8 @@ def _is_public_path(path: str) -> bool:
         return True
     if path.startswith("/static/") or path.startswith("/api/bot/"):
         return True
+    if path.startswith("/sms/api/"):
+        return True
     return False
 
 
@@ -161,7 +163,7 @@ def _redirect(path: str, **params) -> RedirectResponse:
         return RedirectResponse(url=path, status_code=303)
     sep = "&" if "?" in path else "?"
     query = urlencode(params)
-    return RedirectResponse(url=f"{path}{sep}{query}", status_code=303)
+    return RedirectResponse(url=f"{path}{sep}{query}")
 
 
 def cargar_inmuebles_ph(conn=None) -> list[dict]:
