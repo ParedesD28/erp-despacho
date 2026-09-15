@@ -42,6 +42,44 @@ def _row_value(row, key_or_index, default=None):
         return default
 
 
+def _table_exists_without_cartera(cur, table):
+    cur.execute(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=%s)",
+        (table,),
+    )
+    row = cur.fetchone()
+    return bool(_row_value(row, 0, False))
+
+
+def _ensure_inmueble_propietarios_schema(cur):
+    """Normaliza el vínculo inmueble -> múltiples propietarios sin romper el vínculo actual."""
+    if not (_table_exists_without_cartera(cur, "inmuebles_ph") and _table_exists_without_cartera(cur, "contactos")):
+        return
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS inmueble_propietarios (
+            id BIGSERIAL PRIMARY KEY,
+            inmueble_id INTEGER NOT NULL,
+            contacto_id INTEGER NOT NULL,
+            es_principal BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (inmueble_id, contacto_id)
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_inmueble_propietarios_inmueble ON inmueble_propietarios(inmueble_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_inmueble_propietarios_contacto ON inmueble_propietarios(contacto_id)")
+
+    # Migra el propietario que ya existe en inmuebles_ph para que no se pierda información.
+    cur.execute("""
+        INSERT INTO inmueble_propietarios (inmueble_id, contacto_id, es_principal)
+        SELECT i.id, i.contacto_id, TRUE
+        FROM inmuebles_ph i
+        WHERE i.contacto_id IS NOT NULL
+        ON CONFLICT (inmueble_id, contacto_id) DO UPDATE
+        SET es_principal = inmueble_propietarios.es_principal OR EXCLUDED.es_principal
+    """)
+
+
 def _ensure_cartera_schema(cur):
     cur.execute("ALTER TABLE procesos ADD COLUMN IF NOT EXISTS tipo_cartera VARCHAR(20)")
     cur.execute("""
@@ -114,14 +152,7 @@ def _ensure_cartera_schema(cur):
             EXECUTE FUNCTION fn_bloquear_actuaciones_prejuridicas()
         """)
 
-
-def _table_exists_without_cartera(cur, table):
-    cur.execute(
-        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=%s)",
-        (table,),
-    )
-    row = cur.fetchone()
-    return bool(_row_value(row, 0, False))
+    _ensure_inmueble_propietarios_schema(cur)
 
 
 def _cols(cur, table):
@@ -246,6 +277,63 @@ def _ensure_audit_table(cur):
         cur.execute("CREATE INDEX IF NOT EXISTS idx_expediente_ediciones_rad ON expediente_ediciones(radicado_interno, fecha DESC)")
 
 
+def _get_inmueble_info(cur, inmueble_id):
+    if not inmueble_id or not _table_exists(cur, "inmuebles_ph"):
+        return {}, []
+
+    cur.execute("""
+        SELECT id, conjunto_residencial, torre_apto, contacto_id
+        FROM inmuebles_ph
+        WHERE id=%s
+        LIMIT 1
+    """, (inmueble_id,))
+    row = cur.fetchone()
+    if not row:
+        return {}, []
+
+    inmueble = {
+        "id": _row_value(row, "id", _row_value(row, 0)),
+        "conjunto_residencial": _row_value(row, "conjunto_residencial", _row_value(row, 1)) or "",
+        "torre_apto": _row_value(row, "torre_apto", _row_value(row, 2)) or "",
+        "contacto_id": _row_value(row, "contacto_id", _row_value(row, 3)),
+    }
+
+    propietarios = []
+    if _table_exists(cur, "inmueble_propietarios") and _table_exists(cur, "contactos"):
+        cur.execute("""
+            SELECT c.identificacion, c.nombre, c.telefono, c.email,
+                   ip.es_principal
+            FROM inmueble_propietarios ip
+            JOIN contactos c ON c.id=ip.contacto_id
+            WHERE ip.inmueble_id=%s
+            ORDER BY ip.es_principal DESC, c.nombre ASC
+        """, (inmueble_id,))
+        propietarios = [
+            {
+                "identificacion": _row_value(r, "identificacion", _row_value(r, 0)),
+                "nombre": _row_value(r, "nombre", _row_value(r, 1)),
+                "telefono": _row_value(r, "telefono", _row_value(r, 2)) or "",
+                "email": _row_value(r, "email", _row_value(r, 3)) or "",
+                "es_principal": bool(_row_value(r, "es_principal", _row_value(r, 4, False))),
+            }
+            for r in cur.fetchall()
+        ]
+
+    if not propietarios and inmueble.get("contacto_id") and _table_exists(cur, "contactos"):
+        cur.execute("SELECT identificacion, nombre, telefono, email FROM contactos WHERE id=%s", (inmueble["contacto_id"],))
+        owner = cur.fetchone()
+        if owner:
+            propietarios = [{
+                "identificacion": _row_value(owner, "identificacion", _row_value(owner, 0)),
+                "nombre": _row_value(owner, "nombre", _row_value(owner, 1)),
+                "telefono": _row_value(owner, "telefono", _row_value(owner, 2)) or "",
+                "email": _row_value(owner, "email", _row_value(owner, 3)) or "",
+                "es_principal": True,
+            }]
+
+    return inmueble, propietarios
+
+
 def _get_process(cur, radicado):
     cols = _cols(cur, "procesos")
     wanted = [
@@ -262,6 +350,9 @@ def _get_process(cur, radicado):
     if not row:
         return None
     proc = {c: _row_value(row, c, _row_value(row, idx)) for idx, c in enumerate(avail)}
+    inmueble, propietarios = _get_inmueble_info(cur, proc.get("inmueble_id"))
+    proc["inmueble"] = inmueble
+    proc["propietarios_inmueble"] = propietarios
     if _table_exists(cur, "abogados") and proc.get("abogado_id"):
         cur.execute("SELECT nombre FROM abogados WHERE id=%s", (proc["abogado_id"],))
         ab_row = cur.fetchone()
