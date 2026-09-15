@@ -19,6 +19,7 @@ import agenda_service
 import db
 import liquidador
 import main
+import proceso_partes_service
 import security
 import tasas
 from observability import log_msg
@@ -40,6 +41,7 @@ def _ejecutar_mantenimiento_segundo_plano() -> None:
         liquidador.dedupe_expensas()
         tasas.asegurar_tabla_tasas()
         agenda_service.ensure_schema()
+        proceso_partes_service.ensure_schema()
         tasas.prueba_conexion_sfc()
         log_msg("✅ [BACKGROUND]", "Mantenimiento inicial completado")
     except Exception as exc:
