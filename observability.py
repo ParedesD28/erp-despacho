@@ -38,6 +38,11 @@ def _json_log(level: str, event: str, **fields) -> None:
     LOGGER.log(logging.ERROR if level == "ERROR" else logging.INFO, json.dumps(payload, ensure_ascii=False, default=str))
 
 
+def _es_api_path(path: str) -> bool:
+    """Determina si una ruta pertenece a una API que debe conservar respuestas HTTP/JSON."""
+    return path.startswith("/api/") or path.startswith("/sms/api/")
+
+
 def install_exception_handling(app) -> None:
     from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -45,7 +50,7 @@ def install_exception_handling(app) -> None:
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         request_id = getattr(request.state, "request_id", str(uuid.uuid4())[:8])
         log_msg("⚠️ [HTTP ERROR]", f"{exc.status_code} en {request.method} {request.url.path}", detalle=exc.detail)
-        if request.url.path.startswith("/api/"):
+        if _es_api_path(request.url.path):
             return JSONResponse({"error": exc.detail, "request_id": request_id}, status_code=exc.status_code)
         if exc.status_code in (401, 403):
             return RedirectResponse(url="/login", status_code=303)
@@ -60,7 +65,7 @@ def install_exception_handling(app) -> None:
         print(f"💥 Traza detallada:\n{traceback.format_exc()}", flush=True)
         print(f"🚨 =========================================================\n", flush=True)
 
-        if request.url.path.startswith("/api/"):
+        if _es_api_path(request.url.path):
             return JSONResponse({"error": "Error interno del servidor", "detalle": str(exc), "request_id": request_id}, status_code=500)
         return JSONResponse({"error": "No fue posible completar la solicitud", "detalle": str(exc), "request_id": request_id}, status_code=500)
 
