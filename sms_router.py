@@ -10,15 +10,21 @@ from __future__ import annotations
 import os
 import time
 import random
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Tuple, Optional
 
 import requests
-import pytz
 from psycopg2.extras import RealDictCursor
 from fastapi import APIRouter, Request, Form, BackgroundTasks
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+
+# Zona horaria nativa de Colombia sin dependencias externas
+try:
+    from zoneinfo import ZoneInfo
+    TZ_COLOMBIA = ZoneInfo("America/Bogota")
+except Exception:
+    TZ_COLOMBIA = timezone(timedelta(hours=-5))
 
 import db
 
@@ -103,9 +109,8 @@ def _ensure_sms_schema():
 # =============================================================================
 
 def validar_horario_ley_2300() -> Tuple[bool, str]:
-    """Valida los horarios de cobranza para Colombia."""
-    tz = pytz.timezone("America/Bogota")
-    ahora = datetime.now(tz)
+    """Valida los horarios de cobranza para Colombia según la Ley 2300 de 2023."""
+    ahora = datetime.now(TZ_COLOMBIA)
     dia = ahora.weekday()  # 0: Lunes ... 5: Sábado, 6: Domingo
     hora = ahora.hour + (ahora.minute / 60.0)
 
