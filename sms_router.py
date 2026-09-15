@@ -199,6 +199,7 @@ def vista_sms(request: Request, mensaje: str = None, error: str = None):
             total_mora = cand["total_mora"] if cand else 0
 
         return templates.TemplateResponse(
+            request,
             "sms_campanas.html",
             {
                 "request": request,
