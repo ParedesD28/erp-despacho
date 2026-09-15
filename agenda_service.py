@@ -1,8 +1,7 @@
-"""Servicio de agenda/vencimientos del ERP.
+"""Servicio central de agenda, vencimientos y acuerdos del ERP.
 
-Este módulo concentra la lógica de negocio de agenda para que start.py sea
-únicamente el punto de arranque del proceso. Las rutas se registran sobre la
-aplicación principal de main.py una sola vez.
+La agenda vive fuera de start.py: este módulo contiene las reglas de negocio y
+registra sus rutas sobre la aplicación principal. start.py únicamente arranca.
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ import openpyxl
 from openpyxl.styles import Font
 from psycopg2.extras import RealDictCursor
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 import db
 import main
@@ -32,6 +31,7 @@ AGENDA_ROUTE_NAMES = {
     "agenda_anular_vencimiento",
     "agenda_log_xlsx",
 }
+_REGISTERED = False
 
 
 def _sumar_meses(fecha: date, meses: int) -> date:
@@ -42,8 +42,17 @@ def _sumar_meses(fecha: date, meses: int) -> date:
     return date(anio, mes, dia)
 
 
+def _table_exists(cur, name: str) -> bool:
+    try:
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL AS existe", (name,))
+        row = cur.fetchone()
+        return bool(row["existe"] if isinstance(row, dict) else row[0])
+    except Exception:
+        return False
+
+
 def ensure_schema() -> None:
-    """Crea de forma idempotente el esquema adicional de agenda."""
+    """Migraciones idempotentes. Nunca elimina tablas ni registros."""
     main._ensure_crm_and_vencimientos_schema()
     conn = db.get_connection()
     try:
@@ -108,23 +117,25 @@ def ensure_schema() -> None:
                         UNIQUE(inmueble_id, contacto_id)
                     )
                 """)
-                cur.execute("""
-                    INSERT INTO inmueble_propietarios (inmueble_id, contacto_id, es_principal)
-                    SELECT i.id, i.contacto_id, TRUE
-                    FROM inmuebles_ph i
-                    WHERE i.contacto_id IS NOT NULL
-                    ON CONFLICT (inmueble_id, contacto_id) DO UPDATE
-                    SET es_principal = inmueble_propietarios.es_principal OR EXCLUDED.es_principal
-                """)
-                cur.execute("""
-                    INSERT INTO inmueble_propietarios (inmueble_id, contacto_id, es_principal)
-                    SELECT DISTINCT p.inmueble_id, c.id, FALSE
-                    FROM procesos p
-                    JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
-                    JOIN contactos c ON c.identificacion = pl.identificacion_demandado
-                    WHERE p.inmueble_id IS NOT NULL
-                    ON CONFLICT (inmueble_id, contacto_id) DO NOTHING
-                """)
+                if _table_exists(cur, "inmuebles_ph"):
+                    cur.execute("""
+                        INSERT INTO inmueble_propietarios (inmueble_id, contacto_id, es_principal)
+                        SELECT i.id, i.contacto_id, TRUE
+                        FROM inmuebles_ph i
+                        WHERE i.contacto_id IS NOT NULL
+                        ON CONFLICT (inmueble_id, contacto_id) DO UPDATE
+                        SET es_principal = inmueble_propietarios.es_principal OR EXCLUDED.es_principal
+                    """)
+                if _table_exists(cur, "procesos_litisconsorcio"):
+                    cur.execute("""
+                        INSERT INTO inmueble_propietarios (inmueble_id, contacto_id, es_principal)
+                        SELECT DISTINCT p.inmueble_id, c.id, FALSE
+                        FROM procesos p
+                        JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
+                        JOIN contactos c ON c.identificacion = pl.identificacion_demandado
+                        WHERE p.inmueble_id IS NOT NULL
+                        ON CONFLICT (inmueble_id, contacto_id) DO NOTHING
+                    """)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_inmueble_propietarios_inmueble ON inmueble_propietarios(inmueble_id)")
     finally:
         conn.release()
@@ -132,10 +143,10 @@ def ensure_schema() -> None:
 
 def _audit(cur, request: Request, accion: str, tipo: str, registro_id=None,
            radicado_interno=None, identificacion=None, nombre=None,
-           inmueble_id=None, detalle="") -> str:
+           inmueble_id=None, detalle="") -> None:
     user_id = str(getattr(request.state, "user_id", "") or "").strip() or None
     abogado = "Sistema"
-    if user_id:
+    if user_id and _table_exists(cur, "abogados"):
         cur.execute("SELECT nombre FROM abogados WHERE id=%s LIMIT 1", (user_id,))
         row = cur.fetchone()
         if row:
@@ -147,16 +158,25 @@ def _audit(cur, request: Request, accion: str, tipo: str, registro_id=None,
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, (user_id, abogado, accion, tipo, registro_id, radicado_interno,
           identificacion, nombre, inmueble_id, detalle))
-    return abogado
 
 
 def _template_agenda(request: Request, **context):
-    """Render explícito compatible con Starlette moderno; evita ambigüedad de firma."""
     return main.templates.TemplateResponse(
         request=request,
         name="vencimientos.html",
         context={"request": request, **context},
     )
+
+
+def _fecha_json(value) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "date"):
+        try:
+            return value.date().isoformat()
+        except Exception:
+            pass
+    return str(value)[:10]
 
 
 def _crear_router_agenda() -> APIRouter:
@@ -169,13 +189,15 @@ def _crear_router_agenda() -> APIRouter:
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT radicado_interno FROM procesos ORDER BY radicado_interno DESC LIMIT 500")
-                radicados = [r["radicado_interno"] for r in cur.fetchall()]
+                radicados = [r["radicado_interno"] for r in cur.fetchall() if r.get("radicado_interno")]
 
+                # IMPORTANTE: recuperar tambien los registros historicos de
+                # vencimientos, incluidos los ACUERDO_PAGO heredados. La nueva
+                # tabla de cuotas los complementa, no los sustituye.
                 cur.execute("""
                     SELECT * FROM vencimientos
-                    WHERE completado=FALSE
+                    WHERE COALESCE(completado,FALSE)=FALSE
                       AND COALESCE(anulado,FALSE)=FALSE
-                      AND COALESCE(tipo,'PROCESAL') <> 'ACUERDO_PAGO'
                     ORDER BY fecha_vencimiento ASC, id ASC
                 """)
                 vencimientos = [dict(r) for r in cur.fetchall()]
@@ -189,8 +211,8 @@ def _crear_router_agenda() -> APIRouter:
                     JOIN acuerdos_pago a ON a.id=c.acuerdo_id
                     LEFT JOIN inmuebles_ph i ON i.id=a.inmueble_id
                     WHERE COALESCE(c.anulado,FALSE)=FALSE
-                      AND UPPER(COALESCE(c.estado,'PENDIENTE')) <> 'ANULADO'
-                      AND UPPER(COALESCE(a.estado,'PENDIENTE')) <> 'ANULADO'
+                      AND UPPER(COALESCE(c.estado,'PENDIENTE')) NOT IN ('ANULADO','CUMPLIDO')
+                      AND UPPER(COALESCE(a.estado,'PENDIENTE')) NOT IN ('ANULADO','CUMPLIDO')
                     ORDER BY c.fecha_vencimiento ASC, c.id ASC
                 """)
                 cuotas = [dict(r) for r in cur.fetchall()]
@@ -200,15 +222,22 @@ def _crear_router_agenda() -> APIRouter:
 
             eventos = []
             for v in vencimientos:
-                categoria = str(v.get("categoria") or "TERMINO").upper()
+                categoria = str(v.get("categoria") or "").upper()
+                tipo_original = str(v.get("tipo") or "").upper()
+                if categoria == "OTROS":
+                    tipo_evento = "OTRO"
+                elif tipo_original == "ACUERDO_PAGO":
+                    tipo_evento = "LEGACY_ACUERDO"
+                else:
+                    tipo_evento = "TERMINO_JUDICIAL"
                 eventos.append({
                     "id": f"v-{v['id']}",
-                    "tipo": "OTRO" if categoria == "OTROS" else "TERMINO_JUDICIAL",
+                    "tipo": tipo_evento,
                     "titulo": v.get("titulo") or "Vencimiento",
-                    "fecha": str(v.get("fecha_vencimiento")),
+                    "fecha": _fecha_json(v.get("fecha_vencimiento")),
                     "radicado": v.get("radicado_interno") or "",
                     "observaciones": v.get("observaciones") or "",
-                    "categoria": categoria,
+                    "categoria": categoria or "TERMINO",
                 })
 
             for c in cuotas:
@@ -218,7 +247,7 @@ def _crear_router_agenda() -> APIRouter:
                     "id": f"c-{c['id']}",
                     "tipo": "ACUERDO_PAGO",
                     "titulo": f"Cuota {c.get('numero_cuota')}/{n} - {nombre}",
-                    "fecha": str(c.get("fecha_vencimiento")),
+                    "fecha": _fecha_json(c.get("fecha_vencimiento")),
                     "valor": float(c.get("valor_cuota") or 0),
                     "estado": c.get("estado") or "PENDIENTE",
                     "deudor": nombre,
@@ -272,11 +301,10 @@ def _crear_router_agenda() -> APIRouter:
                     persona = cur.fetchone()
                     if not persona:
                         raise ValueError("Seleccione una persona existente del directorio de Contactos.")
-
                     ident = str(persona["identificacion"])
                     nombre_real = str(persona["nombre"] or nombre_deudor or ident)
                     telefono_real = str(persona["telefono"] or telefono or "")
-                    if not inmueble_id:
+                    if not inmueble_id and _table_exists(cur, "inmuebles_ph"):
                         cur.execute("""
                             SELECT i.id FROM inmuebles_ph i
                             JOIN contactos c ON c.id=i.contacto_id
@@ -301,7 +329,7 @@ def _crear_router_agenda() -> APIRouter:
                         VALUES (%s,%s,%s,%s,%s,%s,1,%s,'PENDIENTE','ABOGADO_HUMANO',%s,%s,%s)
                         RETURNING id
                     """, (inmueble_id,ident,nombre_real,telefono_real,total,n,primera,
-                           observaciones.strip(),abogado_id,frecuencia))
+                          observaciones.strip(),abogado_id,frecuencia))
                     acuerdo_id = int(cur.fetchone()["id"])
 
                     cuota_base = round(total / n, 2)
@@ -327,25 +355,12 @@ def _crear_router_agenda() -> APIRouter:
                             INSERT INTO gestiones_crm
                                 (inmueble_id,identificacion_deudor,tipo_contacto,resumen,promesa_pago_fecha,usuario,estado)
                             VALUES (%s,%s,'Acuerdo Manual',%s,%s,'Abogado ERP','ACTIVO')
-                        """, (
-                            inmueble_id,
-                            ident,
-                            f"[ACUERDO DE PAGO #{acuerdo_id}] {n} cuota(s) {frecuencia} por ${total:,.0f}.",
-                            primera,
-                        ))
-
-                    _audit(
-                        cur,
-                        request,
-                        "CREAR_ACUERDO",
-                        "ACUERDO_PAGO",
-                        acuerdo_id,
-                        radicado_interno,
-                        ident,
-                        nombre_real,
-                        inmueble_id,
-                        f"Total ${total:,.2f}; {n} cuota(s); {frecuencia}; primera {primera}",
-                    )
+                        """, (inmueble_id,ident,
+                              f"[ACUERDO DE PAGO #{acuerdo_id}] {n} cuota(s) {frecuencia} por ${total:,.0f}.",
+                              primera))
+                    _audit(cur, request, "CREAR_ACUERDO", "ACUERDO_PAGO", acuerdo_id,
+                           radicado_interno, ident, nombre_real, inmueble_id,
+                           f"Total ${total:,.2f}; {n} cuota(s); {frecuencia}; primera {primera}")
             return main._redirect("/vencimientos", mensaje="Acuerdo+registrado+exitosamente")
         except Exception as exc:
             print(f"[AGENDA] Error creando acuerdo: {exc!r}", flush=True)
@@ -354,31 +369,21 @@ def _crear_router_agenda() -> APIRouter:
             conn.release()
 
     @router.post("/acuerdos/cumplir", name="agenda_cumplir_acuerdo")
-    def agenda_cumplir_acuerdo(
-        request: Request,
-        acuerdo_id: int = Form(...),
-        cuota_id: int | None = Form(None),
-    ):
+    def agenda_cumplir_acuerdo(request: Request, acuerdo_id: int = Form(...), cuota_id: int | None = Form(None)):
         ensure_schema()
         conn = db.get_connection()
         try:
             with conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     if cuota_id:
-                        cur.execute(
-                            "UPDATE acuerdos_pago_cuotas SET estado='CUMPLIDO',updated_at=CURRENT_TIMESTAMP WHERE id=%s AND acuerdo_id=%s",
-                            (cuota_id, acuerdo_id),
-                        )
+                        cur.execute("UPDATE acuerdos_pago_cuotas SET estado='CUMPLIDO',updated_at=CURRENT_TIMESTAMP WHERE id=%s AND acuerdo_id=%s", (cuota_id,acuerdo_id))
                         cur.execute("""
                             SELECT c.numero_cuota,c.identificacion_deudor,c.nombre_deudor,a.inmueble_id
-                            FROM acuerdos_pago_cuotas c
-                            JOIN acuerdos_pago a ON a.id=c.acuerdo_id
-                            WHERE c.id=%s
+                            FROM acuerdos_pago_cuotas c JOIN acuerdos_pago a ON a.id=c.acuerdo_id WHERE c.id=%s
                         """, (cuota_id,))
                         c = cur.fetchone()
                         cur.execute("""
-                            SELECT COUNT(*) total,
-                                   COUNT(*) FILTER (WHERE estado='CUMPLIDO' AND NOT COALESCE(anulado,FALSE)) cumplidas
+                            SELECT COUNT(*) total, COUNT(*) FILTER (WHERE estado='CUMPLIDO' AND NOT COALESCE(anulado,FALSE)) cumplidas
                             FROM acuerdos_pago_cuotas WHERE acuerdo_id=%s
                         """, (acuerdo_id,))
                         st = cur.fetchone()
@@ -386,31 +391,16 @@ def _crear_router_agenda() -> APIRouter:
                             cur.execute("UPDATE acuerdos_pago SET estado='CUMPLIDO',cuota_actual=numero_cuotas,updated_at=CURRENT_TIMESTAMP WHERE id=%s", (acuerdo_id,))
                         else:
                             cur.execute("""
-                                UPDATE acuerdos_pago
-                                SET cuota_actual=LEAST(numero_cuotas,
-                                    COALESCE((SELECT MAX(numero_cuota)
-                                              FROM acuerdos_pago_cuotas
-                                              WHERE acuerdo_id=%s AND estado='CUMPLIDO'),0)+1),
-                                    updated_at=CURRENT_TIMESTAMP
-                                WHERE id=%s
-                            """, (acuerdo_id, acuerdo_id))
+                                UPDATE acuerdos_pago SET cuota_actual=LEAST(numero_cuotas,
+                                COALESCE((SELECT MAX(numero_cuota) FROM acuerdos_pago_cuotas WHERE acuerdo_id=%s AND estado='CUMPLIDO'),0)+1),
+                                updated_at=CURRENT_TIMESTAMP WHERE id=%s
+                            """, (acuerdo_id,acuerdo_id))
                         if c:
-                            _audit(
-                                cur,
-                                request,
-                                "CUMPLIR_CUOTA",
-                                "ACUERDO_PAGO",
-                                cuota_id,
-                                None,
-                                c["identificacion_deudor"],
-                                c["nombre_deudor"],
-                                c["inmueble_id"],
-                                f"Cuota {c['numero_cuota']} cumplida",
-                            )
+                            _audit(cur,request,"CUMPLIR_CUOTA","ACUERDO_PAGO",cuota_id,None,c["identificacion_deudor"],c["nombre_deudor"],c["inmueble_id"],f"Cuota {c['numero_cuota']} cumplida")
                     else:
                         cur.execute("UPDATE acuerdos_pago SET estado='CUMPLIDO',cuota_actual=numero_cuotas,updated_at=CURRENT_TIMESTAMP WHERE id=%s", (acuerdo_id,))
                         cur.execute("UPDATE acuerdos_pago_cuotas SET estado='CUMPLIDO',updated_at=CURRENT_TIMESTAMP WHERE acuerdo_id=%s AND NOT COALESCE(anulado,FALSE)", (acuerdo_id,))
-                        _audit(cur, request, "CUMPLIR_ACUERDO", "ACUERDO_PAGO", acuerdo_id, None, None, None, None, "Acuerdo completo cumplido")
+                        _audit(cur,request,"CUMPLIR_ACUERDO","ACUERDO_PAGO",acuerdo_id,None,None,None,None,"Acuerdo completo cumplido")
             return main._redirect("/vencimientos", mensaje="Pago+registrado")
         finally:
             conn.release()
@@ -429,39 +419,30 @@ def _crear_router_agenda() -> APIRouter:
                     cur.execute("UPDATE acuerdos_pago SET estado='ANULADO',updated_at=CURRENT_TIMESTAMP WHERE id=%s", (acuerdo_id,))
                     cur.execute("UPDATE acuerdos_pago_cuotas SET estado='ANULADO',anulado=TRUE,updated_at=CURRENT_TIMESTAMP WHERE acuerdo_id=%s", (acuerdo_id,))
                     cur.execute("UPDATE vencimientos SET anulado=TRUE WHERE tipo='ACUERDO_PAGO' AND observaciones ILIKE %s", (f"%Acuerdo #{acuerdo_id}%",))
-                    _audit(cur, request, "ANULAR_ACUERDO", "ACUERDO_PAGO", acuerdo_id, None, a["identificacion_deudor"], a["nombre_deudor"], a["inmueble_id"], "Acuerdo y cuotas anulados")
+                    _audit(cur,request,"ANULAR_ACUERDO","ACUERDO_PAGO",acuerdo_id,None,a["identificacion_deudor"],a["nombre_deudor"],a["inmueble_id"],"Acuerdo y cuotas anulados")
             return main._redirect("/vencimientos", mensaje="Acuerdo+anulado")
         finally:
             conn.release()
 
     @router.post("/vencimientos/guardar", name="agenda_guardar_vencimiento")
-    def agenda_guardar_vencimiento(
-        request: Request,
-        radicado_interno: str = Form(...),
-        titulo: str = Form(...),
-        fecha_vencimiento: date = Form(...),
-        observaciones: str = Form(""),
-        categoria: str = Form("TERMINO"),
-        inmueble_id: int | None = Form(None),
-    ):
+    def agenda_guardar_vencimiento(request: Request, radicado_interno: str = Form(...), titulo: str = Form(...), fecha_vencimiento: date = Form(...), observaciones: str = Form(""), categoria: str = Form("TERMINO"), inmueble_id: int | None = Form(None)):
         ensure_schema()
         categoria = str(categoria or "TERMINO").upper()
-        if categoria not in {"TERMINO", "OTROS"}:
+        if categoria not in {"TERMINO","OTROS"}:
             categoria = "TERMINO"
         conn = db.get_connection()
         try:
             with conn:
                 with conn.cursor() as cur:
-                    abogado_id = str(getattr(request.state, "user_id", "") or "") or None
+                    abogado_id = str(getattr(request.state,"user_id","") or "") or None
                     cur.execute("""
                         INSERT INTO vencimientos
                             (radicado_interno,titulo,fecha_vencimiento,observaciones,completado,
                              tipo,valor,inmueble_id,anulado,categoria,abogado_id)
-                        VALUES (%s,%s,%s,%s,FALSE,%s,0,%s,FALSE,%s,%s)
-                        RETURNING id
+                        VALUES (%s,%s,%s,%s,FALSE,%s,0,%s,FALSE,%s,%s) RETURNING id
                     """, (radicado_interno.strip(),titulo.strip(),fecha_vencimiento,observaciones.strip(),categoria,inmueble_id,categoria,abogado_id))
                     registro_id = cur.fetchone()[0]
-                    _audit(cur, request, "CREAR_VENCIMIENTO", categoria, registro_id, radicado_interno, None, None, inmueble_id, titulo.strip())
+                    _audit(cur,request,"CREAR_VENCIMIENTO",categoria,registro_id,radicado_interno,None,None,inmueble_id,titulo.strip())
             return main._redirect("/vencimientos", mensaje="Vencimiento+registrado")
         except Exception as exc:
             print(f"[AGENDA] Error creando vencimiento: {exc!r}", flush=True)
@@ -481,7 +462,7 @@ def _crear_router_agenda() -> APIRouter:
                     if not v:
                         raise HTTPException(status_code=404, detail="Vencimiento no encontrado")
                     cur.execute("UPDATE vencimientos SET completado=TRUE WHERE id=%s", (vencimiento_id,))
-                    _audit(cur, request, "COMPLETAR_VENCIMIENTO", "VENCIMIENTO", vencimiento_id, v["radicado_interno"], None, None, v["inmueble_id"], v["titulo"])
+                    _audit(cur,request,"COMPLETAR_VENCIMIENTO","VENCIMIENTO",vencimiento_id,v["radicado_interno"],None,None,v["inmueble_id"],v["titulo"])
             return main._redirect("/vencimientos", mensaje="Vencimiento+completado")
         finally:
             conn.release()
@@ -498,14 +479,14 @@ def _crear_router_agenda() -> APIRouter:
                     if not v:
                         raise HTTPException(status_code=404, detail="Vencimiento no encontrado")
                     cur.execute("UPDATE vencimientos SET anulado=TRUE WHERE id=%s", (vencimiento_id,))
-                    _audit(cur, request, "ANULAR_VENCIMIENTO", str(v["categoria"] or "TERMINO"), vencimiento_id, v["radicado_interno"], None, None, v["inmueble_id"], v["titulo"])
+                    _audit(cur,request,"ANULAR_VENCIMIENTO",str(v["categoria"] or "TERMINO"),vencimiento_id,v["radicado_interno"],None,None,v["inmueble_id"],v["titulo"])
             return main._redirect("/vencimientos", mensaje="Vencimiento+anulado")
         finally:
             conn.release()
 
     @router.get("/__interno/agenda-log.xlsx", include_in_schema=False, name="agenda_log_xlsx")
     def agenda_log_xlsx(request: Request):
-        if not getattr(request.state, "user_id", None):
+        if not getattr(request.state,"user_id",None):
             raise HTTPException(status_code=401, detail="No autorizado")
         ensure_schema()
         conn = db.get_connection()
@@ -516,32 +497,16 @@ def _crear_router_agenda() -> APIRouter:
                            identificacion_deudor,nombre_deudor,inmueble_id,detalle
                     FROM agenda_auditoria ORDER BY fecha DESC,id DESC
                 """)
-                rows = [dict(r) for r in cur.fetchall()]
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "Auditoria Agenda"
-            headers = ["Fecha","Abogado ID","Abogado","Accion","Tipo","Registro ID","Radicado","Identificacion","Deudor","Inmueble ID","Detalle"]
+                rows=[dict(r) for r in cur.fetchall()]
+            wb=openpyxl.Workbook(); ws=wb.active; ws.title="Auditoria Agenda"
+            headers=["Fecha","Abogado ID","Abogado","Accion","Tipo","Registro ID","Radicado","Identificacion","Deudor","Inmueble ID","Detalle"]
             ws.append(headers)
-            for cell in ws[1]:
-                cell.font = Font(bold=True)
-            keys = ["fecha","abogado_id","abogado_nombre","accion","tipo","registro_id","radicado_interno","identificacion_deudor","nombre_deudor","inmueble_id","detalle"]
-            for row in rows:
-                ws.append([row.get(key) for key in keys])
-            ws.freeze_panes = "A2"
-            ws.auto_filter.ref = ws.dimensions
-            for col in ws.columns:
-                ws.column_dimensions[col[0].column_letter].width = min(max(len(str(cell.value or "")) for cell in col) + 2, 45)
-            output = io.BytesIO()
-            wb.save(output)
-            output.seek(0)
-            return StreamingResponse(
-                output,
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers={
-                    "Content-Disposition": "attachment; filename=agenda_auditoria_interna.xlsx",
-                    "Cache-Control": "no-store",
-                },
-            )
+            for c in ws[1]: c.font=Font(bold=True)
+            keys=["fecha","abogado_id","abogado_nombre","accion","tipo","registro_id","radicado_interno","identificacion_deudor","nombre_deudor","inmueble_id","detalle"]
+            for r in rows: ws.append([r.get(k) for k in keys])
+            ws.freeze_panes="A2"; ws.auto_filter.ref=ws.dimensions
+            output=io.BytesIO(); wb.save(output); output.seek(0)
+            return StreamingResponse(output,media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",headers={"Content-Disposition":"attachment; filename=agenda_auditoria_interna.xlsx","Cache-Control":"no-store"})
         finally:
             conn.release()
 
@@ -549,19 +514,28 @@ def _crear_router_agenda() -> APIRouter:
 
 
 def register_routes() -> None:
-    """Registra las rutas avanzadas una sola vez y les da precedencia."""
-    if any(getattr(getattr(route, "endpoint", None), "__name__", "") in AGENDA_ROUTE_NAMES for route in main.app.router.routes):
+    global _REGISTERED
+    if _REGISTERED:
+        return
+    if any(getattr(getattr(route,"endpoint",None),"__name__","") in AGENDA_ROUTE_NAMES for route in main.app.router.routes):
+        _REGISTERED = True
         return
     router = _crear_router_agenda()
     main.app.include_router(router)
-    agenda_routes = []
-    other_routes = []
+    agenda_routes=[]; other_routes=[]
     for route in main.app.router.routes:
-        if getattr(getattr(route, "endpoint", None), "__name__", "") in AGENDA_ROUTE_NAMES:
+        if getattr(getattr(route,"endpoint",None),"__name__","") in AGENDA_ROUTE_NAMES:
             agenda_routes.append(route)
         else:
             other_routes.append(route)
-    main.app.router.routes = agenda_routes + other_routes
+    main.app.router.routes=agenda_routes+other_routes
+    _REGISTERED = True
 
 
+# Registro automático cuando el servicio es importado por start.py. De este modo
+# la agenda también queda activa aunque el servidor sea iniciado desde otra
+# orden compatible que cargue start.py como módulo.
+register_routes()
+
+# Expuesto para integraciones heredadas, sin registrar una segunda vez.
 router = _crear_router_agenda()
