@@ -14,211 +14,155 @@
         .badge-enviado { background-color: #198754; color: #fff; }
         .badge-fallido { background-color: #dc3545; color: #fff; }
         .badge-cancelado { background-color: #6c757d; color: #fff; }
+        .badge-cartera-pre { background-color: #fff3cd; color: #856404; }
+        .badge-cartera-jur { background-color: #cfe2ff; color: #084298; }
+        .candidate-row.selected { background: #eef6ff; }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-4 mb-4 shadow-sm">
-        <a class="navbar-brand fw-bold" href="/dashboard"><i class="bi bi-shield-check"></i> ERP Despacho</a>
-        <div class="navbar-nav ms-auto">
-            <a class="nav-link" href="/dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a>
-            <a class="nav-link" href="/expedientes"><i class="bi bi-folder2-open"></i> Expedientes</a>
-            <a class="nav-link" href="/contactos"><i class="bi bi-people"></i> Contactos</a>
-            <a class="nav-link active fw-bold" href="/sms"><i class="bi bi-chat-dots"></i> SMS Cobranza</a>
-            <a class="nav-link text-danger" href="/logout"><i class="bi bi-box-arrow-right"></i> Salir</a>
-        </div>
-    </nav>
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark px-4 mb-4 shadow-sm">
+    <a class="navbar-brand fw-bold" href="/dashboard"><i class="bi bi-shield-check"></i> ERP Despacho</a>
+    <div class="navbar-nav ms-auto">
+        <a class="nav-link" href="/dashboard">Dashboard</a>
+        <a class="nav-link" href="/expedientes">Expedientes</a>
+        <a class="nav-link" href="/contactos">Contactos</a>
+        <a class="nav-link active fw-bold" href="/sms">SMS Cobranza</a>
+        <a class="nav-link text-danger" href="/logout">Salir</a>
+    </div>
+</nav>
 
-    <div class="container-fluid px-4">
-        <!-- SEMÁFORO LEY 2300 DE 2023 -->
-        <div class="alert {% if es_habil %}alert-success{% else %}alert-warning{% endif %} d-flex align-items-center shadow-sm" role="alert">
-            <i class="bi {% if es_habil %}bi-check-circle-fill{% else %}bi-exclamation-triangle-fill{% endif %} fs-4 me-3"></i>
-            <div>
-                <strong>Ley 2300 de 2023 (Dejen de Fregar):</strong> {{ motivo_horario }}
-                <span class="ms-2 badge {% if es_habil %}bg-success{% else %}bg-danger{% endif %}">
-                    {% if es_habil %}DESPACHO HABILITADO{% else %}DESPACHO RESTRINGIDO{% endif %}
-                </span>
+<div class="container-fluid px-4">
+    <div class="alert {% if es_habil %}alert-success{% else %}alert-warning{% endif %} d-flex align-items-center shadow-sm" role="alert">
+        <i class="bi {% if es_habil %}bi-check-circle-fill{% else %}bi-exclamation-triangle-fill{% endif %} fs-4 me-3"></i>
+        <div><strong>Ley 2300 de 2023:</strong> {{ motivo_horario }} <span class="ms-2 badge {% if es_habil %}bg-success{% else %}bg-danger{% endif %}">{% if es_habil %}DESPACHO HABILITADO{% else %}DESPACHO RESTRINGIDO{% endif %}</span></div>
+    </div>
+
+    {% if mensaje %}<div class="alert alert-info shadow-sm">{{ mensaje }}</div>{% endif %}
+    {% if error %}<div class="alert alert-danger shadow-sm">{{ error }}</div>{% endif %}
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-3"><div class="card metric-card p-3" style="border-left-color:#ffc107"><div class="text-muted small fw-bold">EN COLA</div><div class="fs-3 fw-bold">{{ metricas.pendientes }}</div><div class="small text-secondary">Saldo: ${{ "{:,.0f}".format(metricas.total_saldo_pendiente).replace(",", ".") }}</div></div></div>
+        <div class="col-md-3"><div class="card metric-card p-3" style="border-left-color:#198754"><div class="text-muted small fw-bold">ENVIADOS</div><div class="fs-3 fw-bold text-success">{{ metricas.enviados }}</div></div></div>
+        <div class="col-md-3"><div class="card metric-card p-3" style="border-left-color:#dc3545"><div class="text-muted small fw-bold">FALLIDOS</div><div class="fs-3 fw-bold text-danger">{{ metricas.fallidos }}</div></div></div>
+        <div class="col-md-3"><div class="card metric-card p-3" style="border-left-color:#0d6efd"><div class="text-muted small fw-bold">INMUEBLES EN MORA</div><div class="fs-3 fw-bold text-primary">{{ total_mora }}</div></div></div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-4">
+            <div class="card p-3">
+                <h5 class="fw-bold mb-3"><i class="bi bi-funnel-fill me-2"></i>Segmentar cartera</h5>
+                <form action="/sms" method="GET">
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">Tipo de cartera</label>
+                        <select name="tipo_cartera" class="form-select">
+                            <option value="" {% if not tipo_cartera %}selected{% endif %}>Todas</option>
+                            <option value="PREJURIDICO" {% if tipo_cartera == 'PREJURIDICO' %}selected{% endif %}>Prejurídico</option>
+                            <option value="JURIDICO" {% if tipo_cartera == 'JURIDICO' %}selected{% endif %}>Jurídico</option>
+                        </select>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6"><label class="form-label small fw-bold">Deuda desde</label><input type="number" name="saldo_minimo" value="{{ saldo_minimo or 0 }}" min="0" step="1000" class="form-control"></div>
+                        <div class="col-6"><label class="form-label small fw-bold">Deuda hasta</label><input type="number" name="saldo_maximo" value="{{ saldo_maximo or '' }}" min="0" step="1000" class="form-control"></div>
+                    </div>
+                    <button class="btn btn-outline-primary w-100 fw-bold"><i class="bi bi-search me-1"></i> Aplicar filtros</button>
+                </form>
+            </div>
+
+            <div class="card p-3">
+                <h5 class="fw-bold mb-3"><i class="bi bi-send-fill me-2"></i>Despachar</h5>
+                <form action="/sms/despachar" method="POST">
+                    <label class="form-label small fw-bold">Límite por lote</label>
+                    <input type="number" name="limite" class="form-control mb-3" value="50" min="1" max="200">
+                    <div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="dry_run" id="dryRunCheck" value="true"><label class="form-check-label small" for="dryRunCheck"><strong>Dry-Run:</strong> simular sin enviar SMS</label></div>
+                    <div class="form-check mb-3"><input class="form-check-input" type="checkbox" name="forzar_horario" id="forzarHorario" value="true"><label class="form-check-label small text-danger" for="forzarHorario">Forzar horario (pruebas)</label></div>
+                    <button type="submit" class="btn btn-success w-100 fw-bold mb-2">Iniciar despacho</button>
+                </form>
+                <form action="/sms/cola/limpiar" method="POST" onsubmit="return confirm('¿Cancelar los mensajes pendientes?');"><button class="btn btn-outline-secondary w-100 btn-sm">Cancelar pendientes</button></form>
             </div>
         </div>
 
-        {% if mensaje %}
-        <div class="alert alert-info alert-dismissible fade show shadow-sm" role="alert">
-            <i class="bi bi-info-circle me-2"></i>{{ mensaje }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-        {% endif %}
-
-        {% if error %}
-        <div class="alert alert-danger alert-dismissible fade show shadow-sm" role="alert">
-            <i class="bi bi-exclamation-octagon me-2"></i>{{ error }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-        {% endif %}
-
-        <!-- TARJETAS DE MÉTRICAS -->
-        <div class="row g-3 mb-4">
-            <div class="col-md-3">
-                <div class="card metric-card p-3" style="border-left-color: #ffc107;">
-                    <div class="text-muted small fw-bold">EN COLA (PENDIENTES)</div>
-                    <div class="fs-3 fw-bold">{{ metricas.pendientes }}</div>
-                    <div class="small text-secondary">Saldo: ${{ "{:,.0f}".format(metricas.total_saldo_pendiente).replace(",", ".") }}</div>
+        <div class="col-lg-8">
+            <div class="card p-3">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div><h5 class="fw-bold m-0">Seleccionar destinatarios</h5><div class="small text-muted">La segmentación sale de <strong>procesos.tipo_cartera</strong>; si no existe proceso, la cuenta queda como PREJURÍDICO.</div></div>
+                    <button class="btn btn-sm btn-outline-primary" onclick="window.location.reload();">Actualizar</button>
                 </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card metric-card p-3" style="border-left-color: #198754;">
-                    <div class="text-muted small fw-bold">ENVIADOS CON ÉXITO</div>
-                    <div class="fs-3 fw-bold text-success">{{ metricas.enviados }}</div>
-                    <div class="small text-muted">A través de SIM Gateway</div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card metric-card p-3" style="border-left-color: #dc3545;">
-                    <div class="text-muted small fw-bold">FALLIDOS / INVÁLIDOS</div>
-                    <div class="fs-3 fw-bold text-danger">{{ metricas.fallidos }}</div>
-                    <div class="small text-muted">Línea inactiva o error de red</div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card metric-card p-3" style="border-left-color: #0d6efd;">
-                    <div class="text-muted small fw-bold">INMUEBLES EN MORA</div>
-                    <div class="fs-3 fw-bold text-primary">{{ total_mora }}</div>
-                    <div class="small text-muted">Candidatos a campaña</div>
-                </div>
-            </div>
-        </div>
 
-        <div class="row">
-            <!-- PANEL DE CONTROL DE CAMPAÑA -->
-            <div class="col-lg-4">
-                <div class="card p-3">
-                    <h5 class="fw-bold mb-3"><i class="bi bi-gear-fill me-2"></i>Generar Cola de Cobranza</h5>
-                    <form action="/sms/generar-cola" method="POST">
-                        <div class="mb-3">
-                            <label class="form-label small fw-bold">Tipo de Notificación</label>
+                <form action="/sms/generar-cola" method="POST" id="formCampana">
+                    <div class="row g-2 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label small fw-bold">Plantilla</label>
                             <select name="tipo_campana" class="form-select">
-                                {% for p in plantillas %}
-                                <option value="{{ p.tipo }}">{{ p.nombre }}</option>
-                                {% endfor %}
+                                {% for p in plantillas %}<option value="{{ p.tipo }}">{{ p.nombre }}</option>{% endfor %}
                             </select>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label small fw-bold">Mora Mínima para Notificar</label>
-                            <input type="number" name="saldo_minimo" class="form-control" value="50000" step="10000">
-                        </div>
-                        <button type="submit" class="btn btn-primary w-100 fw-bold">
-                            <i class="bi bi-people-fill me-1"></i> Cargar Deudores a la Cola
-                        </button>
-                    </form>
-                </div>
-
-                <div class="card p-3">
-                    <h5 class="fw-bold mb-3"><i class="bi bi-send-fill me-2"></i>Despachar Mensajes</h5>
-                    <form action="/sms/despachar" method="POST">
-                        <div class="mb-3">
-                            <label class="form-label small fw-bold">Límite por Lote</label>
-                            <input type="number" name="limite" class="form-control" value="50" min="1" max="200">
-                        </div>
-                        <div class="form-check mb-2">
-                            <input class="form-check-input" type="checkbox" name="dry_run" id="dryRunCheck" value="true">
-                            <label class="form-check-label small" for="dryRunCheck">
-                                <strong>Modo Simulación (Dry-Run):</strong> Probar sin enviar SMS reales
-                            </label>
-                        </div>
-                        <div class="form-check mb-3">
-                            <input class="form-check-input" type="checkbox" name="forzar_horario" id="forzarHorario" value="true">
-                            <label class="form-check-label small text-danger" for="forzarHorario">
-                                Forzar envío fuera de horario (Pruebas técnicas)
-                            </label>
-                        </div>
-                        <button type="submit" class="btn btn-success w-100 fw-bold mb-2">
-                            <i class="bi bi-play-circle-fill me-1"></i> Iniciar Despacho
-                        </button>
-                    </form>
-                    <form action="/sms/cola/limpiar" method="POST" onsubmit="return confirm('¿Cancelar los mensajes pendientes?');">
-                        <button type="submit" class="btn btn-outline-secondary w-100 btn-sm">
-                            <i class="bi bi-x-circle me-1"></i> Cancelar Pendientes
-                        </button>
-                    </form>
-                </div>
-            </div>
-
-            <!-- TABLA DE LA COLA EN VIVO -->
-            <div class="col-lg-8">
-                <div class="card p-3">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h5 class="fw-bold m-0"><i class="bi bi-list-columns-reverse me-2"></i>Cola de Envíos Recientes</h5>
-                        <button class="btn btn-sm btn-outline-primary" onclick="window.location.reload();">
-                            <i class="bi bi-arrow-clockwise"></i> Actualizar
-                        </button>
+                        <div class="col-md-3"><label class="form-label small fw-bold">Mínimo</label><input type="number" name="saldo_minimo" class="form-control" value="{{ saldo_minimo or 0 }}"></div>
+                        <div class="col-md-3"><label class="form-label small fw-bold">Máximo</label><input type="number" name="saldo_maximo" class="form-control" value="{{ saldo_maximo or '' }}"></div>
                     </div>
-                    <div class="table-responsive">
+                    <input type="hidden" name="tipo_cartera" value="{{ tipo_cartera }}">
+
+                    <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
+                        <div class="small text-muted"><strong>{{ candidatos|length }}</strong> candidatos encontrados</div>
+                        <div><button type="button" class="btn btn-sm btn-outline-secondary me-1" onclick="seleccionarVisibles(true)">Seleccionar visibles</button><button type="button" class="btn btn-sm btn-outline-secondary" onclick="seleccionarVisibles(false)">Limpiar selección</button></div>
+                    </div>
+
+                    <div class="table-responsive" style="max-height:520px;overflow:auto;">
                         <table class="table table-hover table-sm align-middle small">
-                            <thead class="table-light">
-                                <tr>
-                                    <th>Destinatario</th>
-                                    <th>Unidad</th>
-                                    <th>Celular</th>
-                                    <th>Saldo</th>
-                                    <th>Estado</th>
-                                    <th>Mensaje</th>
-                                </tr>
+                            <thead class="table-light sticky-top">
+                            <tr><th style="width:38px"><input type="checkbox" class="form-check-input" onclick="seleccionarVisibles(this.checked)"></th><th>Destinatario</th><th>Cartera</th><th>Unidad</th><th>Saldo</th></tr>
                             </thead>
                             <tbody>
-                                {% for c in cola %}
-                                <tr>
-                                    <td><strong>{{ c.nombre }}</strong><br><span class="text-muted">{{ c.identificacion }}</span></td>
-                                    <td>{{ c.conjunto_residencial }}<br><span class="text-muted">{{ c.torre_apto }}</span></td>
-                                    <td><code>+57{{ c.telefono }}</code></td>
-                                    <td>${{ "{:,.0f}".format(c.saldo_calculado).replace(",", ".") }}</td>
-                                    <td>
-                                        <span class="badge badge-{{ c.estado.lower() }}">{{ c.estado }}</span>
-                                    </td>
-                                    <td class="text-truncate" style="max-width: 250px;" title="{{ c.mensaje_texto }}">
-                                        {{ c.mensaje_texto }}
-                                    </td>
-                                </tr>
-                                {% else %}
-                                <tr>
-                                    <td colspan="6" class="text-center text-muted py-4">No hay mensajes en la cola. Genere un lote a la izquierda.</td>
-                                </tr>
-                                {% endfor %}
+                            {% for c in candidatos %}
+                            <tr class="candidate-row">
+                                <td><input type="checkbox" class="form-check-input selector-candidato" name="seleccionados" value="{{ c.inmueble_id }}" onchange="actualizarSeleccion(this)"></td>
+                                <td><strong>{{ c.nombre }}</strong><br><span class="text-muted">{{ c.identificacion }}</span><br><code>+57{{ c.telefono }}</code></td>
+                                <td>{% if c.tipo_cartera == 'JURIDICO' %}<span class="badge badge-cartera-jur">JURÍDICO</span>{% else %}<span class="badge badge-cartera-pre">PREJURÍDICO</span>{% endif %}</td>
+                                <td>{{ c.conjunto_residencial }}<br><span class="text-muted">{{ c.torre_apto }}</span></td>
+                                <td class="fw-bold">${{ "{:,.0f}".format(c.saldo_total).replace(",", ".") }}</td>
+                            </tr>
+                            {% else %}<tr><td colspan="5" class="text-center text-muted py-4">No hay candidatos para los filtros seleccionados.</td></tr>{% endfor %}
                             </tbody>
                         </table>
                     </div>
-                </div>
 
-                <!-- EDITOR DE PLANTILLAS -->
-                <div class="card p-3">
-                    <h5 class="fw-bold mb-3"><i class="bi bi-card-text me-2"></i>Plantillas de Cobranza (Sin Enlaces Sospechosos)</h5>
-                    <div class="accordion" id="accordionPlantillas">
-                        {% for p in plantillas %}
-                        <div class="accordion-item">
-                            <h2 class="accordion-header">
-                                <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ p.id }}">
-                                    {{ p.nombre }} <span class="badge bg-secondary ms-2">{{ p.tipo }}</span>
-                                </button>
-                            </h2>
-                            <div id="collapse{{ p.id }}" class="accordion-collapse collapse" data-bs-parent="#accordionPlantillas">
-                                <div class="accordion-body">
-                                    <form action="/sms/plantillas/guardar" method="POST">
-                                        <input type="hidden" name="tipo" value="{{ p.tipo }}">
-                                        <div class="mb-2">
-                                            <textarea name="cuerpo" class="form-control" rows="3">{{ p.cuerpo_template }}</textarea>
-                                            <div class="form-text small">
-                                                Variables: <code>{nombre}</code>, <code>{conjunto}</code>, <code>{unidad}</code>, <code>{saldo}</code>, <code>{telefono_wa}</code>.
-                                            </div>
-                                        </div>
-                                        <button type="submit" class="btn btn-primary btn-sm">Guardar Cambios</button>
-                                    </form>
-                                </div>
-                            </div>
-                        </div>
-                        {% endfor %}
+                    <div class="d-flex flex-wrap justify-content-between align-items-center border-top pt-3 mt-3 gap-2">
+                        <div><strong>Seleccionados:</strong> <span id="contadorSeleccion">0</span></div>
+                        <button type="submit" class="btn btn-primary fw-bold" {% if not candidatos %}disabled{% endif %}>Generar cola con seleccionados</button>
                     </div>
+                </form>
+            </div>
+
+            <div class="card p-3">
+                <div class="d-flex justify-content-between align-items-center mb-3"><h5 class="fw-bold m-0">Cola de envíos recientes</h5><button class="btn btn-sm btn-outline-primary" onclick="window.location.reload();">Actualizar</button></div>
+                <div class="table-responsive">
+                    <table class="table table-hover table-sm align-middle small">
+                        <thead class="table-light"><tr><th>Destinatario</th><th>Unidad</th><th>Celular</th><th>Saldo</th><th>Estado</th><th>Mensaje</th></tr></thead>
+                        <tbody>
+                        {% for c in cola %}<tr><td><strong>{{ c.nombre }}</strong><br><span class="text-muted">{{ c.identificacion }}</span></td><td>{{ c.conjunto_residencial }}<br><span class="text-muted">{{ c.torre_apto }}</span></td><td><code>+57{{ c.telefono }}</code></td><td>${{ "{:,.0f}".format(c.saldo_calculado).replace(",", ".") }}</td><td><span class="badge badge-{{ c.estado.lower() }}">{{ c.estado }}</span></td><td class="text-truncate" style="max-width:250px" title="{{ c.mensaje_texto }}">{{ c.mensaje_texto }}</td></tr>
+                        {% else %}<tr><td colspan="6" class="text-center text-muted py-4">No hay mensajes en la cola.</td></tr>{% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card p-3">
+                <h5 class="fw-bold mb-3">Plantillas de cobranza</h5>
+                <div class="accordion" id="accordionPlantillas">
+                    {% for p in plantillas %}
+                    <div class="accordion-item"><h2 class="accordion-header"><button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ p.id }}">{{ p.nombre }} <span class="badge bg-secondary ms-2">{{ p.tipo }}</span></button></h2><div id="collapse{{ p.id }}" class="accordion-collapse collapse" data-bs-parent="#accordionPlantillas"><div class="accordion-body"><form action="/sms/plantillas/guardar" method="POST"><input type="hidden" name="tipo" value="{{ p.tipo }}"><textarea name="cuerpo" class="form-control" rows="3">{{ p.cuerpo_template }}</textarea><div class="form-text small">Variables: <code>{nombre}</code>, <code>{conjunto}</code>, <code>{unidad}</code>, <code>{saldo}</code>, <code>{telefono_wa}</code>.</div><button type="submit" class="btn btn-primary btn-sm mt-2">Guardar cambios</button></form></div></div></div>
+                    {% endfor %}
                 </div>
             </div>
         </div>
     </div>
+</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+function actualizarSeleccion(cb){ cb.closest('tr').classList.toggle('selected', cb.checked); actualizarContador(); }
+function seleccionarVisibles(marcar){ document.querySelectorAll('.selector-candidato').forEach(cb=>{ const row=cb.closest('tr'); if(row && row.style.display !== 'none'){ cb.checked=marcar; row.classList.toggle('selected', marcar); }}); actualizarContador(); }
+function actualizarContador(){ document.getElementById('contadorSeleccion').textContent = document.querySelectorAll('.selector-candidato:checked').length; }
+actualizarContador();
+</script>
 </body>
 </html>
