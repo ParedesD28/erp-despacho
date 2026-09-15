@@ -25,7 +25,7 @@
 
 <script>
 const eventos={{ json_eventos|safe }};
-const contactos={{ contactos|tojson }};
+const contactos={{ contactos_json|safe }};
 let fechaActual=new Date(),diaSeleccionado=null;
 const meses=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 function abrirModal(tipo){document.getElementById('modal-agenda').classList.remove('hidden');cambiarModal(tipo)}
