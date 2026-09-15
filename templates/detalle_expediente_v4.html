@@ -3,14 +3,21 @@
 {% set tipo = (proceso.tipo_cartera or 'JURIDICO')|upper %}
 {% set es_juridico = tipo == 'JURIDICO' %}
 <div class="p-6 md:p-10 max-w-7xl mx-auto space-y-6">
+  <datalist id="contactos-expediente">
+    {% for c in contactos %}
+      <option value="{{ c.identificacion }} - {{ c.nombre }}"></option>
+    {% endfor %}
+  </datalist>
+
   <div class="flex flex-wrap items-center justify-between gap-3">
     <a href="/expedientes" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 text-white font-bold text-sm">← Volver al directorio</a>
     <div class="flex flex-wrap items-center gap-2">
       <span class="px-3 py-2 rounded-xl {% if es_juridico %}bg-blue-50 text-blue-700 border-blue-200{% else %}bg-amber-50 text-amber-700 border-amber-200{% endif %} border text-xs font-bold uppercase">{{ 'Jurídico' if es_juridico else 'Prejurídico' }}</span>
       <span class="px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold uppercase">{{ proceso.estado or 'Activo' }}</span>
       <button type="button" onclick="abrirEditor()" class="px-4 py-2 rounded-xl bg-slate-900 text-white font-bold text-sm hover:bg-blue-700">✎ Editar expediente</button>
-      <a href="/crm?buscar_inmueble={{ proceso.inmueble_id or '' }}" class="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700">Ver en CRM</a>
-      {% if es_juridico and proceso.inmueble_id %}<a href="/liquidador?inmueble_id={{ proceso.inmueble_id }}" target="_blank" class="px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold text-sm">Generar liquidación</a>{% endif %}
+      <button type="button" onclick="abrirAgenda()" class="px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold text-sm hover:bg-emerald-700">＋ Agregar vencimiento / acuerdo</button>
+      {% if proceso.inmueble_id %}<a href="/crm?buscar_inmueble={{ proceso.inmueble_id }}" class="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700">Ver en CRM</a>{% endif %}
+      {% if es_juridico and proceso.inmueble_id %}<a href="/liquidador?inmueble_id={{ proceso.inmueble_id }}" target="_blank" class="px-4 py-2 rounded-xl bg-teal-600 text-white font-bold text-sm">Generar liquidación</a>{% endif %}
     </div>
   </div>
 
@@ -39,10 +46,41 @@
       {% endif %}
     </div>
     <div class="mt-7 flex flex-wrap items-center gap-4">
-      <div class="bg-slate-800/80 px-5 py-4 rounded-2xl border border-slate-700/60"><div class="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Demandante / Conjunto</div><div class="mt-1 text-lg font-black">{{ proceso.demandante or (demandantes|map(attribute='nombre')|join(' | ')) or 'Sin asignar' }}</div><div class="text-xs text-slate-400 mt-1">{{ proceso.id_cliente or 'Sin identificación' }}</div></div>
+      <div class="bg-slate-800/80 px-5 py-4 rounded-2xl border border-slate-700/60"><div class="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Demandante / Cliente</div><div class="mt-1 text-lg font-black">{{ proceso.demandante or (demandantes|map(attribute='nombre')|join(' | ')) or 'Sin asignar' }}</div><div class="text-xs text-slate-400 mt-1">{{ proceso.id_cliente or 'Sin identificación' }}</div></div>
       <div class="text-slate-500 font-black text-lg">VS</div>
       <div class="bg-slate-800/80 px-5 py-4 rounded-2xl border border-slate-700/60 max-w-full"><div class="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Demandado(s)</div><div class="mt-1 text-lg font-black break-words">{{ proceso.demandado or (demandados|map(attribute='nombre')|join(' | ')) or 'Sin asignar' }}</div><div class="text-xs text-slate-400 mt-1">{{ proceso.id_demandado or 'Sin identificación' }}</div></div>
     </div>
+  </section>
+
+  <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <section class="bg-white rounded-2xl border border-indigo-200 p-6 shadow-sm">
+      <div class="flex items-center justify-between gap-3 mb-4">
+        <div><h2 class="text-lg font-black text-slate-800">Inmueble vinculado</h2><p class="text-xs text-slate-500">Cuenta central asociada al expediente.</p></div>
+        {% if proceso.inmueble_id %}<span class="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold text-xs">ID {{ proceso.inmueble_id }}</span>{% endif %}
+      </div>
+      {% if proceso.inmueble %}
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="p-4 rounded-xl bg-slate-50 border"><div class="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Conjunto residencial</div><div class="font-black mt-1">{{ proceso.inmueble.conjunto_residencial or 'Sin registrar' }}</div></div>
+          <div class="p-4 rounded-xl bg-slate-50 border"><div class="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Torre / Apto</div><div class="font-black mt-1">{{ proceso.inmueble.torre_apto or 'Sin registrar' }}</div></div>
+        </div>
+      {% else %}
+        <div class="p-5 rounded-xl border-2 border-dashed border-slate-200 text-sm text-slate-500">No hay inmueble vinculado a este expediente.</div>
+      {% endif %}
+    </section>
+
+    <section class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+      <div class="flex items-center justify-between mb-4"><h2 class="text-lg font-black">Propietarios / titulares vinculados</h2><span class="text-[10px] uppercase font-bold text-slate-400">{{ propietarios_inmueble|length }} registro(s)</span></div>
+      <div class="space-y-2">
+        {% for p in propietarios_inmueble %}
+          <div class="flex items-center justify-between gap-3 p-3 rounded-xl bg-slate-50 border">
+            <div><div class="font-bold text-slate-800">{{ p.nombre }}</div><div class="text-xs text-slate-500 font-mono">{{ p.identificacion }}</div></div>
+            {% if p.es_principal %}<span class="text-[10px] font-bold px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">Principal</span>{% endif %}
+          </div>
+        {% else %}
+          <div class="p-5 rounded-xl border-2 border-dashed border-slate-200 text-sm text-slate-500">No se encontraron propietarios asociados al inmueble.</div>
+        {% endfor %}
+      </div>
+    </section>
   </section>
 
   {% if es_juridico %}
@@ -69,56 +107,66 @@
     </aside>
   </section>
   {% else %}
-  <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-12">
-    <section class="bg-white rounded-2xl border border-amber-200 shadow-sm p-7">
-      <div class="flex items-start gap-4"><div class="w-12 h-12 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center"><i data-lucide="phone-call" class="w-6 h-6"></i></div><div><h2 class="text-lg font-black text-slate-800">Gestión prejurídica</h2><p class="text-sm text-slate-600 mt-1">Este expediente funciona como control central de la cuenta. Las actuaciones judiciales permanecen deshabilitadas mientras esté en PREJURÍDICO.</p><a href="/crm?buscar_inmueble={{ proceso.inmueble_id or '' }}" class="inline-flex mt-5 px-5 py-3 rounded-xl bg-indigo-600 text-white font-black text-sm hover:bg-indigo-700">Ver y gestionar en CRM</a></div></div>
-    </section>
-    <section class="bg-white rounded-2xl border border-slate-200 p-7">
-      <h2 class="text-lg font-black mb-4">Partes</h2>
-      <div class="space-y-4"><div><div class="text-[10px] uppercase font-bold tracking-widest text-slate-400">Demandantes</div>{% for d in demandantes %}<div class="mt-2 text-sm font-bold text-slate-700">{{ d.nombre }} <span class="text-slate-400 font-mono">— {{ d.identificacion }}</span></div>{% else %}<div class="mt-2 text-sm text-slate-500">Sin demandantes.</div>{% endfor %}</div><div><div class="text-[10px] uppercase font-bold tracking-widest text-slate-400">Demandados</div>{% for d in demandados %}<div class="mt-2 text-sm font-bold text-slate-700">{{ d.nombre }} <span class="text-slate-400 font-mono">— {{ d.identificacion }}</span></div>{% else %}<div class="mt-2 text-sm text-slate-500">Sin demandados.</div>{% endfor %}</div></div>
-    </section>
+  <section class="bg-white rounded-2xl border border-amber-200 shadow-sm p-7 pb-10">
+    <div class="flex items-start gap-4"><div class="w-12 h-12 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center"><i data-lucide="phone-call" class="w-6 h-6"></i></div><div><h2 class="text-lg font-black text-slate-800">Gestión prejurídica</h2><p class="text-sm text-slate-600 mt-1">El expediente conserva el control central de la cuenta. Las actuaciones, juzgado, radicado Rama y medidas se habilitan al pasar la cartera a JURÍDICO.</p>{% if proceso.inmueble_id %}<a href="/crm?buscar_inmueble={{ proceso.inmueble_id }}" class="inline-flex mt-5 px-5 py-3 rounded-xl bg-indigo-600 text-white font-black text-sm hover:bg-indigo-700">Ver y gestionar en CRM</a>{% endif %}</div></div>
   </section>
   {% endif %}
 
+  <!-- MODAL EDITAR EXPEDIENTE -->
   <div id="editor-expediente" class="hidden fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 p-4 overflow-y-auto">
     <div class="max-w-6xl mx-auto bg-white rounded-3xl shadow-2xl border border-slate-200 my-6 overflow-hidden">
       <div class="px-6 py-5 bg-slate-900 text-white flex items-center justify-between"><div><div class="text-xs uppercase tracking-widest text-slate-400 font-bold">Edición de expediente</div><h2 class="text-xl font-black">Modificar {{ proceso.radicado_interno }}</h2></div><button type="button" onclick="cerrarEditor()" class="text-slate-300 hover:text-white text-xl">✕</button></div>
-      <form method="POST" action="/expediente/guardar-estructurado" class="p-6 md:p-8 space-y-8" onsubmit="return validarCarteraAntesDeGuardar()">
+      <form method="POST" action="/expediente/guardar-estructurado" class="p-6 md:p-8 space-y-8">
         <input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}">
 
         <section class="bg-slate-50 border border-slate-200 rounded-2xl p-5">
-          <div class="flex flex-wrap items-end gap-5">
-            <div class="min-w-[260px] flex-1">
-              <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Tipo de cartera</label>
-              <select id="tipo-cartera-editor" class="w-full border border-slate-300 rounded-xl p-3 font-black" onchange="cambiarTipoCartera(this.value)">
-                {% if not es_juridico %}<option value="PREJURIDICO" selected>PREJURÍDICO</option>{% endif %}
-                <option value="JURIDICO" {% if es_juridico %}selected{% endif %}>JURÍDICO</option>
-              </select>
-            </div>
-            <div id="mensaje-cambio-cartera" class="flex-1 min-w-[280px] text-sm text-slate-600">
-              {% if es_juridico %}El proceso jurídico ya tiene información judicial asociada. Para evitar perder el radicado no se permite regresarlo a PREJURÍDICO desde esta pantalla.{% else %}Al pasar a JURÍDICO debes completar el radicado Rama y la información judicial antes de guardar.{% endif %}
+          <label class="block text-xs font-bold uppercase text-slate-500 mb-2">Tipo de cartera</label>
+          <select name="tipo_cartera" class="w-full md:w-80 border border-slate-300 rounded-xl p-3 font-bold" onchange="cambiarModoEdicion(this.value)">
+            <option value="PREJURIDICO" {% if not es_juridico %}selected{% endif %}>PREJURÍDICO</option>
+            <option value="JURIDICO" {% if es_juridico %}selected{% endif %}>JURÍDICO</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-2">Al cambiar a JURÍDICO se habilita la información procesal y las actuaciones.</p>
+        </section>
+
+        <section>
+          <h3 class="text-lg font-black border-b pb-3 mb-5">1. Inmueble vinculado</h3>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="p-4 rounded-xl bg-slate-50 border"><div class="text-xs uppercase font-bold text-slate-500">ID inmueble</div><div class="font-black mt-1">{{ proceso.inmueble_id or 'Sin vínculo' }}</div></div>
+            <div class="p-4 rounded-xl bg-slate-50 border"><div class="text-xs uppercase font-bold text-slate-500">Conjunto residencial</div><div class="font-black mt-1">{{ proceso.inmueble.conjunto_residencial if proceso.inmueble else 'Sin registrar' }}</div></div>
+            <div class="p-4 rounded-xl bg-slate-50 border"><div class="text-xs uppercase font-bold text-slate-500">Nomenclatura (Torre/Apto)</div><div class="font-black mt-1">{{ proceso.inmueble.torre_apto if proceso.inmueble else 'Sin registrar' }}</div></div>
+          </div>
+          <div class="mt-4 p-4 rounded-xl border border-indigo-100 bg-indigo-50/40">
+            <div class="text-xs uppercase font-bold tracking-widest text-indigo-700 mb-2">Propietarios / titulares vinculados</div>
+            <div class="flex flex-wrap gap-2">
+              {% for p in propietarios_inmueble %}<span class="px-3 py-1.5 rounded-full bg-white border border-indigo-100 text-xs font-semibold text-slate-700">{{ p.nombre }} · {{ p.identificacion }}</span>{% else %}<span class="text-sm text-slate-500">Sin propietarios vinculados.</span>{% endfor %}
             </div>
           </div>
         </section>
 
-        <section id="bloque-judicial" class="{% if not es_juridico %}hidden{% endif %}">
-          <h3 class="text-lg font-black border-b pb-3 mb-5">1. Identificación y Juzgado</h3>
+        <section id="bloque-procesal">
+          <h3 class="text-lg font-black border-b pb-3 mb-5">2. Información procesal</h3>
           <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
-            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Radicado Rama Judicial *</label><input id="radicado-rama" name="radicado_rama" value="{{ proceso.radicado_rama or '' }}" {% if es_juridico %}required{% endif %} class="w-full border border-slate-300 rounded-xl p-3 font-mono"></div>
-            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Naturaleza *</label><select id="naturaleza" name="naturaleza" required class="w-full border border-slate-300 rounded-xl p-3"><option value="">Seleccione</option>{% for o in ['EJECUTIVO SINGULAR','EJECUTIVO HIPOTECARIO','CIVIL: VERBAL'] %}<option value="{{ o }}" {% if (proceso.naturaleza or '')|upper == o %}selected{% endif %}>{{ o }}</option>{% endfor %}{% if proceso.naturaleza and (proceso.naturaleza|upper) not in ['EJECUTIVO SINGULAR','EJECUTIVO HIPOTECARIO','CIVIL: VERBAL'] %}<option selected value="{{ proceso.naturaleza }}">{{ proceso.naturaleza }}</option>{% endif %}</select></div>
-            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Juzgado de Conocimiento</label><select id="juzgado" name="juzgado" class="w-full border border-slate-300 rounded-xl p-3"><option value="">Seleccione</option>{% for o in ['Civil Municipal','Civil del Circuito','De Pequeñas Causas','Promiscuo Municipal'] %}<option value="{{ o }}" {% if (proceso.juzgado or '')|lower == o|lower %}selected{% endif %}>{{ o }}</option>{% endfor %}{% if proceso.juzgado and (proceso.juzgado|lower) not in ['civil municipal','civil del circuito','de pequeñas causas','promiscuo municipal'] %}<option selected value="{{ proceso.juzgado }}">{{ proceso.juzgado }}</option>{% endif %}</select></div>
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Radicado Rama Judicial</label><input name="radicado_rama" value="{{ proceso.radicado_rama or '' }}" class="w-full border border-slate-300 rounded-xl p-3"></div>
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Naturaleza</label><select name="naturaleza" class="w-full border border-slate-300 rounded-xl p-3"><option value="">Seleccione</option>{% for o in ['EJECUTIVO SINGULAR','EJECUTIVO HIPOTECARIO','CIVIL: VERBAL'] %}<option value="{{ o }}" {% if (proceso.naturaleza or '')|upper == o %}selected{% endif %}>{{ o }}</option>{% endfor %}</select></div>
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Juzgado</label><input name="juzgado" value="{{ proceso.juzgado or '' }}" class="w-full border border-slate-300 rounded-xl p-3"></div>
           </div>
         </section>
 
-        <section><h3 class="text-lg font-black border-b pb-3 mb-5">2. Vinculación de Partes</h3><div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div><label class="block text-xs font-bold uppercase text-slate-500 mb-2">Demandante(s) / Cliente(s)</label><select name="demandante_id" multiple size="10" required class="w-full border border-slate-300 rounded-xl p-3 text-sm">{% for c in contactos %}<option value="{{ c.identificacion }}" {% if c.identificacion in demandante_ids %}selected{% endif %}>{{ c.identificacion }} - {{ c.nombre }}</option>{% endfor %}</select></div>
-          <div><label class="block text-xs font-bold uppercase text-slate-500 mb-2">Demandado(s) / Contraparte(s)</label><select name="demandado_id" multiple size="10" required class="w-full border border-slate-300 rounded-xl p-3 text-sm">{% for c in contactos %}<option value="{{ c.identificacion }}" {% if c.identificacion in demandado_ids %}selected{% endif %}>{{ c.identificacion }} - {{ c.nombre }}</option>{% endfor %}</select></div>
-        </div></section>
+        <section>
+          <h3 class="text-lg font-black border-b pb-3 mb-5">3. Partes</h3>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-2">Demandante(s) / Cliente(s)</label><select name="demandante_id" multiple size="8" required class="w-full border border-slate-300 rounded-xl p-3 text-sm">{% for c in contactos %}<option value="{{ c.identificacion }}" {% if c.identificacion in demandante_ids %}selected{% endif %}>{{ c.identificacion }} - {{ c.nombre }}</option>{% endfor %}</select></div>
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-2">Demandado(s) / Contraparte(s)</label><select name="demandado_id" multiple size="8" required class="w-full border border-slate-300 rounded-xl p-3 text-sm">{% for c in contactos %}<option value="{{ c.identificacion }}" {% if c.identificacion in demandado_ids %}selected{% endif %}>{{ c.identificacion }} - {{ c.nombre }}</option>{% endfor %}</select></div>
+          </div>
+        </section>
 
-        <section><h3 class="text-lg font-black border-b pb-3 mb-5">3. Propiedad Involucrada</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-5"><div class="p-4 rounded-xl bg-slate-50 border"><div class="text-xs uppercase font-bold text-slate-500">Conjunto Residencial</div><div class="font-black mt-1">{{ proceso.demandante or 'Se conserva la asociación existente' }}</div></div><div class="p-4 rounded-xl bg-slate-50 border"><div class="text-xs uppercase font-bold text-slate-500">Nomenclatura Exacta</div><div class="font-black mt-1">{{ proceso.torre_apto or 'Sin nomenclatura registrada' }}</div></div></div></section>
-
-        <section id="bloque-financiero"><h3 class="text-lg font-black border-b pb-3 mb-5">4. Pretensiones, Medidas y Asignación</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5"><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Pretensiones / Cuantía ($)</label><input name="pretensiones" value="{{ proceso.pretensiones or 0 }}" inputmode="decimal" class="w-full border border-slate-300 rounded-xl p-3"></div><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Abogado Responsable</label><select name="abogado_id" class="w-full border border-slate-300 rounded-xl p-3"><option value="">Sin abogado</option>{% for a in abogados %}<option value="{{ a.id }}" {% if proceso.abogado_id == a.id %}selected{% endif %}>{{ a.nombre }}</option>{% endfor %}</select></div></div>
-          <div id="bloque-medidas"><label class="block text-xs font-bold uppercase text-slate-500 mb-2">Medidas Cautelares Solicitadas</label><div id="medidas-list" class="space-y-2">{% for m in (proceso.medidas_cautelares or '').split('\n') if m.strip() %}<div class="flex gap-2"><input name="medida" value="{{ m }}" class="flex-1 border border-slate-300 rounded-xl p-3"><button type="button" onclick="this.parentElement.remove()" class="px-3 rounded-xl border text-red-600">Quitar</button></div>{% endfor %}</div><button type="button" onclick="agregarMedida()" class="mt-2 px-4 py-2 rounded-xl border border-blue-200 text-blue-700 font-bold text-sm">+ Agregar medida</button></div>
+        <section id="bloque-financiero">
+          <h3 class="text-lg font-black border-b pb-3 mb-5">4. Pretensiones, medidas y abogado</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Pretensiones / Cuantía ($)</label><input name="pretensiones" value="{{ proceso.pretensiones or 0 }}" inputmode="decimal" class="w-full border border-slate-300 rounded-xl p-3"></div>
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Abogado Responsable</label><select name="abogado_id" class="w-full border border-slate-300 rounded-xl p-3"><option value="">Sin abogado</option>{% for a in abogados %}<option value="{{ a.id }}" {% if proceso.abogado_id == a.id %}selected{% endif %}>{{ a.nombre }}</option>{% endfor %}</select></div>
+          </div>
+          <div><label class="block text-xs font-bold uppercase text-slate-500 mb-2">Medidas Cautelares</label><div id="medidas-list" class="space-y-2">{% for m in (proceso.medidas_cautelares or '').split('\n') if m.strip() %}<div class="flex gap-2"><input name="medida" value="{{ m }}" class="flex-1 border border-slate-300 rounded-xl p-3"><button type="button" onclick="this.parentElement.remove()" class="px-3 rounded-xl border text-red-600">Quitar</button></div>{% endfor %}</div><button type="button" onclick="agregarMedida()" class="mt-2 px-4 py-2 rounded-xl border border-blue-200 text-blue-700 font-bold text-sm">+ Agregar medida</button></div>
         </section>
 
         <div class="flex flex-wrap justify-end gap-3 border-t pt-5"><button type="button" onclick="cerrarEditor()" class="px-5 py-3 rounded-xl border border-slate-300 font-bold">Cancelar</button><button class="px-6 py-3 bg-slate-900 text-white rounded-xl font-black">Guardar cambios</button></div>
@@ -126,51 +174,80 @@
     </div>
   </div>
 
+  <!-- MODAL ACTUACIÓN -->
   {% if es_juridico %}
-  <div id="act-modal" class="hidden fixed inset-0 bg-black/50 z-50 p-4"><div class="bg-white max-w-2xl mx-auto rounded-2xl p-6 mt-10"><div class="flex justify-between"><h3 class="font-black text-lg">Registrar actuación</h3><button onclick="document.getElementById('act-modal').classList.add('hidden')">✕</button></div><form method="POST" action="/actuacion/nueva" class="space-y-4 mt-5"><input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}"><input type="date" name="fecha" class="w-full border rounded-xl p-3" required><select name="etapa" class="w-full border rounded-xl p-3" required><option value="1. Presentación de la demanda">1. Presentación de la demanda</option><option value="2. Inadmisión">2. Inadmisión</option><option value="3. Admisión">3. Admisión</option><option value="4. Medidas Cautelares">4. Medidas Cautelares</option><option value="5. Notificación">5. Notificación</option><option value="6. Excepciones">6. Excepciones</option><option value="7. Sentencia">7. Sentencia</option><option value="8. Desistimiento tácito">8. Desistimiento tácito</option><option value="Terminación del Proceso">Terminación del Proceso</option></select><input name="sub_etapa" placeholder="Tipificación / sub-etapa" class="w-full border rounded-xl p-3"><textarea name="descripcion" rows="4" placeholder="Descripción del auto o actuación" class="w-full border rounded-xl p-3"></textarea><button class="w-full bg-slate-900 text-white rounded-xl py-3 font-black">Guardar actuación y actualizar etapa</button></form></div></div>
+  <div id="act-modal" class="hidden fixed inset-0 bg-black/50 z-50 p-4"><div class="bg-white max-w-2xl mx-auto rounded-2xl p-6 mt-10"><div class="flex justify-between"><h3 class="font-black text-lg">Registrar actuación</h3><button onclick="cerrarModal('act-modal')">✕</button></div><form method="POST" action="/actuacion/nueva" class="space-y-4 mt-5"><input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}"><input type="date" name="fecha" class="w-full border rounded-xl p-3" required><select name="etapa" class="w-full border rounded-xl p-3" required><option value="1. Presentación de la demanda">1. Presentación de la demanda</option><option value="2. Inadmisión">2. Inadmisión</option><option value="3. Admisión">3. Admisión</option><option value="4. Medidas Cautelares">4. Medidas Cautelares</option><option value="5. Notificación">5. Notificación</option><option value="6. Excepciones">6. Excepciones</option><option value="7. Sentencia">7. Sentencia</option><option value="8. Desistimiento tácito">8. Desistimiento tácito</option><option value="Terminación del Proceso">Terminación del Proceso</option></select><input name="sub_etapa" placeholder="Tipificación / sub-etapa" class="w-full border rounded-xl p-3"><textarea name="descripcion" rows="4" placeholder="Descripción del auto o actuación" class="w-full border rounded-xl p-3"></textarea><button class="w-full bg-slate-900 text-white rounded-xl py-3 font-black">Guardar actuación y actualizar etapa</button></form></div></div>
   {% endif %}
-</div>
-<script>
-const tipoActual = '{{ tipo }}';
-function abrirEditor(){document.getElementById('editor-expediente').classList.remove('hidden');document.body.classList.add('overflow-hidden');cambiarTipoCartera(tipoActual);}
-function cerrarEditor(){document.getElementById('editor-expediente').classList.add('hidden');document.body.classList.remove('overflow-hidden');}
-function cambiarTipoCartera(valor){
-  const tipo = (valor || '').toUpperCase();
-  const bloqueJudicial = document.getElementById('bloque-judicial');
-  const bloqueMedidas = document.getElementById('bloque-medidas');
-  const radicado = document.getElementById('radicado-rama');
-  const naturaleza = document.getElementById('naturaleza');
-  const juzgado = document.getElementById('juzgado');
-  const msg = document.getElementById('mensaje-cambio-cartera');
-  if (!bloqueJudicial) return;
 
-  if (tipo === 'PREJURIDICO') {
-    bloqueJudicial.classList.add('hidden');
-    if (bloqueMedidas) bloqueMedidas.parentElement.classList.add('hidden');
-    if (radicado) { radicado.required = false; if (!radicado.value || !/^PREJ/i.test(radicado.value)) radicado.value = 'PREJURIDICO'; }
-    if (naturaleza) naturaleza.value = 'PREJURIDICO';
-    if (juzgado) juzgado.value = '';
-    if (msg) msg.textContent = 'La cuenta queda en PREJURÍDICO. No se muestran ni se habilitan actuaciones procesales; la gestión continúa en CRM.';
-  } else {
-    bloqueJudicial.classList.remove('hidden');
-    if (bloqueMedidas) bloqueMedidas.parentElement.classList.remove('hidden');
-    if (radicado && /^PREJ/i.test(radicado.value)) radicado.value = '';
-    if (radicado) radicado.required = true;
-    if (naturaleza && naturaleza.value === 'PREJURIDICO') naturaleza.value = '';
-    if (msg) msg.textContent = 'Al pasar a JURÍDICO debes informar el radicado Rama y completar la información judicial.';
-  }
-}
-function validarCarteraAntesDeGuardar(){
-  const tipo = document.getElementById('tipo-cartera-editor').value;
-  const rad = document.getElementById('radicado-rama');
-  if (tipo === 'JURIDICO' && (!rad || !rad.value.trim() || /^PREJUR/i.test(rad.value.trim()))) {
-    alert('Para pasar a JURÍDICO debes ingresar el radicado Rama Judicial.');
-    if (rad) rad.focus();
-    return false;
-  }
-  return true;
-}
+  <!-- MODAL AGENDA -->
+  <div id="agenda-modal" class="hidden fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 p-4 overflow-y-auto">
+    <div class="max-w-3xl mx-auto bg-white rounded-3xl shadow-2xl my-8 overflow-hidden">
+      <div class="px-6 py-5 bg-slate-900 text-white flex items-center justify-between"><div><div class="text-xs uppercase tracking-widest text-slate-400 font-bold">Agenda</div><h2 class="text-xl font-black">Agregar vencimiento o acuerdo</h2></div><button type="button" onclick="cerrarModal('agenda-modal')">✕</button></div>
+      <div class="p-6">
+        <div class="flex flex-wrap gap-2 mb-6">
+          <button type="button" onclick="mostrarAgenda('acuerdo')" class="px-4 py-2 rounded-xl bg-emerald-600 text-white font-bold text-sm">🤝 Acuerdo de pago</button>
+          <button type="button" onclick="mostrarAgenda('termino')" class="px-4 py-2 rounded-xl bg-slate-900 text-white font-bold text-sm">⚖️ Vencimiento</button>
+          <button type="button" onclick="mostrarAgenda('otro')" class="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold text-sm">＋ Otros</button>
+        </div>
+
+        <div id="agenda-acuerdo" class="space-y-4">
+          <form method="POST" action="/acuerdos/guardar" class="space-y-4">
+            <input type="hidden" name="inmueble_id" value="{{ proceso.inmueble_id or '' }}">
+            <input type="hidden" id="acuerdo-id-persona" name="identificacion_deudor" value="">
+            <input type="hidden" id="acuerdo-nombre-persona" name="nombre_deudor" value="">
+            <input type="hidden" id="acuerdo-telefono-persona" name="telefono" value="">
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Buscar persona por nombre o cédula *</label><input id="acuerdo-buscador" list="contactos-expediente" class="w-full border rounded-xl p-3" placeholder="Escriba nombre o cédula" autocomplete="off" oninput="seleccionarContactoAgenda(this.value)"><div id="acuerdo-persona-confirmada" class="text-xs text-emerald-700 font-semibold mt-2"></div></div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Valor acordado ($)</label><input type="number" step="0.01" name="valor_acordado" required class="w-full border rounded-xl p-3"></div><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Fecha compromiso</label><input type="date" name="fecha_compromiso" required class="w-full border rounded-xl p-3"></div></div>
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Observaciones / condiciones</label><textarea name="observaciones" rows="3" class="w-full border rounded-xl p-3"></textarea></div>
+            <button type="submit" class="px-5 py-3 rounded-xl bg-emerald-600 text-white font-black">Guardar acuerdo</button>
+          </form>
+        </div>
+
+        <div id="agenda-termino" class="hidden space-y-4">
+          <form method="POST" action="/vencimientos/guardar" class="space-y-4">
+            <input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}">
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Título del vencimiento *</label><input name="titulo" required class="w-full border rounded-xl p-3" placeholder="Ej. Contestar excepciones"></div>
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Fecha límite *</label><input type="date" name="fecha_vencimiento" required class="w-full border rounded-xl p-3"></div>
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Observaciones</label><textarea name="observaciones" rows="3" class="w-full border rounded-xl p-3"></textarea></div>
+            <button type="submit" class="px-5 py-3 rounded-xl bg-slate-900 text-white font-black">Guardar vencimiento</button>
+          </form>
+        </div>
+
+        <div id="agenda-otro" class="hidden space-y-4">
+          <form method="POST" action="/vencimientos/guardar" class="space-y-4">
+            <input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}">
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Título / categoría *</label><input name="titulo" required class="w-full border rounded-xl p-3" placeholder="Ej. Reunión, tarea administrativa, visita, seguimiento..."></div>
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Fecha *</label><input type="date" name="fecha_vencimiento" required class="w-full border rounded-xl p-3"></div>
+            <div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Observaciones</label><textarea name="observaciones" rows="3" class="w-full border rounded-xl p-3"></textarea></div>
+            <p class="text-xs text-slate-500">Se registra como categoría <strong>OTROS</strong> en la agenda.</p>
+            <button type="submit" class="px-5 py-3 rounded-xl bg-indigo-600 text-white font-black">Guardar en Otros</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const contactosAgenda = {{ contactos|tojson }};
+
+function abrirEditor(){document.getElementById('editor-expediente').classList.remove('hidden');document.body.classList.add('overflow-hidden');cambiarModoEdicion(document.querySelector('select[name="tipo_cartera"]')?.value || '{{ tipo }}');}
+function cerrarEditor(){document.getElementById('editor-expediente').classList.add('hidden');document.body.classList.remove('overflow-hidden');}
+function abrirAgenda(){document.getElementById('agenda-modal').classList.remove('hidden');document.body.classList.add('overflow-hidden');mostrarAgenda('acuerdo');}
+function cerrarModal(id){const el=document.getElementById(id);if(el)el.classList.add('hidden');document.body.classList.remove('overflow-hidden');}
+function mostrarAgenda(tipo){['acuerdo','termino','otro'].forEach(t=>document.getElementById('agenda-'+t)?.classList.toggle('hidden', t!==tipo));}
 function agregarMedida(){const wrap=document.getElementById('medidas-list');const row=document.createElement('div');row.className='flex gap-2';row.innerHTML='<input name="medida" class="flex-1 border border-slate-300 rounded-xl p-3" placeholder="Descripción de la medida"><button type="button" class="px-3 rounded-xl border text-red-600" onclick="this.parentElement.remove()">Quitar</button>';wrap.appendChild(row);}
-document.addEventListener('keydown',e=>{if(e.key==='Escape')cerrarEditor();});
+function cambiarModoEdicion(tipo){const juridico=String(tipo).toUpperCase()==='JURIDICO';['bloque-procesal','bloque-financiero'].forEach(id=>{const el=document.getElementById(id);if(el)el.classList.toggle('opacity-60',!juridico);});}
+function seleccionarContactoAgenda(valor){
+  const clean=String(valor||'').trim().toLowerCase();
+  const match=contactosAgenda.find(c=>`${c.identificacion||''} - ${c.nombre||''}`.toLowerCase()===clean || String(c.identificacion||'').toLowerCase()===clean || String(c.nombre||'').toLowerCase()===clean);
+  if(match){
+    document.getElementById('acuerdo-id-persona').value=match.identificacion||'';
+    document.getElementById('acuerdo-nombre-persona').value=match.nombre||'';
+    document.getElementById('acuerdo-telefono-persona').value=match.telefono||'';
+    document.getElementById('acuerdo-persona-confirmada').textContent=`Persona vinculada: ${match.nombre||''} · ${match.identificacion||''}`;
+  }
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){cerrarEditor();cerrarModal('act-modal');cerrarModal('agenda-modal');}});
 </script>
 {% endblock %}
