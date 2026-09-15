@@ -5,6 +5,7 @@ liquidador de expensas PH, supervisión de agente y administración de expedient
 """
 from __future__ import annotations
 
+import sms_router
 import io
 import json
 import os
@@ -76,6 +77,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Inclusión de routers modulares M2M y supervisión
 app.include_router(bot_api.router)
 app.include_router(agent_supervision.router)
+app.include_router(sms_router.router)
 
 # Configuración global de observabilidad y captura de excepciones
 observability.install_exception_handling(app)
