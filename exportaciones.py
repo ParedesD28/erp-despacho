@@ -40,6 +40,14 @@ def _esc(text):
     ).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _table_exists(cur, table_name):
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL", (table_name,))
+    row = cur.fetchone()
+    if not row:
+        return False
+    return bool(row[0] if not isinstance(row, dict) else next(iter(row.values())))
+
+
 def generar_pdf_liquidacion(inmueble_id, fecha_corte, resultados, resumen, inm_info):
     """Formato oficial compacto: identidad, resumen, detalle financiero y cierre."""
     from reportlab.lib import colors
@@ -212,7 +220,8 @@ def generar_pdf_liquidacion(inmueble_id, fecha_corte, resultados, resumen, inm_i
 
 _REPORT_HEADERS = [
     "radicado_interno", "radicado_rama", "naturaleza", "juzgado", "etapa_actual", "id_cliente",
-    "demandado", "id_demandado", "estado", "pretensiones", "medidas_cautelares", "abogado_id", "Historial_Actuaciones",
+    "demandado", "id_demandado", "estado", "pretensiones", "medidas_cautelares", "abogado_id",
+    "Historial_Actuaciones", "Gestiones_CRM",
 ]
 
 
@@ -225,6 +234,30 @@ def _formatear_historial_actuaciones(actuaciones):
         descripcion = str(a.get("descripcion") or a.get("tipificacion_sugerida") or "").strip()
         usuario = str(a.get("usuario") or "Sistema").strip()
         cuerpo = " - ".join(x for x in (etapa, descripcion) if x)
+        if usuario:
+            cuerpo = f"{cuerpo} (Por: {usuario})"
+        partes.append(f"[{fecha_texto}] {cuerpo}")
+    return "\n".join(partes)
+
+
+def _formatear_gestiones_crm(gestiones):
+    """Formatea el historial extrajudicial para mostrarlo dentro de cada expediente."""
+    partes = []
+    for g in gestiones:
+        fecha = g.get("fecha") or g.get("fecha_gestion") or g.get("created_at")
+        fecha_texto = fecha.strftime("%Y-%m-%d %H:%M") if hasattr(fecha, "strftime") else str(fecha or "")[:16]
+        tipo = str(g.get("tipo_contacto") or g.get("tipo") or "Gestión CRM").strip()
+        resumen = str(g.get("resumen") or "").strip()
+        usuario = str(g.get("usuario") or "ERP").strip()
+        identificacion = str(g.get("identificacion_deudor") or "").strip()
+        promesa = g.get("promesa_pago_fecha") or g.get("promesa")
+        promesa_texto = promesa.strftime("%Y-%m-%d") if hasattr(promesa, "strftime") else str(promesa or "")[:10]
+
+        contacto = f" [Contacto: {identificacion}]" if identificacion else ""
+        cuerpo = " - ".join(x for x in (tipo, resumen) if x)
+        cuerpo = f"{cuerpo}{contacto}" if cuerpo else contacto.strip()
+        if promesa_texto:
+            cuerpo = f"{cuerpo} [Promesa: {promesa_texto}]"
         if usuario:
             cuerpo = f"{cuerpo} (Por: {usuario})"
         partes.append(f"[{fecha_texto}] {cuerpo}")
@@ -257,6 +290,8 @@ def _estilizar_workbook(wb):
             letter = get_column_letter(col_idx)
             if ws.title == "Expedientes" and col_idx == 13:
                 width = 90
+            elif ws.title == "Expedientes" and col_idx == 14:
+                width = 95
             elif ws.title == "Expedientes" and col_idx in (7, 11):
                 width = 40
             elif ws.title == "Actuaciones" and col_idx == 4:
@@ -267,14 +302,14 @@ def _estilizar_workbook(wb):
             ws.column_dimensions[letter].width = width
         if ws.title == "Expedientes":
             for row in range(2, ws.max_row + 1):
-                ws.row_dimensions[row].height = 90
+                ws.row_dimensions[row].height = 120
 
 
 def _build_executive_report(cur):
     cur.execute("""
         SELECT
             p.radicado_interno, p.radicado_rama, p.naturaleza, p.juzgado, p.etapa_actual,
-            p.id_cliente,
+            p.id_cliente, p.inmueble_id,
             CASE WHEN NULLIF(TRIM(COALESCE(p.demandado, '')), '') IS NOT NULL THEN p.demandado
                  ELSE STRING_AGG(DISTINCT c_ddo.nombre, ' | ' ORDER BY c_ddo.nombre) END AS demandado,
             CASE WHEN NULLIF(TRIM(COALESCE(p.id_demandado, '')), '') IS NOT NULL THEN p.id_demandado
@@ -284,7 +319,7 @@ def _build_executive_report(cur):
         LEFT JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
         LEFT JOIN contactos c_ddo ON c_ddo.identificacion = pl.identificacion_demandado
         GROUP BY p.radicado_interno, p.radicado_rama, p.naturaleza, p.juzgado, p.etapa_actual,
-                 p.id_cliente, p.demandado, p.id_demandado, p.estado, p.pretensiones, p.medidas_cautelares, p.abogado_id
+                 p.id_cliente, p.inmueble_id, p.demandado, p.id_demandado, p.estado, p.pretensiones, p.medidas_cautelares, p.abogado_id
         ORDER BY p.radicado_interno DESC
     """)
     procesos = _rows_as_dicts(cur)
@@ -300,11 +335,100 @@ def _build_executive_report(cur):
     for act in actuaciones:
         history[str(act.get("radicado_interno") or "")].append(act)
 
+    # CRM manual / ERP
+    cur.execute("""
+        SELECT id, inmueble_id, identificacion_deudor, tipo_contacto, resumen,
+               promesa_pago_fecha, fecha, usuario
+        FROM gestiones_crm
+        WHERE COALESCE(anulado, FALSE)=FALSE
+        ORDER BY fecha ASC, id ASC
+    """)
+    gestiones_crm = _rows_as_dicts(cur)
+
+    crm_by_inmueble = defaultdict(list)
+    crm_by_identificacion = defaultdict(list)
+    for gestion in gestiones_crm:
+        inmueble_id = gestion.get("inmueble_id")
+        identificacion = str(gestion.get("identificacion_deudor") or "").strip()
+        if inmueble_id is not None:
+            crm_by_inmueble[str(inmueble_id)].append(gestion)
+        if identificacion:
+            crm_by_identificacion[identificacion].append(gestion)
+
+    # CRM generado desde cartera/agente, cuando la tabla existe.
+    # Se incorpora de forma tolerante porque esa tabla puede no existir en
+    # instalaciones antiguas y su esquema puede variar entre versiones.
+    if _table_exists(cur, "gestiones_cartera"):
+        cur.execute("SELECT * FROM gestiones_cartera")
+        gestiones_cartera = _rows_as_dicts(cur)
+        for gestion in gestiones_cartera:
+            if gestion.get("anulado") is True or str(gestion.get("estado") or "").upper() == "ANULADO":
+                continue
+            normalized = {
+                "id": gestion.get("id") or gestion.get("id_gestion") or gestion.get("gestion_id"),
+                "inmueble_id": gestion.get("inmueble_id"),
+                "identificacion_deudor": gestion.get("identificacion_deudor"),
+                "tipo_contacto": gestion.get("tipo_contacto") or "WhatsApp IA",
+                "resumen": gestion.get("resumen") or "",
+                "promesa_pago_fecha": gestion.get("promesa_pago_fecha"),
+                "fecha": next(
+                    (
+                        gestion.get(name)
+                        for name in (
+                            "fecha", "fecha_gestion", "created_at", "createdAt",
+                            "timestamp", "fecha_registro", "created",
+                        )
+                        if gestion.get(name) is not None
+                    ),
+                    None,
+                ),
+                "usuario": gestion.get("usuario") or "Bot Claude",
+            }
+            inmueble_id = normalized.get("inmueble_id")
+            identificacion = str(normalized.get("identificacion_deudor") or "").strip()
+            if inmueble_id is not None:
+                crm_by_inmueble[str(inmueble_id)].append(normalized)
+            if identificacion:
+                crm_by_identificacion[identificacion].append(normalized)
+
     rows = []
     for p in procesos:
         radicado = str(p.get("radicado_interno") or "")
-        item = {key: p.get(key) for key in _REPORT_HEADERS[:-1]}
-        item["Historial_Actuaciones"] = _formatear_historial_actuaciones(history.get(radicado, []))
+        item = {key: p.get(key) for key in _REPORT_HEADERS[:-2]}
+        actuaciones_del_expediente = history.get(radicado, [])
+        item["Historial_Actuaciones"] = _formatear_historial_actuaciones(actuaciones_del_expediente)
+
+        crm_del_expediente = []
+        seen_crm = set()
+        inmueble_id = p.get("inmueble_id")
+        if inmueble_id is not None:
+            crm_del_expediente.extend(crm_by_inmueble.get(str(inmueble_id), []))
+
+        identificaciones = []
+        for value in (p.get("id_demandado"), p.get("id_cliente")):
+            identificaciones.extend(
+                x.strip() for x in str(value or "").split("|") if x.strip()
+            )
+        for identificacion in identificaciones:
+            crm_del_expediente.extend(crm_by_identificacion.get(identificacion, []))
+
+        crm_unicas = []
+        for gestion in sorted(
+            crm_del_expediente,
+            key=lambda x: str(x.get("fecha") or x.get("fecha_gestion") or x.get("created_at") or ""),
+        ):
+            firma = (
+                gestion.get("id"),
+                str(gestion.get("fecha") or gestion.get("fecha_gestion") or gestion.get("created_at") or ""),
+                str(gestion.get("resumen") or ""),
+                str(gestion.get("identificacion_deudor") or ""),
+            )
+            if firma in seen_crm:
+                continue
+            seen_crm.add(firma)
+            crm_unicas.append(gestion)
+
+        item["Gestiones_CRM"] = _formatear_gestiones_crm(crm_unicas)
         rows.append(item)
     return rows, actuaciones
 
@@ -335,8 +459,8 @@ def generar_informe_ejecutivo_excel(conn):
                     if hasattr(cell.value, "strftime"):
                         cell.number_format = "yyyy-mm-dd"
         wb.properties.title = "Reporte Ejecutivo de Expedientes y Actuaciones"
-        wb.properties.subject = "Resumen integral de expedientes con historial completo de actuaciones"
+        wb.properties.subject = "Resumen integral de expedientes con historial completo de actuaciones y gestiones CRM"
         wb.properties.creator = "Gestión Judicial"
-        wb.properties.description = "Incluye expediente, actuaciones, contactos, inmuebles y CRM."
+        wb.properties.description = "Incluye expediente, actuaciones, gestiones CRM, contactos e inmuebles."
     output.seek(0)
     return output
