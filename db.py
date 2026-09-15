@@ -3,18 +3,17 @@
 Arquitectura:
     FastAPI -> db.get_connection() -> ThreadedConnectionPool -> PostgreSQL/Neon
 
-Objetivos:
-- No crear el pool al importar el módulo.
+Principios:
+- No conectar a PostgreSQL al importar el módulo.
+- No modificar globalmente psycopg2.connect().
 - Crear el pool de forma perezosa.
-- Mantener timeout explícito de conexión.
-- No destruir el pool ante PoolError por saturación.
-- Reintentar de forma limitada.
+- connect_timeout siempre entero para libpq/psycopg2.
+- PoolError nunca destruye el pool.
 - Validar conexiones antes de entregarlas.
 - Descartar conexiones rotas.
 - Limpiar transacciones antes de devolver conexiones.
-- Impedir esperas indefinidas durante la adquisición.
-- Mantener compatibilidad con start.py.
-- NO modificar globalmente psycopg2.connect().
+- Limitar el tiempo total de adquisición.
+- Permitir que Render/FastAPI arranque aunque Neon esté temporalmente inaccesible.
 """
 
 from __future__ import annotations
@@ -35,7 +34,6 @@ from psycopg2.pool import PoolError
 # =============================================================================
 
 def _env_int(name: str, default: int) -> int:
-    """Lee un entero desde variables de entorno de forma segura."""
     try:
         return int(os.getenv(name, str(default)))
     except (TypeError, ValueError):
@@ -43,15 +41,12 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _env_float(name: str, default: float) -> float:
-    """Lee un float desde variables de entorno de forma segura."""
     try:
         return float(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
 
 
-# Mantengo estos valores conservadores para no alterar innecesariamente
-# la capacidad actual del ERP durante el diagnóstico.
 _MIN_CONN = max(
     1,
     _env_int("DB_POOL_MIN", 1),
@@ -62,33 +57,24 @@ _MAX_CONN = max(
     _env_int("DB_POOL_MAX", 15),
 )
 
-# Tiempo máximo para establecer una conexión PostgreSQL individual.
+# IMPORTANTE:
+# psycopg2/libpq espera este parámetro como entero.
 _CONNECT_TIMEOUT = max(
-    1.0,
-    _env_float("DB_CONNECT_TIMEOUT", 8.0),
-)
-
-# Número máximo de intentos de adquisición/validación.
-_DB_ATTEMPTS = max(
     1,
-    _env_int("DB_VALIDATION_ATTEMPTS", 3),
+    _env_int("DB_CONNECT_TIMEOUT", 8),
 )
 
-# Espera entre intentos.
+_MAX_ATTEMPTS = max(
+    1,
+    _env_int("DB_MAX_ATTEMPTS", 3),
+)
+
 _RETRY_DELAY = max(
     0.05,
     _env_float("DB_RETRY_DELAY", 0.3),
 )
 
-# Tiempo máximo TOTAL que get_connection() puede permanecer intentando.
-#
-# Este timeout es independiente de CONNECT_TIMEOUT:
-#
-# CONNECT_TIMEOUT
-#     = límite de una conexión individual.
-#
-# DB_ACQUISITION_TIMEOUT
-#     = límite de toda la operación get_connection().
+# Este valor sí puede ser float porque es control interno de Python.
 _ACQUISITION_TIMEOUT = max(
     1.0,
     _env_float("DB_ACQUISITION_TIMEOUT", 12.0),
@@ -98,7 +84,7 @@ _DSN = os.getenv("DATABASE_URL")
 
 _LOCK = threading.RLock()
 
-# El pool se crea SOLO cuando realmente se solicita una conexión.
+# El pool se crea exclusivamente cuando alguna operación necesita PostgreSQL.
 POOL = None
 
 
@@ -107,7 +93,6 @@ POOL = None
 # =============================================================================
 
 def _log(tag: str, msg: str, **detalles):
-    """Logging consistente para Render."""
     extra = (
         " | "
         + " ".join(f"{k}={v}" for k, v in detalles.items())
@@ -124,23 +109,10 @@ def _log(tag: str, msg: str, **detalles):
 
 
 # =============================================================================
-# CREACIÓN DEL POOL
+# CREACIÓN PEREZOSA DEL POOL
 # =============================================================================
 
 def _crear_pool():
-    """Crea el ThreadedConnectionPool nativo de psycopg2.
-
-    No se modifica psycopg2.connect().
-
-    Esto evita la recursión:
-
-        get_connection()
-            -> ThreadedConnectionPool()
-            -> psycopg2.connect()
-            -> get_connection()
-            -> ...
-    """
-
     if not _DSN:
         raise RuntimeError(
             "DATABASE_URL no está configurada"
@@ -155,15 +127,15 @@ def _crear_pool():
     )
 
     try:
+
         nuevo_pool = psycopg_pool.ThreadedConnectionPool(
             minconn=_MIN_CONN,
             maxconn=_MAX_CONN,
             dsn=_DSN,
 
-            # Timeout de conexión real.
+            # ESTE valor es int.
             connect_timeout=_CONNECT_TIMEOUT,
 
-            # TCP keepalive.
             keepalives=1,
             keepalives_idle=30,
             keepalives_interval=10,
@@ -180,6 +152,7 @@ def _crear_pool():
         return nuevo_pool
 
     except Exception as exc:
+
         _log(
             "❌ [DB POOL]",
             "No fue posible crear el pool PostgreSQL",
@@ -190,8 +163,6 @@ def _crear_pool():
 
 
 def _obtener_pool():
-    """Obtiene el pool actual o lo crea de forma perezosa."""
-
     global POOL
 
     with _LOCK:
@@ -202,12 +173,21 @@ def _obtener_pool():
         return POOL
 
 
+def get_pool():
+    """Obtiene el pool real para tareas internas de mantenimiento.
+
+    No crea el pool durante el import.
+    Si Neon no está disponible, propaga el error al llamador.
+    """
+
+    return _obtener_pool()
+
+
 # =============================================================================
-# UTILIDADES DE CONEXIÓN
+# TRANSACCIONES
 # =============================================================================
 
 def _limpiar_transaccion(conn) -> None:
-    """Revierte una transacción pendiente antes de reutilizar la conexión."""
 
     if conn is None:
         return
@@ -223,6 +203,7 @@ def _limpiar_transaccion(conn) -> None:
         )
         == STATUS_IN_TRANSACTION
     ):
+
         try:
             conn.rollback()
 
@@ -230,8 +211,11 @@ def _limpiar_transaccion(conn) -> None:
             pass
 
 
+# =============================================================================
+# VALIDACIÓN
+# =============================================================================
+
 def _is_valid_connection(conn) -> bool:
-    """Comprueba que PostgreSQL siga respondiendo."""
 
     if conn is None:
         return False
@@ -254,7 +238,7 @@ def _is_valid_connection(conn) -> bool:
 
         _log(
             "⚠️ [DB CHECK]",
-            "La conexión PostgreSQL no respondió correctamente",
+            "La conexión PostgreSQL no respondió",
             error=repr(exc),
         )
 
@@ -262,15 +246,10 @@ def _is_valid_connection(conn) -> bool:
 
 
 # =============================================================================
-# CURSOR PROTEGIDO
+# CURSOR
 # =============================================================================
 
 class PooledCursor:
-    """Proxy de cursor.
-
-    Si una operación PostgreSQL falla, marca la conexión como potencialmente
-    dañada para que no vuelva al pool como si estuviera sana.
-    """
 
     def __init__(
         self,
@@ -280,47 +259,32 @@ class PooledCursor:
         self._owner = owner
         self._raw = raw_cursor
 
-    def execute(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ):
+    def execute(self, *args: Any, **kwargs: Any):
         try:
             return self._raw.execute(
                 *args,
                 **kwargs,
             )
-
         except Exception:
             self._owner._failed = True
             raise
 
-    def executemany(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ):
+    def executemany(self, *args: Any, **kwargs: Any):
         try:
             return self._raw.executemany(
                 *args,
                 **kwargs,
             )
-
         except Exception:
             self._owner._failed = True
             raise
 
-    def callproc(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ):
+    def callproc(self, *args: Any, **kwargs: Any):
         try:
             return self._raw.callproc(
                 *args,
                 **kwargs,
             )
-
         except Exception:
             self._owner._failed = True
             raise
@@ -328,22 +292,16 @@ class PooledCursor:
     def fetchone(self):
         try:
             return self._raw.fetchone()
-
         except Exception:
             self._owner._failed = True
             raise
 
-    def fetchmany(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ):
+    def fetchmany(self, *args: Any, **kwargs: Any):
         try:
             return self._raw.fetchmany(
                 *args,
                 **kwargs,
             )
-
         except Exception:
             self._owner._failed = True
             raise
@@ -351,18 +309,12 @@ class PooledCursor:
     def fetchall(self):
         try:
             return self._raw.fetchall()
-
         except Exception:
             self._owner._failed = True
             raise
 
     def close(self):
-        try:
-            return self._raw.close()
-
-        except Exception:
-            self._owner._failed = True
-            raise
+        return self._raw.close()
 
     def __enter__(self):
         self._raw.__enter__()
@@ -374,27 +326,18 @@ class PooledCursor:
         exc_value,
         traceback,
     ):
+
         if exc_type:
             self._owner._failed = True
 
-        try:
-            return self._raw.__exit__(
-                exc_type,
-                exc_value,
-                traceback,
-            )
-
-        except Exception:
-            self._owner._failed = True
-            raise
+        return self._raw.__exit__(
+            exc_type,
+            exc_value,
+            traceback,
+        )
 
     def __iter__(self):
-        try:
-            return iter(self._raw)
-
-        except Exception:
-            self._owner._failed = True
-            raise
+        return iter(self._raw)
 
     def __getattr__(self, name):
         return getattr(
@@ -404,11 +347,10 @@ class PooledCursor:
 
 
 # =============================================================================
-# CONEXIÓN PROTEGIDA
+# CONEXIÓN
 # =============================================================================
 
 class PooledConnection:
-    """Proxy DB-API compatible con las rutas existentes del ERP."""
 
     _INTERNAL_ATTRIBUTES = {
         "_raw",
@@ -422,8 +364,7 @@ class PooledConnection:
         raw,
         pool,
     ):
-        # Debemos usar super().__setattr__ porque existe __setattr__
-        # delegado hacia la conexión PostgreSQL real.
+
         super().__setattr__(
             "_raw",
             raw,
@@ -444,11 +385,8 @@ class PooledConnection:
             False,
         )
 
-    def cursor(
-        self,
-        *args: Any,
-        **kwargs: Any,
-    ):
+    def cursor(self, *args: Any, **kwargs: Any):
+
         try:
 
             raw_cursor = self._raw.cursor(
@@ -462,31 +400,34 @@ class PooledConnection:
             )
 
         except Exception:
+
             self._failed = True
             raise
 
     def commit(self):
+
         try:
             return self._raw.commit()
 
         except Exception:
+
             self._failed = True
             raise
 
     def rollback(self):
+
         try:
             return self._raw.rollback()
 
         except Exception:
+
             self._failed = True
             raise
 
     def close(self):
-        """Compatibilidad DB-API: devuelve la conexión al pool."""
         self.release()
 
     def release(self):
-        """Devuelve la conexión al pool o la descarta si está dañada."""
 
         if self._returned:
             return
@@ -510,8 +451,6 @@ class PooledConnection:
 
             try:
 
-                # Una conexión con una transacción abierta NO debe
-                # regresar al pool.
                 if (
                     getattr(
                         raw,
@@ -540,7 +479,7 @@ class PooledConnection:
 
                     _log(
                         "⚠️ [DB POOL]",
-                        "Descartando conexión rota del pool",
+                        "Descartando conexión rota",
                     )
 
                     pool.putconn(
@@ -556,12 +495,11 @@ class PooledConnection:
 
                 _log(
                     "⚠️ [DB POOL]",
-                    "Error devolviendo conexión al pool",
+                    "Error devolviendo conexión",
                     error=repr(exc),
                 )
 
                 try:
-
                     pool.putconn(
                         raw,
                         close=True,
@@ -571,7 +509,6 @@ class PooledConnection:
 
                     try:
                         raw.close()
-
                     except Exception:
                         pass
 
@@ -600,6 +537,7 @@ class PooledConnection:
         exc_value,
         traceback,
     ):
+
         try:
 
             if exc_type:
@@ -608,7 +546,6 @@ class PooledConnection:
 
                 try:
                     self._raw.rollback()
-
                 except Exception:
                     pass
 
@@ -618,10 +555,12 @@ class PooledConnection:
                     self._raw.commit()
 
                 except Exception:
+
                     self._failed = True
                     raise
 
         finally:
+
             self.release()
 
         return False
@@ -637,7 +576,6 @@ class PooledConnection:
         name,
         value,
     ):
-        """Delega atributos de configuración a la conexión real."""
 
         if name in self._INTERNAL_ATTRIBUTES:
 
@@ -656,65 +594,33 @@ class PooledConnection:
 
 
 # =============================================================================
-# ADQUISICIÓN DE CONEXIONES
+# ADQUISICIÓN
 # =============================================================================
 
 def get_connection() -> PooledConnection:
-    """Obtiene una conexión PostgreSQL válida.
-
-    El proceso tiene:
-
-    - timeout por conexión;
-    - timeout global;
-    - reintentos controlados;
-    - validación SELECT 1;
-    - manejo seguro de PoolError.
-
-    Importante:
-    PoolError NO destruye el pool.
-    """
 
     inicio = time.monotonic()
 
-    limite = (
-        inicio
-        + _ACQUISITION_TIMEOUT
-    )
-
     ultimo_error = None
-    intento = 0
 
-    while True:
+    for intento in range(
+        1,
+        _MAX_ATTEMPTS + 1,
+    ):
 
-        intento += 1
-
-        restante = (
-            limite
-            - time.monotonic()
+        transcurrido = (
+            time.monotonic()
+            - inicio
         )
 
-        # ---------------------------------------------------------------------
-        # LÍMITE GLOBAL
-        # ---------------------------------------------------------------------
+        restante = (
+            _ACQUISITION_TIMEOUT
+            - transcurrido
+        )
 
         if restante <= 0:
 
-            mensaje = (
-                "No fue posible obtener una conexión PostgreSQL "
-                f"dentro del límite de "
-                f"{_ACQUISITION_TIMEOUT:.1f} segundos."
-            )
-
-            _log(
-                "⏱️ [DB TIMEOUT]",
-                mensaje,
-                intentos=intento - 1,
-                timeout_s=_ACQUISITION_TIMEOUT,
-            )
-
-            raise TimeoutError(
-                mensaje
-            ) from ultimo_error
+            break
 
         _log(
             "🔎 [DB]",
@@ -729,17 +635,11 @@ def get_connection() -> PooledConnection:
         raw = None
         pool = None
 
-        # ---------------------------------------------------------------------
-        # OBTENER CONEXIÓN
-        # ---------------------------------------------------------------------
-
         try:
 
-            # IMPORTANTE:
-            # _obtener_pool() está DENTRO del try.
-            #
-            # Crear el pool puede implicar la primera conexión con Neon.
-            # Si falla, la excepción será tratada y podremos reintentar.
+            # Crear el pool y obtener la conexión están
+            # dentro del try porque cualquiera de los dos
+            # puede fallar al despertar Neon.
             pool = _obtener_pool()
 
             raw = pool.getconn()
@@ -750,15 +650,10 @@ def get_connection() -> PooledConnection:
 
             _log(
                 "⏳ [DB POOL]",
-                "No hay conexiones disponibles; esperando liberación",
+                "Pool temporalmente sin conexiones disponibles",
                 intento=intento,
                 error=repr(exc),
             )
-
-            # NUNCA hacer closeall() aquí.
-            #
-            # Otro hilo puede estar utilizando conexiones del mismo pool.
-            raw = None
 
         except Exception as exc:
 
@@ -771,63 +666,49 @@ def get_connection() -> PooledConnection:
                 error=repr(exc),
             )
 
-            raw = None
-
-        # ---------------------------------------------------------------------
-        # SI NO HAY CONEXIÓN, REINTENTAR
-        # ---------------------------------------------------------------------
-
         if raw is None:
 
             restante = (
-                limite
-                - time.monotonic()
+                _ACQUISITION_TIMEOUT
+                - (
+                    time.monotonic()
+                    - inicio
+                )
             )
 
             if restante <= 0:
                 break
 
-            espera = min(
-                _RETRY_DELAY,
-                restante,
+            time.sleep(
+                min(
+                    _RETRY_DELAY,
+                    restante,
+                )
             )
 
-            if espera > 0:
-                time.sleep(espera)
-
             continue
-
-        # ---------------------------------------------------------------------
-        # VALIDACIÓN
-        # ---------------------------------------------------------------------
 
         try:
 
             if _is_valid_connection(raw):
 
-                elapsed_ms = round(
-                    (
-                        time.monotonic()
-                        - inicio
-                    ) * 1000,
-                    1,
-                )
-
                 _log(
                     "✅ [DB]",
                     "Conexión PostgreSQL validada",
                     intento=intento,
-                    ms=elapsed_ms,
+                    ms=round(
+                        (
+                            time.monotonic()
+                            - inicio
+                        ) * 1000,
+                        1,
+                    ),
                 )
 
                 return PooledConnection(
                     raw,
                     pool,
                 )
-
-            # -----------------------------------------------------------------
-            # CONEXIÓN INVÁLIDA
-            # -----------------------------------------------------------------
 
             _log(
                 "⚠️ [DB]",
@@ -846,15 +727,13 @@ def get_connection() -> PooledConnection:
 
                 try:
                     raw.close()
-
                 except Exception:
                     pass
 
             raw = None
 
             ultimo_error = RuntimeError(
-                "La conexión PostgreSQL "
-                "no superó la validación."
+                "La conexión PostgreSQL no superó la validación."
             )
 
         except Exception as exc:
@@ -863,65 +742,54 @@ def get_connection() -> PooledConnection:
 
             _log(
                 "❌ [DB]",
-                "Error durante la validación de PostgreSQL",
+                "Error durante validación de PostgreSQL",
                 intento=intento,
                 error=repr(exc),
             )
 
-            if raw is not None:
+            try:
+
+                pool.putconn(
+                    raw,
+                    close=True,
+                )
+
+            except Exception:
 
                 try:
-
-                    pool.putconn(
-                        raw,
-                        close=True,
-                    )
-
+                    raw.close()
                 except Exception:
-
-                    try:
-                        raw.close()
-
-                    except Exception:
-                        pass
-
-                raw = None
-
-        # ---------------------------------------------------------------------
-        # SIGUIENTE INTENTO
-        # ---------------------------------------------------------------------
+                    pass
 
         restante = (
-            limite
-            - time.monotonic()
+            _ACQUISITION_TIMEOUT
+            - (
+                time.monotonic()
+                - inicio
+            )
         )
 
         if restante <= 0:
             break
 
-        espera = min(
-            _RETRY_DELAY,
-            restante,
+        time.sleep(
+            min(
+                _RETRY_DELAY,
+                restante,
+            )
         )
-
-        if espera > 0:
-            time.sleep(espera)
-
-    # =========================================================================
-    # TIMEOUT FINAL
-    # =========================================================================
 
     mensaje = (
         "No fue posible obtener una conexión PostgreSQL "
-        f"válida dentro del límite de "
-        f"{_ACQUISITION_TIMEOUT:.1f} segundos."
+        f"válida después de {_MAX_ATTEMPTS} intentos "
+        f"o {_ACQUISITION_TIMEOUT:.1f} segundos."
     )
 
     _log(
         "❌ [DB FATAL]",
         mensaje,
         ultimo_error=repr(ultimo_error),
-        intentos=intento,
+        intentos=_MAX_ATTEMPTS,
     )
 
     raise TimeoutError(
@@ -930,11 +798,10 @@ def get_connection() -> PooledConnection:
 
 
 # =============================================================================
-# LIBERACIÓN EXTERNA
+# LIBERACIÓN
 # =============================================================================
 
 def release_connection(conn) -> None:
-    """Libera una conexión obtenida mediante get_connection()."""
 
     if conn is None:
         return
@@ -943,6 +810,7 @@ def release_connection(conn) -> None:
         conn,
         PooledConnection,
     ):
+
         conn.release()
         return
 
@@ -954,7 +822,6 @@ def release_connection(conn) -> None:
 
             try:
                 conn.close()
-
             except Exception:
                 pass
 
@@ -979,7 +846,6 @@ def release_connection(conn) -> None:
         except Exception:
 
             try:
-
                 pool.putconn(
                     conn,
                     close=True,
@@ -989,7 +855,6 @@ def release_connection(conn) -> None:
 
                 try:
                     conn.close()
-
                 except Exception:
                     pass
 
@@ -1001,20 +866,17 @@ def release_connection(conn) -> None:
 def install_psycopg2_pool() -> None:
     """Compatibilidad con start.py.
 
-    IMPORTANTE:
-    Esta función deliberadamente NO reemplaza psycopg2.connect().
+    NO modifica psycopg2.connect().
 
-    El pool se administra explícitamente mediante:
-        db.get_connection()
-
-Esto evita la recursión que apareció cuando un pool perezoso intentó
-crear conexiones mientras psycopg2.connect() estaba interceptado.
-"""
+    Esto existe porque start.py ya llama a esta función,
+    pero el pool ahora se administra explícitamente mediante
+    get_connection()/get_pool().
+    """
 
     _log(
         "✅ [DB POOL]",
-        "Gestión explícita del pool activada; "
-        "psycopg2.connect() no será interceptado",
+        "Pool PostgreSQL administrado explícitamente; "
+        "sin interceptor global de psycopg2.connect()",
     )
 
 
@@ -1023,7 +885,6 @@ crear conexiones mientras psycopg2.connect() estaba interceptado.
 # =============================================================================
 
 def close_pool() -> None:
-    """Cierra el pool completo durante el apagado del proceso."""
 
     global POOL
 
@@ -1049,7 +910,7 @@ def close_pool() -> None:
 
             _log(
                 "⚠️ [DB POOL]",
-                "Error cerrando el pool",
+                "Error cerrando pool",
                 error=repr(exc),
             )
 
