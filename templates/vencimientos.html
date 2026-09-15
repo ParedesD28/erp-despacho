@@ -1,400 +1,147 @@
 {% extends "base.html" %}
-
 {% block contenido %}
 <div class="flex flex-col h-full overflow-hidden p-4 md:p-6 gap-4 bg-slate-50/50">
-
-    <!-- BARRA SUPERIOR DE ACCIONES Y FILTROS -->
-    <header class="bg-white rounded-2xl border border-slate-200 px-5 py-4 shadow-xs flex flex-wrap items-center justify-between gap-4 shrink-0">
-        <div>
-            <div class="flex items-center gap-2 mb-0.5">
-                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-                <h1 class="text-lg font-bold text-slate-900">Agenda Judicial y Calendario de Acuerdos</h1>
-            </div>
-            <p class="text-xs text-slate-500">Supervisión integrada de términos procesales y acuerdos de pago del Agente IA</p>
-        </div>
-
-        <!-- Botones para agregar manual -->
-        <div class="flex flex-wrap items-center gap-2">
-            <button onclick="toggleModal('modal-acuerdo')" class="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1.5">
-                <i data-lucide="handshake" class="w-4 h-4"></i>
-                <span>Nuevo Acuerdo</span>
-            </button>
-            <button onclick="toggleModal('modal-termino')" class="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1.5">
-                <i data-lucide="calendar-plus" class="w-4 h-4"></i>
-                <span>Nuevo Término</span>
-            </button>
-        </div>
-    </header>
-
-    <!-- CUERPO PRINCIPAL CON CALENDARIO Y PANEL LATERAL -->
-    <div class="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-12 gap-4 overflow-hidden">
-        
-        <!-- CALENDARIO MENSUAL INTERACTIVO (COLUMNA IZQUIERDA/CENTRAL) -->
-        <section class="xl:col-span-8 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col h-full overflow-hidden p-4 md:p-5">
-            <!-- Barra de navegación del mes -->
-            <div class="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
-                <div class="flex items-center gap-3">
-                    <h2 id="cal-mes-ano" class="text-base md:text-lg font-bold text-slate-900 capitalize"></h2>
-                    <button onclick="irHoy()" class="px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold shadow-2xs">
-                        Hoy
-                    </button>
-                </div>
-
-                <!-- Leyenda de colores del calendario -->
-                <div class="hidden sm:flex items-center gap-3 text-xs">
-                    <span class="inline-flex items-center gap-1 text-emerald-800 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Acuerdos Pago</span>
-                    <span class="inline-flex items-center gap-1 text-blue-800 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-blue-500"></span> Términos Judiciales</span>
-                </div>
-
-                <div class="flex items-center gap-1">
-                    <button onclick="cambiarMes(-1)" class="p-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 shadow-2xs" title="Mes anterior">
-                        <i data-lucide="chevron-left" class="w-4 h-4"></i>
-                    </button>
-                    <button onclick="cambiarMes(1)" class="p-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 shadow-2xs" title="Mes siguiente">
-                        <i data-lucide="chevron-right" class="w-4 h-4"></i>
-                    </button>
-                </div>
-            </div>
-
-            <!-- Nombres de los días de la semana -->
-            <div class="grid grid-cols-7 gap-1 text-center py-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider shrink-0 border-b border-slate-100">
-                <div>Lun</div>
-                <div>Mar</div>
-                <div>Mié</div>
-                <div>Jue</div>
-                <div>Vie</div>
-                <div>Sáb</div>
-                <div>Dom</div>
-            </div>
-
-            <!-- Cuadrícula de días generada dinámicamente -->
-            <div id="cal-grid" class="grid grid-cols-7 grid-rows-6 gap-1 flex-1 min-h-0 pt-1 overflow-y-auto">
-                <!-- Se inyectan las celdas aquí con JavaScript -->
-            </div>
-        </section>
-
-        <!-- PANEL LATERAL: EVENTOS DEL DÍA SELECCIONADO Y ACCIONES -->
-        <section class="xl:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col h-full overflow-hidden">
-            <!-- Header del panel lateral -->
-            <div class="p-4 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between shrink-0">
-                <div>
-                    <h3 id="panel-fecha-titulo" class="text-sm font-bold text-slate-900">Eventos de la fecha</h3>
-                    <p id="panel-fecha-sub" class="text-[11px] text-slate-500">Selecciona un día del calendario</p>
-                </div>
-                <button onclick="mostrarTodos()" class="text-xs font-bold text-emerald-600 hover:text-emerald-800 underline">
-                    Ver Todos
-                </button>
-            </div>
-
-            <!-- Lista de eventos filtrados -->
-            <div id="panel-eventos-lista" class="divide-y divide-slate-100 overflow-y-auto flex-1 p-3 space-y-2.5">
-                <!-- Se inyectan los eventos con JavaScript -->
-            </div>
-        </section>
+  <header class="bg-white rounded-2xl border border-slate-200 px-5 py-4 shadow-sm flex flex-wrap items-center justify-between gap-4 shrink-0">
+    <div>
+      <div class="flex items-center gap-2 mb-0.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span><h1 class="text-lg font-bold text-slate-900">Agenda y Calendario</h1></div>
+      <p class="text-xs text-slate-500">Términos judiciales, acuerdos de pago y otros compromisos de la oficina.</p>
     </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <button onclick="toggleModal('modal-acuerdo')" class="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm flex items-center gap-1.5">🤝 Nuevo Acuerdo</button>
+      <button onclick="toggleModal('modal-termino')" class="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-sm flex items-center gap-1.5">⚖️ Nuevo Vencimiento</button>
+      <button onclick="toggleModal('modal-otro')" class="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-sm flex items-center gap-1.5">＋ Otros</button>
+    </div>
+  </header>
+
+  <div class="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-12 gap-4 overflow-hidden">
+    <section class="xl:col-span-8 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-full overflow-hidden p-4 md:p-5">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+        <div class="flex items-center gap-3"><h2 id="cal-mes-ano" class="text-base md:text-lg font-bold text-slate-900 capitalize"></h2><button onclick="irHoy()" class="px-2.5 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold">Hoy</button></div>
+        <div class="hidden sm:flex items-center gap-3 text-[11px]">
+          <span class="inline-flex items-center gap-1 text-emerald-800 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>Acuerdos</span>
+          <span class="inline-flex items-center gap-1 text-blue-800 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-blue-500"></span>Vencimientos</span>
+          <span class="inline-flex items-center gap-1 text-indigo-800 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>Otros</span>
+        </div>
+        <div class="flex items-center gap-1"><button onclick="cambiarMes(-1)" class="p-1.5 rounded-xl border border-slate-200 hover:bg-slate-100">‹</button><button onclick="cambiarMes(1)" class="p-1.5 rounded-xl border border-slate-200 hover:bg-slate-100">›</button></div>
+      </div>
+      <div class="grid grid-cols-7 gap-1 text-center py-2 text-[11px] font-bold text-slate-400 uppercase border-b border-slate-100 shrink-0"><div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div><div>Dom</div></div>
+      <div id="cal-grid" class="grid grid-cols-7 gap-1 flex-1 min-h-0 pt-1 overflow-y-auto"></div>
+    </section>
+
+    <section class="xl:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-full overflow-hidden">
+      <div class="p-4 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between shrink-0"><div><h3 id="panel-fecha-titulo" class="text-sm font-bold text-slate-900">Eventos de la fecha</h3><p id="panel-fecha-sub" class="text-[11px] text-slate-500">Selecciona un día del calendario</p></div><button onclick="mostrarTodos()" class="text-xs font-bold text-emerald-600 underline">Ver todos</button></div>
+      <div id="panel-eventos-lista" class="overflow-y-auto flex-1 p-3 space-y-2.5"></div>
+    </section>
+  </div>
 </div>
 
-<!-- ========================================================================= -->
-<!-- MODAL: REGISTRAR ACUERDO DE PAGO MANUAL                                  -->
-<!-- ========================================================================= -->
-<div id="modal-acuerdo" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200">
-        <div class="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-            <h3 class="text-base font-bold text-slate-900 flex items-center gap-2">
-                <i data-lucide="handshake" class="w-5 h-5 text-emerald-600"></i>
-                <span>Registrar Acuerdo de Pago</span>
-            </h3>
-            <button onclick="toggleModal('modal-acuerdo')" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
-                <i data-lucide="x" class="w-5 h-5"></i>
-            </button>
-        </div>
-
-        <form method="POST" action="/acuerdos/guardar" class="space-y-3.5">
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Cédula del Deudor *</label>
-                <input type="text" name="identificacion_deudor" required placeholder="Ej: 1088265132" class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400">
-            </div>
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Nombre Completo</label>
-                <input type="text" name="nombre_deudor" placeholder="Ej: Breiner Leandro Valencia" class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400">
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-                <div>
-                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Valor Acordado ($) *</label>
-                    <input type="number" step="0.01" name="valor_acordado" required placeholder="500000" class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400">
-                </div>
-                <div>
-                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Fecha Límite *</label>
-                    <input type="date" name="fecha_compromiso" required class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400 text-slate-700">
-                </div>
-            </div>
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Teléfono WhatsApp</label>
-                <input type="text" name="telefono" placeholder="Ej: 573202937064" class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400">
-            </div>
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Observaciones / Condiciones</label>
-                <textarea name="observaciones" rows="2" placeholder="Detalles de la negociación o forma de pago..." class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-emerald-400"></textarea>
-            </div>
-            <div class="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                <button type="button" onclick="toggleModal('modal-acuerdo')" class="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50">Cancelar</button>
-                <button type="submit" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs">Guardar Acuerdo</button>
-            </div>
-        </form>
-    </div>
+<!-- MODAL ACUERDO -->
+<div id="modal-acuerdo" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 border border-slate-200">
+    <div class="flex items-center justify-between pb-3 border-b mb-4"><h3 class="text-base font-bold">Registrar Acuerdo de Pago</h3><button onclick="toggleModal('modal-acuerdo')">✕</button></div>
+    <form method="POST" action="/acuerdos/guardar" class="space-y-3.5">
+      <input type="hidden" id="global-acuerdo-id" name="identificacion_deudor">
+      <input type="hidden" id="global-acuerdo-nombre" name="nombre_deudor">
+      <input type="hidden" id="global-acuerdo-telefono" name="telefono">
+      <input type="hidden" id="global-acuerdo-inmueble" name="inmueble_id">
+      <div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Buscar persona por nombre o cédula *</label><input id="global-contacto-busqueda" list="global-contactos-lista" required autocomplete="off" class="w-full border border-slate-300 rounded-xl p-2.5 text-sm" placeholder="Ej. 1088... o nombre" oninput="buscarContactoGlobal(this.value)"><datalist id="global-contactos-lista"></datalist><div id="global-contacto-confirmacion" class="text-xs text-emerald-700 font-semibold mt-2"></div></div>
+      <div class="grid grid-cols-2 gap-3"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Valor acordado ($) *</label><input type="number" step="0.01" name="valor_acordado" required class="w-full border rounded-xl p-2.5"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Fecha compromiso *</label><input type="date" name="fecha_compromiso" required class="w-full border rounded-xl p-2.5"></div></div>
+      <div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Inmueble (opcional)</label><input id="global-inmueble-manual" type="number" class="w-full border rounded-xl p-2.5" placeholder="ID del inmueble si aplica" oninput="document.getElementById('global-acuerdo-inmueble').value=this.value"></div>
+      <div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Observaciones / condiciones</label><textarea name="observaciones" rows="3" class="w-full border rounded-xl p-2.5"></textarea></div>
+      <div class="flex justify-end gap-2 pt-2 border-t"><button type="button" onclick="toggleModal('modal-acuerdo')" class="px-4 py-2 rounded-xl border text-xs font-bold">Cancelar</button><button type="submit" class="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">Guardar Acuerdo</button></div>
+    </form>
+  </div>
 </div>
 
-<!-- ========================================================================= -->
-<!-- MODAL: REGISTRAR TÉRMINO JUDICIAL                                        -->
-<!-- ========================================================================= -->
-<div id="modal-termino" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-slate-200">
-        <div class="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-            <h3 class="text-base font-bold text-slate-900 flex items-center gap-2">
-                <i data-lucide="scale" class="w-5 h-5 text-blue-600"></i>
-                <span>Programar Término Judicial</span>
-            </h3>
-            <button onclick="toggleModal('modal-termino')" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
-                <i data-lucide="x" class="w-5 h-5"></i>
-            </button>
-        </div>
+<!-- MODAL VENCIMIENTO -->
+<div id="modal-termino" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 border border-slate-200">
+    <div class="flex items-center justify-between pb-3 border-b mb-4"><h3 class="text-base font-bold">Programar Vencimiento</h3><button onclick="toggleModal('modal-termino')">✕</button></div>
+    <form method="POST" action="/vencimientos/guardar" class="space-y-3.5"><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Expediente *</label><select name="radicado_interno" required class="w-full border rounded-xl p-2.5 text-sm">{% for rad in radicados %}<option value="{{ rad }}">{{ rad }}</option>{% endfor %}</select></div><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Título *</label><input name="titulo" required class="w-full border rounded-xl p-2.5" placeholder="Ej. Contestar excepciones de mérito"></div><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Fecha *</label><input type="date" name="fecha_vencimiento" required class="w-full border rounded-xl p-2.5"></div><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Observaciones</label><textarea name="observaciones" rows="3" class="w-full border rounded-xl p-2.5"></textarea></div><div class="flex justify-end gap-2 pt-2 border-t"><button type="button" onclick="toggleModal('modal-termino')" class="px-4 py-2 rounded-xl border text-xs font-bold">Cancelar</button><button type="submit" class="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">Guardar Vencimiento</button></div></form>
+  </div>
+</div>
 
-        <form method="POST" action="/vencimientos/guardar" class="space-y-3.5">
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Expediente *</label>
-                <select name="radicado_interno" required class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none bg-slate-50 text-slate-700">
-                    {% for rad in radicados %}<option value="{{ rad }}">{{ rad }}</option>{% endfor %}
-                </select>
-            </div>
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Tarea / Vencimiento *</label>
-                <input type="text" name="titulo" required placeholder="Ej: Contestar excepciones de mérito" class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-blue-400">
-            </div>
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Fecha Límite *</label>
-                <input type="date" name="fecha_vencimiento" required class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-blue-400 text-slate-700">
-            </div>
-            <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Observaciones</label>
-                <textarea name="observaciones" rows="2" placeholder="Anotaciones para el abogado a cargo..." class="w-full border border-slate-300 rounded-xl p-2.5 text-xs outline-none focus:ring-2 focus:ring-blue-400"></textarea>
-            </div>
-            <div class="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                <button type="button" onclick="toggleModal('modal-termino')" class="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50">Cancelar</button>
-                <button type="submit" class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs">Guardar Término</button>
-            </div>
-        </form>
-    </div>
+<!-- MODAL OTROS -->
+<div id="modal-otro" class="hidden fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 border border-slate-200">
+    <div class="flex items-center justify-between pb-3 border-b mb-4"><h3 class="text-base font-bold">Registrar en Otros</h3><button onclick="toggleModal('modal-otro')">✕</button></div>
+    <form method="POST" action="/vencimientos/guardar" class="space-y-3.5"><input type="hidden" name="radicado_interno" value="OTROS"><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Título / categoría *</label><input name="titulo" required class="w-full border rounded-xl p-2.5" placeholder="Ej. Reunión, visita, tarea administrativa"><p class="text-[11px] text-slate-500 mt-1">Se guarda con categoría OTROS.</p></div><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Fecha *</label><input type="date" name="fecha_vencimiento" required class="w-full border rounded-xl p-2.5"></div><div><label class="block text-xs font-bold uppercase text-slate-500 mb-1">Observaciones</label><textarea name="observaciones" rows="3" class="w-full border rounded-xl p-2.5"></textarea></div><div class="flex justify-end gap-2 pt-2 border-t"><button type="button" onclick="toggleModal('modal-otro')" class="px-4 py-2 rounded-xl border text-xs font-bold">Cancelar</button><button type="submit" onclick="this.form.titulo.value='[OTRO] '+this.form.titulo.value" class="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold">Guardar en Otros</button></div></form>
+  </div>
 </div>
 
 <script>
-const eventos = {{ json_eventos | safe }};
+/* Los registros ACUERDO_PAGO creados históricamente también aparecen en vencimientos.
+   Se excluyen del conjunto de términos para que un acuerdo solo se vea una vez. */
+const eventosBrutos = {{ json_eventos | safe }};
+const eventos = eventosBrutos.filter(e => !(e.tipo === 'TERMINO_JUDICIAL' && e.radicado === 'ACUERDO-PAGO'));
 let fechaActual = new Date();
 let diaSeleccionado = null;
+let timerBusquedaContacto = null;
+const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
-const meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+function toggleModal(id){const el=document.getElementById(id);if(el)el.classList.toggle('hidden');if(window.lucide)lucide.createIcons();}
+function cambiarMes(delta){fechaActual.setMonth(fechaActual.getMonth()+delta);renderizarCalendario();}
+function irHoy(){fechaActual=new Date();diaSeleccionado=formatearFecha(fechaActual);renderizarCalendario();filtrarEventosPorFecha(diaSeleccionado);}
+function formatearFecha(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+function esOtro(e){return String(e.titulo||'').toUpperCase().startsWith('[OTRO]');}
+function tipoVisible(e){return esOtro(e)?'OTRO':e.tipo;}
 
-function toggleModal(id) {
-    const el = document.getElementById(id);
-    if (el) el.classList.toggle('hidden');
-    if (window.lucide) lucide.createIcons();
+function renderizarCalendario(){
+ const grid=document.getElementById('cal-grid'), title=document.getElementById('cal-mes-ano');
+ const year=fechaActual.getFullYear(), month=fechaActual.getMonth(); title.textContent=`${meses[month]} ${year}`; grid.innerHTML='';
+ const first=new Date(year,month,1), start=(first.getDay()+6)%7, days=new Date(year,month+1,0).getDate(), prevDays=new Date(year,month,0).getDate(), hoy=formatearFecha(new Date());
+ for(let i=start-1;i>=0;i--) grid.innerHTML+=`<div class="p-1.5 text-[10px] text-slate-300 rounded-lg bg-slate-50/50 min-h-[60px]">${prevDays-i}</div>`;
+ for(let d=1;d<=days;d++){
+   const f=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`, esHoy=f===hoy, sel=f===diaSeleccionado, ev=eventos.filter(e=>e.fecha===f);
+   const acuerdos=ev.filter(e=>tipoVisible(e)==='ACUERDO_PAGO'), terminos=ev.filter(e=>tipoVisible(e)==='TERMINO_JUDICIAL'), otros=ev.filter(e=>tipoVisible(e)==='OTRO');
+   let badges='';
+   if(acuerdos.length) badges+=`<span class="block px-1 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 truncate">🤝 ${acuerdos.length} acuerdo(s)</span>`;
+   if(terminos.length) badges+=`<span class="block px-1 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-800 truncate">⚖️ ${terminos.length} venc.</span>`;
+   if(otros.length) badges+=`<span class="block px-1 py-0.5 rounded text-[9px] font-bold bg-indigo-100 text-indigo-800 truncate">＋ ${otros.length} otros</span>`;
+   const border=sel?'border-emerald-500 ring-2 ring-emerald-300 bg-emerald-50/30':esHoy?'border-amber-400 bg-amber-50/30':'border-slate-100 hover:border-slate-300 hover:bg-slate-50';
+   grid.innerHTML+=`<div onclick="seleccionarDia('${f}')" class="p-1.5 rounded-xl border ${border} flex flex-col justify-between cursor-pointer transition-all min-h-[60px]"><div class="flex items-center justify-between"><span class="text-xs font-semibold ${esHoy?'text-amber-700':''}">${d}</span>${esHoy?'<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>':''}</div><div class="space-y-0.5 overflow-hidden">${badges}</div></div>`;
+ }
+ const total=start+days, rest=total%7===0?0:7-total%7; for(let d=1;d<=rest;d++) grid.innerHTML+=`<div class="p-1.5 text-[10px] text-slate-300 rounded-lg bg-slate-50/50 min-h-[60px]">${d}</div>`;
 }
 
-function cambiarMes(delta) {
-    fechaActual.setMonth(fechaActual.getMonth() + delta);
-    renderizarCalendario();
+function seleccionarDia(f){diaSeleccionado=f;renderizarCalendario();filtrarEventosPorFecha(f);}
+function filtrarEventosPorFecha(f){const ev=eventos.filter(e=>e.fecha===f);document.getElementById('panel-fecha-titulo').textContent=`Eventos del ${f}`;document.getElementById('panel-fecha-sub').textContent=`${ev.length} registro(s) para esta fecha`;renderizarListaEventos(ev);}
+function mostrarTodos(){diaSeleccionado=null;renderizarCalendario();document.getElementById('panel-fecha-titulo').textContent='Todos los eventos activos';document.getElementById('panel-fecha-sub').textContent=`${eventos.length} registros totales`;renderizarListaEventos(eventos);}
+
+function renderizarListaEventos(lista){
+ const box=document.getElementById('panel-eventos-lista');
+ if(!lista.length){box.innerHTML='<div class="p-8 text-center text-slate-400 text-xs">No hay eventos para esta fecha.</div>';return;}
+ box.innerHTML=lista.map(e=>{
+   const t=tipoVisible(e), idNum=String(e.id||'').split('-')[1];
+   if(t==='ACUERDO_PAGO'){
+     const cumplido=e.estado==='CUMPLIDO';
+     return `<div class="p-3 rounded-xl border border-emerald-200 bg-emerald-50/40 text-xs space-y-2"><div class="flex items-center justify-between"><span class="font-bold text-emerald-900">🤝 Acuerdo de Pago</span><span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${cumplido?'bg-emerald-200 text-emerald-900':'bg-amber-100 text-amber-900'}">${escapeHtml(e.estado||'PENDIENTE')}</span></div><p class="font-bold text-slate-800">${escapeHtml(e.deudor||'Persona')}</p><p class="text-[11px] text-slate-500">${escapeHtml(e.inmueble||'Sin inmueble')}</p><p class="text-sm font-bold text-emerald-700">$${(e.valor||0).toLocaleString('es-CO')}</p>${e.observaciones?`<p class="text-[11px] text-slate-600 italic">${escapeHtml(e.observaciones)}</p>`:''}<div class="flex justify-between items-center pt-1 border-t border-emerald-100"><span class="text-[10px] text-slate-400">${e.fecha}</span>${!cumplido?`<form method="POST" action="/acuerdos/cumplir"><input type="hidden" name="acuerdo_id" value="${idNum}"><button class="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px]">Pagado</button></form>`:''}</div></div>`;
+   }
+   if(t==='OTRO'){
+     return `<div class="p-3 rounded-xl border border-indigo-200 bg-indigo-50/40 text-xs space-y-2"><div class="font-bold text-indigo-900">＋ Otro compromiso</div><p class="font-bold text-slate-800">${escapeHtml(String(e.titulo||'').replace(/^\[OTRO\]\s*/i,''))}</p>${e.observaciones?`<p class="text-[11px] text-slate-500">${escapeHtml(e.observaciones)}</p>`:''}<div class="flex items-center justify-between pt-1 border-t border-indigo-100"><span class="text-[10px] text-slate-400">${e.fecha}</span><form method="POST" action="/vencimientos/completar"><input type="hidden" name="vencimiento_id" value="${idNum}"><button class="px-2 py-1 rounded bg-indigo-600 text-white font-bold text-[10px]">Completar</button></form></div></div>`;
+   }
+   return `<div class="p-3 rounded-xl border border-blue-200 bg-blue-50/40 text-xs space-y-2"><div class="flex items-center justify-between"><span class="font-bold text-blue-900">⚖️ Vencimiento</span><span class="text-[10px] font-bold bg-white text-slate-600 px-2 py-0.5 rounded border border-blue-200">${escapeHtml(e.radicado||'')}</span></div><p class="font-bold text-slate-800">${escapeHtml(e.titulo||'Vencimiento')}</p>${e.observaciones?`<p class="text-[11px] text-slate-500">${escapeHtml(e.observaciones)}</p>`:''}<div class="flex items-center justify-between pt-1 border-t border-blue-100"><span class="text-[10px] text-slate-400">Límite: <b>${e.fecha}</b></span><form method="POST" action="/vencimientos/completar"><input type="hidden" name="vencimiento_id" value="${idNum}"><button class="px-2 py-1 rounded bg-blue-600 text-white font-bold text-[10px]">Completar</button></form></div></div>`;
+ }).join('');
+ if(window.lucide)lucide.createIcons();
 }
 
-function irHoy() {
-    fechaActual = new Date();
-    diaSeleccionado = formatearFecha(fechaActual);
-    renderizarCalendario();
-    filtrarEventosPorFecha(diaSeleccionado);
+async function buscarContactoGlobal(valor){
+ clearTimeout(timerBusquedaContacto); const term=String(valor||'').trim(); if(term.length<2)return;
+ timerBusquedaContacto=setTimeout(async()=>{
+   try{
+     const resp=await fetch(`/contactos?buscar_cedula=${encodeURIComponent(term)}`); const html=await resp.text(); const doc=new DOMParser().parseFromString(html,'text/html');
+     const options=[...doc.querySelectorAll('#lista_directorio option')].map(o=>o.value);
+     const list=document.getElementById('global-contactos-lista'); list.innerHTML=''; options.slice(0,100).forEach(v=>{const o=document.createElement('option');o.value=v;list.appendChild(o);});
+     const selected=term.includes(' - ')?term:null;
+     if(selected){
+       const res2=await fetch(`/contactos?buscar_cedula=${encodeURIComponent(selected)}`); const html2=await res2.text(); const doc2=new DOMParser().parseFromString(html2,'text/html');
+       const ident=doc2.querySelector('input[name="identificacion"]')?.value||selected.split(' - ')[0]; const nombre=doc2.querySelector('input[name="nombre"]')?.value||selected.split(' - ').slice(1).join(' - '); const tel=doc2.querySelector('input[name="telefono"]')?.value||'';
+       document.getElementById('global-acuerdo-id').value=ident; document.getElementById('global-acuerdo-nombre').value=nombre; document.getElementById('global-acuerdo-telefono').value=tel; document.getElementById('global-contacto-confirmacion').textContent=`Persona vinculada: ${nombre} · ${ident}`;
+     }
+   }catch(e){console.warn('No fue posible buscar contacto',e);}
+ },250);
 }
-
-function formatearFecha(d) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-}
-
-function renderizarCalendario() {
-    const grid = document.getElementById('cal-grid');
-    const title = document.getElementById('cal-mes-ano');
-    
-    const year = fechaActual.getFullYear();
-    const month = fechaActual.getMonth();
-    
-    title.textContent = `${meses[month]} ${year}`;
-    grid.innerHTML = '';
-
-    // Primer día del mes (0=Dom, 1=Lun...) en Colombia Lun=0
-    const primerDia = new Date(year, month, 1);
-    let diaSemanaPrimer = (primerDia.getDay() + 6) % 7; // Convertir Dom(0) a 6, Lun(1) a 0
-
-    const diasEnMes = new Date(year, month + 1, 0).getDate();
-    const diasEnMesAnterior = new Date(year, month, 0).getDate();
-
-    const hoyStr = formatearFecha(new Date());
-
-    // Celdas del mes anterior
-    for (let i = diaSemanaPrimer - 1; i >= 0; i--) {
-        const diaNum = diasEnMesAnterior - i;
-        grid.innerHTML += `<div class="p-1.5 text-[10px] text-slate-300 rounded-lg bg-slate-50/50 flex flex-col justify-between border border-transparent select-none min-h-[60px]">${diaNum}</div>`;
-    }
-
-    // Celdas del mes actual
-    for (let dia = 1; dia <= diasEnMes; dia++) {
-        const fechaStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
-        const esHoy = fechaStr === hoyStr;
-        const esSeleccionado = fechaStr === diaSeleccionado;
-
-        // Buscar eventos de este día
-        const evtsDia = eventos.filter(e => e.fecha === fechaStr);
-        const acuerdos = evtsDia.filter(e => e.tipo === 'ACUERDO_PAGO');
-        const terminos = evtsDia.filter(e => e.tipo === 'TERMINO_JUDICIAL');
-
-        let badges = '';
-        if (acuerdos.length > 0) {
-            badges += `<span class="block px-1 py-0.5 mt-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 truncate" title="${acuerdos.length} acuerdo(s)">🤝 ${acuerdos.length} pago(s)</span>`;
-        }
-        if (terminos.length > 0) {
-            badges += `<span class="block px-1 py-0.5 mt-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-800 truncate" title="${terminos.length} término(s)">⚖️ ${terminos.length} término</span>`;
-        }
-
-        const borderStyle = esSeleccionado 
-            ? 'border-emerald-500 ring-2 ring-emerald-300 bg-emerald-50/30' 
-            : esHoy 
-            ? 'border-amber-400 bg-amber-50/30 font-bold' 
-            : 'border-slate-100 hover:border-slate-300 hover:bg-slate-50';
-
-        grid.innerHTML += `
-        <div onclick="seleccionarDia('${fechaStr}')" class="p-1.5 rounded-xl border ${borderStyle} flex flex-col justify-between cursor-pointer transition-all min-h-[60px] select-none">
-            <div class="flex items-center justify-between">
-                <span class="text-xs font-semibold ${esHoy ? 'text-amber-700 font-extrabold' : 'text-slate-700'}">${dia}</span>
-                ${esHoy ? '<span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>' : ''}
-            </div>
-            <div class="space-y-0.5 overflow-hidden">
-                ${badges}
-            </div>
-        </div>`;
-    }
-
-    // Rellenar días restantes para completar la grilla
-    const totalCeldas = diaSemanaPrimer + diasEnMes;
-    const celdasRestantes = (totalCeldas % 7 === 0) ? 0 : 7 - (totalCeldas % 7);
-    for (let dia = 1; dia <= celdasRestantes; dia++) {
-        grid.innerHTML += `<div class="p-1.5 text-[10px] text-slate-300 rounded-lg bg-slate-50/50 flex flex-col justify-between border border-transparent select-none min-h-[60px]">${dia}</div>`;
-    }
-}
-
-function seleccionarDia(fechaStr) {
-    diaSeleccionado = fechaStr;
-    renderizarCalendario();
-    filtrarEventosPorFecha(fechaStr);
-}
-
-function filtrarEventosPorFecha(fechaStr) {
-    const box = document.getElementById('panel-eventos-lista');
-    const title = document.getElementById('panel-fecha-titulo');
-    const sub = document.getElementById('panel-fecha-sub');
-
-    title.textContent = `Eventos del ${fechaStr}`;
-    const evts = eventos.filter(e => e.fecha === fechaStr);
-    sub.textContent = `${evts.length} registro(s) para esta fecha`;
-
-    if (!evts.length) {
-        box.innerHTML = `
-        <div class="p-8 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
-            <i data-lucide="calendar-x" class="w-8 h-8 opacity-40"></i>
-            <span>No hay compromisos ni términos programados para esta fecha.</span>
-        </div>`;
-        if (window.lucide) lucide.createIcons();
-        return;
-    }
-
-    renderizarListaEventos(evts);
-}
-
-function mostrarTodos() {
-    diaSeleccionado = null;
-    renderizarCalendario();
-    document.getElementById('panel-fecha-titulo').textContent = 'Todos los Eventos Activos';
-    document.getElementById('panel-fecha-sub').textContent = `${eventos.length} registros totales`;
-    renderizarListaEventos(eventos);
-}
-
-function renderizarListaEventos(lista) {
-    const box = document.getElementById('panel-eventos-lista');
-    box.innerHTML = lista.map(e => {
-        const esAcuerdo = e.tipo === 'ACUERDO_PAGO';
-        const idNum = e.id.split('-')[1];
-
-        if (esAcuerdo) {
-            const cumplido = e.estado === 'CUMPLIDO';
-            return `
-            <div class="p-3 rounded-xl border border-emerald-200 bg-emerald-50/40 text-xs space-y-2">
-                <div class="flex items-center justify-between gap-2">
-                    <span class="font-bold text-emerald-900 flex items-center gap-1">
-                        <i data-lucide="handshake" class="w-3.5 h-3.5 text-emerald-600"></i>
-                        <span>Acuerdo de Pago</span>
-                    </span>
-                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${cumplido ? 'bg-emerald-200 text-emerald-900' : 'bg-amber-100 text-amber-900'}">${e.estado}</span>
-                </div>
-                <div>
-                    <p class="font-bold text-slate-800">${escapeHtml(e.deudor)}</p>
-                    <p class="text-[11px] text-slate-500">${escapeHtml(e.inmueble || 'Copropiedad')}</p>
-                    <p class="text-sm font-bold text-emerald-700 mt-1">$${(e.valor || 0).toLocaleString('es-CO')}</p>
-                </div>
-                ${e.observaciones ? `<p class="text-[11px] text-slate-600 italic bg-white/70 p-2 rounded-lg border border-emerald-100">"${escapeHtml(e.observaciones)}"</p>` : ''}
-                
-                <div class="flex items-center justify-between pt-1 border-t border-emerald-100">
-                    <span class="text-[10px] text-slate-400">Fecha: <b>${e.fecha}</b></span>
-                    <div class="flex items-center gap-1.5">
-                        ${e.telefono ? `<a href="https://wa.me/${e.telefono.replace(/\D/g,'')}?text=Hola,%20te%20escribimos%20del%20despacho%20judicial%20para%20recordarte%20el%20compromiso%20de%20pago." target="_blank" class="p-1 rounded bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-100" title="WhatsApp"><i data-lucide="message-circle" class="w-3.5 h-3.5"></i></a>` : ''}
-                        ${!cumplido ? `
-                        <form method="POST" action="/acuerdos/cumplir" onsubmit="return confirm('¿Marcar pago como cumplido?');">
-                            <input type="hidden" name="acuerdo_id" value="${idNum}">
-                            <button type="submit" class="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px] hover:bg-emerald-700">Pagado</button>
-                        </form>` : ''}
-                    </div>
-                </div>
-            </div>`;
-        } else {
-            return `
-            <div class="p-3 rounded-xl border border-blue-200 bg-blue-50/40 text-xs space-y-2">
-                <div class="flex items-center justify-between gap-2">
-                    <span class="font-bold text-blue-900 flex items-center gap-1">
-                        <i data-lucide="scale" class="w-3.5 h-3.5 text-blue-600"></i>
-                        <span>Término Judicial</span>
-                    </span>
-                    <span class="text-[10px] font-bold bg-white text-slate-600 px-2 py-0.5 rounded border border-blue-200">${escapeHtml(e.radicado)}</span>
-                </div>
-                <div>
-                    <p class="font-bold text-slate-800">${escapeHtml(e.titulo)}</p>
-                    ${e.observaciones ? `<p class="text-[11px] text-slate-500 mt-0.5">${escapeHtml(e.observaciones)}</p>` : ''}
-                </div>
-                <div class="flex items-center justify-between pt-1 border-t border-blue-100">
-                    <span class="text-[10px] text-slate-400">Límite: <b>${e.fecha}</b></span>
-                    <form method="POST" action="/vencimientos/completar">
-                        <input type="hidden" name="vencimiento_id" value="${idNum}">
-                        <button type="submit" class="px-2 py-1 rounded bg-blue-600 text-white font-bold text-[10px] hover:bg-blue-700">Completar</button>
-                    </form>
-                </div>
-            </div>`;
-        }
-    }).join('');
-
-    if (window.lucide) lucide.createIcons();
-}
-
-function escapeHtml(str) {
-    return String(str || '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-}
-
-// Inicialización
-document.addEventListener('DOMContentLoaded', () => {
-    irHoy();
-});
+function escapeHtml(str){return String(str||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+document.addEventListener('DOMContentLoaded',()=>irHoy());
 </script>
 {% endblock %}
