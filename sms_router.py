@@ -99,13 +99,34 @@ def validar_horario_ley_2300() -> Tuple[bool, str]:
 
 
 def normalizar_telefono(raw_tel: str) -> Optional[str]:
+    """Extrae el primer celular colombiano válido de 10 dígitos."""
     if not raw_tel:
         return None
+
+    # Evaluar segmentos separados por guion, barra, coma, punto y coma o espacios.
+    partes = (
+        str(raw_tel)
+        .replace("/", " ")
+        .replace("-", " ")
+        .replace(",", " ")
+        .replace(";", " ")
+        .split()
+    )
+    for parte in partes:
+        digitos = "".join(filter(str.isdigit, parte))
+        if len(digitos) == 10 and digitos.startswith("3"):
+            return digitos
+        if len(digitos) == 12 and digitos.startswith("573"):
+            return digitos[2:]
+
+    # Fallback si el teléfono venía en un solo bloque.
     digitos = "".join(filter(str.isdigit, str(raw_tel)))
+    if digitos.startswith("573") and len(digitos) >= 12:
+        return digitos[2:12]
     if len(digitos) == 10 and digitos.startswith("3"):
         return digitos
-    if len(digitos) == 12 and digitos.startswith("573"):
-        return digitos[2:]
+    if len(digitos) > 10 and digitos.startswith("3"):
+        return digitos[:10]
     return None
 
 
@@ -292,29 +313,52 @@ def generar_cola(
 
 
 def _tarea_despacho_background(limite: int = 50, dry_run: bool = False):
+    """Despacho seguro: libera la BD antes de llamadas de red y pausas."""
     conn = db.get_connection()
+    pendientes = []
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
-                SELECT id, telefono, mensaje_texto
-                FROM sms_cola_envios
-                WHERE estado='PENDIENTE'
-                ORDER BY id ASC LIMIT %s;
-            """, (limite,))
-            pendientes = cur.fetchall()
-        for item in pendientes:
-            if dry_run:
-                exito, respuesta = True, "SIMULADO_OK (Dry-Run)"
-            else:
-                exito, respuesta = enviar_sms_gateway(item["telefono"], item["mensaje_texto"])
-            with conn:
-                with conn.cursor() as cur:
-                    nuevo_estado = "ENVIADO" if exito else "FALLIDO"
-                    cur.execute("UPDATE sms_cola_envios SET estado=%s, fecha_envio=CURRENT_TIMESTAMP, error_detalle=%s WHERE id=%s", (nuevo_estado, respuesta[:200], item["id"]))
-            if not dry_run:
-                time.sleep(random.uniform(3.0, 5.0))
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT id, telefono, mensaje_texto
+                    FROM sms_cola_envios
+                    WHERE estado='PENDIENTE'
+                    ORDER BY id ASC LIMIT %s;
+                """, (limite,))
+                pendientes = cur.fetchall()
+    except Exception as exc:
+        print(f"[SMS DESPACHO] Error consultando cola: {exc}", flush=True)
+        return
     finally:
         conn.release()
+
+    if not pendientes:
+        return
+
+    for item in pendientes:
+        if dry_run:
+            exito, respuesta = True, "SIMULADO_OK (Dry-Run)"
+        else:
+            exito, respuesta = enviar_sms_gateway(item["telefono"], item["mensaje_texto"])
+
+        nuevo_estado = "ENVIADO" if exito else "FALLIDO"
+
+        conn_up = db.get_connection()
+        try:
+            with conn_up:
+                with conn_up.cursor() as cur:
+                    cur.execute("""
+                        UPDATE sms_cola_envios
+                        SET estado=%s, fecha_envio=CURRENT_TIMESTAMP, error_detalle=%s
+                        WHERE id=%s;
+                    """, (nuevo_estado, str(respuesta)[:200], item["id"]))
+        except Exception as exc_up:
+            print(f"[SMS DESPACHO] Error actualizando id={item['id']}: {exc_up}", flush=True)
+        finally:
+            conn_up.release()
+
+        if not dry_run:
+            time.sleep(random.uniform(3.0, 5.0))
 
 
 @router.post("/despachar")
