@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Campaña de Cobranza SMS - Gestión Judicial ERP</title>
+    <title>SMS Cobranza - Gestión Judicial ERP</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <style>
@@ -35,6 +35,13 @@
     <div class="alert {% if es_habil %}alert-success{% else %}alert-warning{% endif %} d-flex align-items-center shadow-sm" role="alert">
         <i class="bi {% if es_habil %}bi-check-circle-fill{% else %}bi-exclamation-triangle-fill{% endif %} fs-4 me-3"></i>
         <div><strong>Ley 2300 de 2023:</strong> {{ motivo_horario }} <span class="ms-2 badge {% if es_habil %}bg-success{% else %}bg-danger{% endif %}">{% if es_habil %}DESPACHO HABILITADO{% else %}DESPACHO RESTRINGIDO{% endif %}</span></div>
+    </div>
+
+    <div class="alert alert-info shadow-sm">
+        <i class="bi bi-phone me-2"></i>
+        <strong>Envío automático:</strong> al generar la cola, el Worker Android recoge y envía los SMS automáticamente mientras esté activo.
+        <br>
+        <span class="small">Después de un envío exitoso, el mismo contacto queda bloqueado durante {{ bloqueo_reenvio_horas }} horas.</span>
     </div>
 
     {% if mensaje %}<div class="alert alert-info shadow-sm">{{ mensaje }}</div>{% endif %}
@@ -69,22 +76,23 @@
             </div>
 
             <div class="card p-3">
-                <h5 class="fw-bold mb-3"><i class="bi bi-send-fill me-2"></i>Despachar</h5>
-                <form action="/sms/despachar" method="POST">
-                    <label class="form-label small fw-bold">Límite por lote</label>
-                    <input type="number" name="limite" class="form-control mb-3" value="50" min="1" max="200">
-                    <div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="dry_run" id="dryRunCheck" value="true"><label class="form-check-label small" for="dryRunCheck"><strong>Dry-Run:</strong> simular sin enviar SMS</label></div>
-                    <div class="form-check mb-3"><input class="form-check-input" type="checkbox" name="forzar_horario" id="forzarHorario" value="true"><label class="form-check-label small text-danger" for="forzarHorario">Forzar horario (pruebas)</label></div>
-                    <button type="submit" class="btn btn-success w-100 fw-bold mb-2">Iniciar despacho</button>
-                </form>
-                <form action="/sms/cola/limpiar" method="POST" onsubmit="return confirm('¿Cancelar los mensajes pendientes?');"><button class="btn btn-outline-secondary w-100 btn-sm">Cancelar pendientes</button></form>
+                <h5 class="fw-bold mb-3"><i class="bi bi-shield-check me-2"></i>Protecciones activas</h5>
+                <div class="small text-muted">
+                    <div class="mb-2">✓ Horario de Ley 2300 validado en servidor.</div>
+                    <div class="mb-2">✓ Reenvío al mismo contacto bloqueado durante {{ bloqueo_reenvio_horas }} horas.</div>
+                    <div class="mb-2">✓ Reclamo exclusivo con token de procesamiento.</div>
+                    <div>✓ Auditoría CRM idempotente.</div>
+                </div>
             </div>
         </div>
 
         <div class="col-lg-8">
             <div class="card p-3">
                 <div class="d-flex justify-content-between align-items-center mb-3">
-                    <div><h5 class="fw-bold m-0">Seleccionar destinatarios</h5><div class="small text-muted">La segmentación sale de <strong>procesos.tipo_cartera</strong>; la selección es por <strong>contacto</strong>, incluso cuando el inmueble tiene cotitulares.</div></div>
+                    <div>
+                        <h5 class="fw-bold m-0">Seleccionar destinatarios</h5>
+                        <div class="small text-muted">Los contactos enviados en las últimas {{ bloqueo_reenvio_horas }} horas no aparecen como candidatos.</div>
+                    </div>
                     <button class="btn btn-sm btn-outline-primary" onclick="window.location.reload();">Actualizar</button>
                 </div>
 
@@ -102,7 +110,7 @@
                     <input type="hidden" name="tipo_cartera" value="{{ tipo_cartera }}">
 
                     <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
-                        <div class="small text-muted"><strong>{{ candidatos|length }}</strong> candidatos encontrados</div>
+                        <div class="small text-muted"><strong>{{ candidatos|length }}</strong> candidatos disponibles</div>
                         <div><button type="button" class="btn btn-sm btn-outline-secondary me-1" onclick="seleccionarVisibles(true)">Seleccionar visibles</button><button type="button" class="btn btn-sm btn-outline-secondary" onclick="seleccionarVisibles(false)">Limpiar selección</button></div>
                     </div>
 
@@ -120,14 +128,14 @@
                                 <td>{{ c.conjunto_residencial }}<br><span class="text-muted">{{ c.torre_apto }}</span></td>
                                 <td class="fw-bold">${{ "{:,.0f}".format(c.saldo_total).replace(",", ".") }}</td>
                             </tr>
-                            {% else %}<tr><td colspan="5" class="text-center text-muted py-4">No hay candidatos para los filtros seleccionados.</td></tr>{% endfor %}
+                            {% else %}<tr><td colspan="5" class="text-center text-muted py-4">No hay candidatos disponibles con los filtros actuales.</td></tr>{% endfor %}
                             </tbody>
                         </table>
                     </div>
 
                     <div class="d-flex flex-wrap justify-content-between align-items-center border-top pt-3 mt-3 gap-2">
                         <div><strong>Seleccionados:</strong> <span id="contadorSeleccion">0</span></div>
-                        <button type="submit" class="btn btn-primary fw-bold" {% if not candidatos %}disabled{% endif %}>Generar cola con seleccionados</button>
+                        <button type="submit" class="btn btn-primary fw-bold" {% if not candidatos %}disabled{% endif %}>Generar cola y enviar automáticamente</button>
                     </div>
                 </form>
             </div>
