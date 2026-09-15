@@ -1,10 +1,4 @@
-"""Módulo de Mensajería y Cobranza SMS para el ERP.
-
-Arquitectura:
-    FastAPI (sms_router) -> db.get_connection() -> Neon PostgreSQL
-                         -> Android Gateway / SIM local
-"""
-
+"""Módulo de Mensajería y Cobranza SMS para el ERP."""
 from __future__ import annotations
 
 import os
@@ -19,7 +13,6 @@ from fastapi import APIRouter, Request, Form, BackgroundTasks
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-# Zona horaria nativa de Colombia sin dependencias externas
 try:
     from zoneinfo import ZoneInfo
     TZ_COLOMBIA = ZoneInfo("America/Bogota")
@@ -27,26 +20,24 @@ except Exception:
     TZ_COLOMBIA = timezone(timedelta(hours=-5))
 
 import db
+import expedientes_service
 
 router = APIRouter(prefix="/sms", tags=["SMS"])
 templates = Jinja2Templates(directory="templates")
 
-# Configuración del Gateway y WhatsApp oficial
 ANDROID_GATEWAY_URL = os.getenv("ANDROID_GATEWAY_URL", "http://192.168.1.92:8080/send-sms")
 raw_wa = os.getenv("WHATSAPP_AGENTE_NUMBER", "573106927812").replace("+", "").strip()
 WHATSAPP_AGENTE = raw_wa if raw_wa.startswith("57") else f"57{raw_wa}"
 
 
-# =============================================================================
-# AUTO-INICIALIZACIÓN DE TABLAS EN NEON
-# =============================================================================
-
 def _ensure_sms_schema():
-    """Crea las tablas de plantillas y cola si no existen en la base de datos."""
+    """Asegura tablas SMS y activa la tipificación central de cartera."""
     conn = db.get_connection()
     try:
         with conn:
             with conn.cursor() as cur:
+                # Fuerza la creación/migración de procesos.tipo_cartera antes de consultar cartera.
+                expedientes_service._cols(cur, "procesos")
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS sms_cola_envios (
                         id BIGSERIAL PRIMARY KEY,
@@ -77,58 +68,37 @@ def _ensure_sms_schema():
                     );
 
                     INSERT INTO sms_plantillas (nombre, tipo, cuerpo_template, es_predeterminada)
-                    VALUES 
-                    (
-                        'Acuerdo Prejudicial Amistoso', 
-                        'PREJUDICIAL', 
-                        '{nombre}, presenta saldo en mora de ${saldo} en {conjunto} {unidad}. Evite cobro judicial y acuerde su pago al WhatsApp {telefono_wa}.', 
-                        TRUE
-                    ),
-                    (
-                        'Aviso de Inicio de Cobro Jurídico', 
-                        'COBRO_JURIDICO', 
-                        'Aviso Juridico: {nombre}, se iniciara proceso ejecutivo por mora de ${saldo} en {conjunto} {unidad}. Evite embargo y acuerde pago al WhatsApp {telefono_wa}.', 
-                        FALSE
-                    ),
-                    (
-                        'Alerta de Mandamiento de Pago', 
-                        'MANDAMIENTO', 
-                        'Urgente: {nombre}, mandamiento de pago en tramite para {conjunto} {unidad} (${saldo}). Comuniquese al WhatsApp {telefono_wa} antes de medidas cautelares.', 
-                        FALSE
-                    )
+                    VALUES
+                    ('Acuerdo Prejudicial Amistoso', 'PREJUDICIAL',
+                     '{nombre}, presenta saldo en mora de ${saldo} en {conjunto} {unidad}. Evite cobro judicial y acuerde su pago al WhatsApp {telefono_wa}.', TRUE),
+                    ('Aviso de Inicio de Cobro Jurídico', 'COBRO_JURIDICO',
+                     'Aviso Juridico: {nombre}, se iniciara proceso ejecutivo por mora de ${saldo} en {conjunto} {unidad}. Evite embargo y acuerde pago al WhatsApp {telefono_wa}.', FALSE),
+                    ('Alerta de Mandamiento de Pago', 'MANDAMIENTO',
+                     'Urgente: {nombre}, mandamiento de pago en tramite para {conjunto} {unidad} (${saldo}). Comuniquese al WhatsApp {telefono_wa} antes de medidas cautelares.', FALSE)
                     ON CONFLICT (tipo) DO NOTHING;
                 """)
-    except Exception as e:
-        print(f"[SMS SCHEMA] Error asegurando tablas: {e}", flush=True)
+    except Exception as exc:
+        print(f"[SMS SCHEMA] Error asegurando tablas: {exc}", flush=True)
     finally:
         conn.release()
 
 
-# =============================================================================
-# REGLAS LEGALES (LEY 2300 DE 2023) Y HELPERS
-# =============================================================================
-
 def validar_horario_ley_2300() -> Tuple[bool, str]:
-    """Valida los horarios de cobranza para Colombia según la Ley 2300 de 2023."""
     ahora = datetime.now(TZ_COLOMBIA)
-    dia = ahora.weekday()  # 0: Lunes ... 5: Sábado, 6: Domingo
+    dia = ahora.weekday()
     hora = ahora.hour + (ahora.minute / 60.0)
-
     if dia == 6:
         return False, "Domingo: Prohibida la gestión según Ley 2300 de 2023."
     if 0 <= dia <= 4:
         if 7.0 <= hora < 19.0:
             return True, f"Horario hábil (L-V 7:00 am a 7:00 pm). Hora: {ahora.strftime('%H:%M')}."
         return False, f"Fuera de horario legal (7:00 am a 7:00 pm). Hora: {ahora.strftime('%H:%M')}."
-    if dia == 5:
-        if 8.0 <= hora < 15.0:
-            return True, f"Horario hábil sábado (8:00 am a 3:00 pm). Hora: {ahora.strftime('%H:%M')}."
-        return False, f"Fuera de horario legal de sábado (8:00 am a 3:00 pm). Hora: {ahora.strftime('%H:%M')}."
-    return False, "Fuera de horario legal."
+    if 8.0 <= hora < 15.0:
+        return True, f"Horario hábil sábado (8:00 am a 3:00 pm). Hora: {ahora.strftime('%H:%M')}."
+    return False, f"Fuera de horario legal de sábado (8:00 am a 3:00 pm). Hora: {ahora.strftime('%H:%M')}."
 
 
 def normalizar_telefono(raw_tel: str) -> Optional[str]:
-    """Extrae un celular válido de 10 dígitos para Colombia."""
     if not raw_tel:
         return None
     digitos = "".join(filter(str.isdigit, str(raw_tel)))
@@ -140,7 +110,6 @@ def normalizar_telefono(raw_tel: str) -> Optional[str]:
 
 
 def enviar_sms_gateway(telefono_10_digitos: str, mensaje: str) -> Tuple[bool, str]:
-    """Despacha al Gateway Android local."""
     destinatario = f"+57{telefono_10_digitos}"
     payload = {"to": destinatario, "message": mensaje}
     try:
@@ -154,21 +123,78 @@ def enviar_sms_gateway(telefono_10_digitos: str, mensaje: str) -> Tuple[bool, st
         return False, f"Gateway offline: {exc}"
 
 
-# =============================================================================
-# VISTA PRINCIPAL
-# =============================================================================
+def _saldo_clause(saldo_minimo: float, saldo_maximo: Optional[float]):
+    clauses = ["s.saldo_total >= %s"]
+    params = [saldo_minimo]
+    if saldo_maximo is not None:
+        clauses.append("s.saldo_total <= %s")
+        params.append(saldo_maximo)
+    return " AND ".join(clauses), params
+
+
+def _candidatos_cartera(cur, tipo_cartera: str = "", saldo_minimo: float = 0, saldo_maximo: Optional[float] = None, ids: Optional[list[int]] = None):
+    cartera = (tipo_cartera or "").upper().strip()
+    saldo_where, params = _saldo_clause(saldo_minimo, saldo_maximo)
+    where = [saldo_where, "c.telefono IS NOT NULL", "TRIM(c.telefono) <> ''"]
+    if cartera in ("PREJURIDICO", "JURIDICO"):
+        where.append("COALESCE(p.tipo_cartera, 'PREJURIDICO') = %s")
+        params.append(cartera)
+    if ids:
+        where.append("i.id = ANY(%s)")
+        params.append(ids)
+
+    query = f"""
+        WITH saldos AS (
+            SELECT inmueble_id,
+                   SUM(CASE WHEN LOWER(COALESCE(concepto, '')) != 'abono' THEN valor_capital ELSE -valor_capital END) AS saldo_total
+            FROM expensas_ph
+            GROUP BY inmueble_id
+            HAVING SUM(CASE WHEN LOWER(COALESCE(concepto, '')) != 'abono' THEN valor_capital ELSE -valor_capital END) > 0
+        )
+        SELECT DISTINCT ON (c.telefono)
+            i.id AS inmueble_id,
+            i.conjunto_residencial,
+            i.torre_apto,
+            c.identificacion,
+            c.nombre,
+            c.telefono,
+            s.saldo_total,
+            COALESCE(p.tipo_cartera, 'PREJURIDICO') AS tipo_cartera
+        FROM saldos s
+        JOIN inmuebles_ph i ON i.id = s.inmueble_id
+        JOIN contactos c ON c.id = i.contacto_id
+        LEFT JOIN LATERAL (
+            SELECT tipo_cartera
+            FROM procesos p0
+            WHERE p0.inmueble_id = i.id
+            ORDER BY CASE WHEN p0.tipo_cartera = 'JURIDICO' THEN 0 ELSE 1 END, p0.radicado_interno DESC
+            LIMIT 1
+        ) p ON TRUE
+        WHERE {' AND '.join(where)}
+        ORDER BY c.telefono, s.saldo_total DESC;
+    """
+    cur.execute(query, params)
+    return cur.fetchall()
+
 
 @router.get("")
 @router.get("/")
-def vista_sms(request: Request, mensaje: str = None, error: str = None):
+def vista_sms(
+    request: Request,
+    mensaje: str = None,
+    error: str = None,
+    tipo_cartera: str = "",
+    saldo_minimo: float = 0,
+    saldo_maximo: str = "",
+):
     _ensure_sms_schema()
     es_habil, motivo_horario = validar_horario_ley_2300()
-    
     conn = db.get_connection()
     try:
+        saldo_max = float(saldo_maximo) if str(saldo_maximo).strip() else None
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT 
+                SELECT
                     COUNT(*) FILTER (WHERE estado = 'PENDIENTE') AS pendientes,
                     COUNT(*) FILTER (WHERE estado = 'ENVIADO') AS enviados,
                     COUNT(*) FILTER (WHERE estado = 'FALLIDO') AS fallidos,
@@ -178,8 +204,8 @@ def vista_sms(request: Request, mensaje: str = None, error: str = None):
             metricas = cur.fetchone() or {"pendientes": 0, "enviados": 0, "fallidos": 0, "total_saldo_pendiente": 0}
 
             cur.execute("""
-                SELECT id, identificacion, nombre, conjunto_residencial, torre_apto, 
-                       telefono, saldo_calculado, mensaje_texto, tipo_campana, estado, 
+                SELECT id, identificacion, nombre, conjunto_residencial, torre_apto,
+                       telefono, saldo_calculado, mensaje_texto, tipo_campana, estado,
                        fecha_creacion, fecha_envio, error_detalle
                 FROM sms_cola_envios
                 ORDER BY id DESC LIMIT 50;
@@ -189,14 +215,11 @@ def vista_sms(request: Request, mensaje: str = None, error: str = None):
             cur.execute("SELECT id, nombre, tipo, cuerpo_template FROM sms_plantillas ORDER BY id ASC;")
             plantillas = cur.fetchall()
 
-            cur.execute("""
-                SELECT COUNT(DISTINCT i.id) AS total_mora
-                FROM inmuebles_ph i
-                JOIN expensas_ph e ON e.inmueble_id = i.id
-                WHERE e.valor_capital > 0;
-            """)
+            cur.execute("SELECT COUNT(DISTINCT i.id) AS total_mora FROM inmuebles_ph i JOIN expensas_ph e ON e.inmueble_id=i.id WHERE e.valor_capital > 0;")
             cand = cur.fetchone()
             total_mora = cand["total_mora"] if cand else 0
+
+            candidatos = _candidatos_cartera(cur, tipo_cartera, float(saldo_minimo or 0), saldo_max)
 
         return templates.TemplateResponse(
             request,
@@ -207,131 +230,87 @@ def vista_sms(request: Request, mensaje: str = None, error: str = None):
                 "cola": cola,
                 "plantillas": plantillas,
                 "total_mora": total_mora,
+                "candidatos": candidatos,
+                "tipo_cartera": (tipo_cartera or "").upper(),
+                "saldo_minimo": saldo_minimo,
+                "saldo_maximo": saldo_maximo,
                 "es_habil": es_habil,
                 "motivo_horario": motivo_horario,
                 "gateway_url": ANDROID_GATEWAY_URL,
                 "whatsapp_oficial": WHATSAPP_AGENTE,
                 "mensaje": mensaje,
                 "error": error,
-            }
+            },
         )
     finally:
         conn.release()
 
 
-# =============================================================================
-# ACCIONES DE COLA Y DESPACHO
-# =============================================================================
-
 @router.post("/generar-cola")
 def generar_cola(
     tipo_campana: str = Form("PREJUDICIAL"),
     saldo_minimo: float = Form(50000.0),
+    saldo_maximo: str = Form(""),
+    tipo_cartera: str = Form(""),
+    seleccionados: list[int] = Form([]),
 ):
-    """Consulta deudores en expensas_ph y llena la cola sin duplicados."""
+    _ensure_sms_schema()
     conn = db.get_connection()
     try:
+        saldo_max = float(saldo_maximo) if saldo_maximo.strip() else None
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT cuerpo_template FROM sms_plantillas WHERE tipo = %s LIMIT 1;", (tipo_campana,))
+                cur.execute("SELECT cuerpo_template FROM sms_plantillas WHERE tipo=%s LIMIT 1;", (tipo_campana,))
                 row_t = cur.fetchone()
                 template = row_t["cuerpo_template"] if row_t else "{nombre}, saldo mora en {conjunto} {unidad}. WhatsApp: {telefono_wa}"
 
-                query_deudores = """
-                WITH saldos AS (
-                    SELECT inmueble_id, 
-                           SUM(CASE WHEN LOWER(COALESCE(concepto, '')) != 'abono' THEN valor_capital ELSE -valor_capital END) AS saldo_total
-                    FROM expensas_ph
-                    GROUP BY inmueble_id
-                    HAVING SUM(CASE WHEN LOWER(COALESCE(concepto, '')) != 'abono' THEN valor_capital ELSE -valor_capital END) >= %s
-                )
-                SELECT DISTINCT ON (c.telefono)
-                    i.id AS inmueble_id,
-                    i.conjunto_residencial,
-                    i.torre_apto,
-                    c.identificacion,
-                    c.nombre,
-                    c.telefono,
-                    s.saldo_total
-                FROM saldos s
-                JOIN inmuebles_ph i ON i.id = s.inmueble_id
-                JOIN contactos c ON c.id = i.contacto_id
-                WHERE c.telefono IS NOT NULL AND TRIM(c.telefono) != ''
-                ORDER BY c.telefono, s.saldo_total DESC;
-                """
-                cur.execute(query_deudores, (saldo_minimo,))
-                deudores = cur.fetchall()
-
+                deudores = _candidatos_cartera(cur, tipo_cartera, saldo_minimo, saldo_max, seleccionados or None)
                 insertados = 0
                 for d in deudores:
                     tel = normalizar_telefono(d["telefono"])
                     if not tel:
                         continue
-
                     nombre_corto = (d["nombre"] or "Propietario").strip().title()
                     conjunto = (d["conjunto_residencial"] or "Copropiedad").strip()
                     unidad = (d["torre_apto"] or "").strip()
                     saldo_formato = f"{int(d['saldo_total']):,}".replace(",", ".")
-
-                    msg = template.format(
-                        nombre=nombre_corto,
-                        conjunto=conjunto,
-                        unidad=unidad,
-                        saldo=saldo_formato,
-                        telefono_wa=f"+{WHATSAPP_AGENTE}"
-                    )
-
+                    msg = template.format(nombre=nombre_corto, conjunto=conjunto, unidad=unidad, saldo=saldo_formato, telefono_wa=f"+{WHATSAPP_AGENTE}")
                     cur.execute("""
                         INSERT INTO sms_cola_envios (
-                            inmueble_id, identificacion, nombre, conjunto_residencial, 
-                            torre_apto, telefono, saldo_calculado, mensaje_texto, 
+                            inmueble_id, identificacion, nombre, conjunto_residencial,
+                            torre_apto, telefono, saldo_calculado, mensaje_texto,
                             tipo_campana, estado
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDIENTE')
-                    """, (
-                        d["inmueble_id"], d["identificacion"], nombre_corto, conjunto,
-                        unidad, tel, d["saldo_total"], msg, tipo_campana
-                    ))
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
+                    """, (d["inmueble_id"], d["identificacion"], nombre_corto, conjunto, unidad, tel, d["saldo_total"], msg, tipo_campana))
                     insertados += 1
 
         return RedirectResponse(url=f"/sms?mensaje=Se+cargaron+{insertados}+mensajes+en+la+cola", status_code=303)
     except Exception as exc:
-        return RedirectResponse(url=f"/sms?error=Error+generando+cola:+{exc}", status_code=303)
+        return RedirectResponse(url=f"/sms?error=Error+generando+cola:+{str(exc)[:160]}", status_code=303)
     finally:
         conn.release()
 
 
 def _tarea_despacho_background(limite: int = 50, dry_run: bool = False):
-    """Procesa el lote con pausas prudentes para la SIM."""
     conn = db.get_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
                 SELECT id, telefono, mensaje_texto
                 FROM sms_cola_envios
-                WHERE estado = 'PENDIENTE'
+                WHERE estado='PENDIENTE'
                 ORDER BY id ASC LIMIT %s;
             """, (limite,))
             pendientes = cur.fetchall()
-
         for item in pendientes:
-            msg_id = item["id"]
-            tel = item["telefono"]
-            texto = item["mensaje_texto"]
-
             if dry_run:
                 exito, respuesta = True, "SIMULADO_OK (Dry-Run)"
             else:
-                exito, respuesta = enviar_sms_gateway(tel, texto)
-
+                exito, respuesta = enviar_sms_gateway(item["telefono"], item["mensaje_texto"])
             with conn:
                 with conn.cursor() as cur:
-                    nuevo_estado = 'ENVIADO' if exito else 'FALLIDO'
-                    cur.execute("""
-                        UPDATE sms_cola_envios
-                        SET estado = %s, fecha_envio = CURRENT_TIMESTAMP, error_detalle = %s
-                        WHERE id = %s;
-                    """, (nuevo_estado, respuesta[:200], msg_id))
-
+                    nuevo_estado = "ENVIADO" if exito else "FALLIDO"
+                    cur.execute("UPDATE sms_cola_envios SET estado=%s, fecha_envio=CURRENT_TIMESTAMP, error_detalle=%s WHERE id=%s", (nuevo_estado, respuesta[:200], item["id"]))
             if not dry_run:
                 time.sleep(random.uniform(3.0, 5.0))
     finally:
@@ -348,7 +327,6 @@ def despachar_campana(
     es_habil, motivo = validar_horario_ley_2300()
     if not es_habil and not forzar_horario and not dry_run:
         return RedirectResponse(url=f"/sms?error=Detenido+por+Ley+2300:+{motivo}", status_code=303)
-
     background_tasks.add_task(_tarea_despacho_background, limite, dry_run)
     modo = "Simulación" if dry_run else "Despacho real"
     return RedirectResponse(url=f"/sms?mensaje={modo}+iniciado+en+segundo+plano", status_code=303)
@@ -360,7 +338,7 @@ def limpiar_cola():
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE sms_cola_envios SET estado = 'CANCELADO' WHERE estado = 'PENDIENTE';")
+                cur.execute("UPDATE sms_cola_envios SET estado='CANCELADO' WHERE estado='PENDIENTE';")
         return RedirectResponse(url="/sms?mensaje=Cola+cancelada+correctamente", status_code=303)
     finally:
         conn.release()
@@ -372,7 +350,7 @@ def guardar_plantilla(tipo: str = Form(...), cuerpo: str = Form(...)):
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE sms_plantillas SET cuerpo_template = %s, actualizado_en = CURRENT_TIMESTAMP WHERE tipo = %s;", (cuerpo.strip(), tipo.strip()))
+                cur.execute("UPDATE sms_plantillas SET cuerpo_template=%s, actualizado_en=CURRENT_TIMESTAMP WHERE tipo=%s;", (cuerpo.strip(), tipo.strip()))
         return RedirectResponse(url="/sms?mensaje=Plantilla+actualizada", status_code=303)
     finally:
         conn.release()
