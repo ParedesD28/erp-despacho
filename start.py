@@ -43,7 +43,6 @@ def _ejecutar_mantenimiento_segundo_plano() -> None:
         tasas.asegurar_tabla_tasas()
         agenda_service.ensure_schema()
         proceso_partes_service.ensure_schema()
-        proceso_partes_runtime.install()
         tasas.prueba_conexion_sfc()
         log_msg("✅ [BACKGROUND]", "Mantenimiento inicial completado")
     except Exception as exc:
@@ -56,6 +55,9 @@ if __name__ == "__main__":
     # El pool de PostgreSQL sigue siendo perezoso; esta llamada solo instala
     # la capa de acceso, no fuerza una conexión contra Neon.
     db.install_psycopg2_pool()
+
+    # Las lecturas normalizadas se activan antes de aceptar tráfico.
+    proceso_partes_runtime.install()
 
     # Registro único de las rutas de agenda sobre main.app. No hay lógica de
     # negocio ni duplicación de endpoints dentro del arranque.
