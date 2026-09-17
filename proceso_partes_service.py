@@ -52,11 +52,11 @@ def _column_exists(cur, table_name: str, column_name: str) -> bool:
 
 
 def _ensure_contactos_identificacion_unique(cur) -> None:
-    """Garantiza la unicidad de la identidad base usada por ON CONFLICT.
+    """Garantiza la unicidad real de contactos.identificacion.
 
-    La aplicación trata contactos.identificacion como identificador único.
-    Antes de crear la restricción se valida que no existan duplicados para no
-    alterar datos ni ocultar inconsistencias durante el arranque.
+    Las rutas actuales del ERP utilizan ON CONFLICT (identificacion), por lo que
+    PostgreSQL debe disponer de una restricción o índice UNIQUE compatible.
+    Primero se valida la ausencia de duplicados para no alterar datos existentes.
     """
     cur.execute(
         """
@@ -75,23 +75,13 @@ def _ensure_contactos_identificacion_unique(cur) -> None:
             f"no se puede crear la unicidad: {duplicate[0]} ({duplicate[1]} registros)"
         )
 
+    # Un índice UNIQUE es suficiente para ON CONFLICT y evita depender del nombre
+    # o del estado previo de una constraint. IF NOT EXISTS permite arrancar de
+    # forma idempotente en despliegues repetidos.
     cur.execute(
         """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1
-                FROM pg_indexes
-                WHERE schemaname = 'public'
-                  AND tablename = 'contactos'
-                  AND indexdef ILIKE 'CREATE UNIQUE INDEX%'
-                  AND indexdef ILIKE '%(identificacion)%'
-            ) THEN
-                ALTER TABLE public.contactos
-                    ADD CONSTRAINT uq_contactos_identificacion UNIQUE (identificacion);
-            END IF;
-        END
-        $$;
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_contactos_identificacion_idx
+            ON public.contactos (identificacion)
         """
     )
 
@@ -118,8 +108,6 @@ def _create_triggers(cur) -> None:
     recursividad al insertar/editar un expediente. Los campos históricos de
     procesos siguen siendo la compatibilidad de escritura hasta migrar main.py.
     """
-    # Elimina el trigger bidireccional anterior y su función para que un alta
-    # de proceso no intente modificar el mismo registro desde un trigger anidado.
     cur.execute(f"DROP TRIGGER IF EXISTS {_TRG_PARTES_A_PROCESO} ON proceso_partes")
     cur.execute(f"DROP FUNCTION IF EXISTS {_FN_PARTES_A_PROCESO}()")
 
