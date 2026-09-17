@@ -35,7 +35,10 @@ def _json_log(level: str, event: str, **fields) -> None:
         "event": event,
         **fields,
     }
-    LOGGER.log(logging.ERROR if level == "ERROR" else logging.INFO, json.dumps(payload, ensure_ascii=False, default=str))
+    LOGGER.log(
+        logging.ERROR if level == "ERROR" else logging.INFO,
+        json.dumps(payload, ensure_ascii=False, default=str),
+    )
 
 
 def _es_api_path(path: str) -> bool:
@@ -43,7 +46,26 @@ def _es_api_path(path: str) -> bool:
     return path.startswith("/api/") or path.startswith("/sms/api/")
 
 
+def _instalar_selector_sms() -> None:
+    """Activa el selector normalizado de candidatos SMS después de cargar sms_router."""
+    try:
+        from sms_candidates_override import install
+
+        install()
+    except Exception as exc:
+        log_msg(
+            "⚠️ [SMS CANDIDATOS]",
+            "No se pudo activar el selector normalizado; se conserva temporalmente el selector existente.",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+
 def install_exception_handling(app) -> None:
+    # main.py ya importó sms_router y registró su router antes de llegar aquí.
+    # Por eso este punto es seguro para sustituir _candidatos_cartera sin tocar
+    # la definición de las rutas ni el worker Android.
+    _instalar_selector_sms()
+
     from starlette.exceptions import HTTPException as StarletteHTTPException
 
     @app.exception_handler(StarletteHTTPException)
@@ -59,15 +81,21 @@ def install_exception_handling(app) -> None:
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
         request_id = getattr(request.state, "request_id", str(uuid.uuid4())[:8])
-        print(f"\n🚨 ===================== ERROR CRÍTICO =====================", flush=True)
+        print("\n🚨 ===================== ERROR CRÍTICO =====================", flush=True)
         print(f"💥 Ruta: {request.method} {request.url.path} | Request ID: {request_id}", flush=True)
         print(f"💥 Excepción: {type(exc).__name__}: {exc}", flush=True)
         print(f"💥 Traza detallada:\n{traceback.format_exc()}", flush=True)
-        print(f"🚨 =========================================================\n", flush=True)
+        print("🚨 =========================================================\n", flush=True)
 
         if _es_api_path(request.url.path):
-            return JSONResponse({"error": "Error interno del servidor", "detalle": str(exc), "request_id": request_id}, status_code=500)
-        return JSONResponse({"error": "No fue posible completar la solicitud", "detalle": str(exc), "request_id": request_id}, status_code=500)
+            return JSONResponse(
+                {"error": "Error interno del servidor", "detalle": str(exc), "request_id": request_id},
+                status_code=500,
+            )
+        return JSONResponse(
+            {"error": "No fue posible completar la solicitud", "detalle": str(exc), "request_id": request_id},
+            status_code=500,
+        )
 
     @app.middleware("http")
     async def structured_request_logging(request: Request, call_next):
@@ -78,7 +106,7 @@ def install_exception_handling(app) -> None:
         request.state.request_id = request_id
 
         ip_cliente = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "local")
-        
+
         if not es_health:
             log_msg("🚀 [HTTP ENTRANTE]", f"{request.method} {request.url.path}", ip=ip_cliente, id=request_id)
 
