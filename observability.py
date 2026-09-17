@@ -43,28 +43,29 @@ def _json_log(level: str, event: str, **fields) -> None:
 
 def _es_api_path(path: str) -> bool:
     """Determina si una ruta pertenece a una API que debe conservar respuestas HTTP/JSON."""
-    return path.startswith("/api/") or path.startswith("/sms/api/")
+    return path.startswith("/api/") or path.startswith("/sms/api/") or path.startswith("/sms/wizard/")
 
 
-def _instalar_selector_sms() -> None:
-    """Activa el selector normalizado de candidatos SMS después de cargar sms_router."""
+def _instalar_selector_sms(app=None) -> None:
+    """Activa selector normalizado y el wizard SMS después de cargar sms_router."""
     try:
         from sms_candidates_override import install
-
         install()
+        if app is not None:
+            from sms_wizard_override import install as install_wizard
+            install_wizard(app)
     except Exception as exc:
         log_msg(
             "⚠️ [SMS CANDIDATOS]",
-            "No se pudo activar el selector normalizado; se conserva temporalmente el selector existente.",
+            "No se pudo activar la capa SMS normalizada; se conserva temporalmente el flujo existente.",
             error=f"{type(exc).__name__}: {exc}",
         )
 
 
 def install_exception_handling(app) -> None:
     # main.py ya importó sms_router y registró su router antes de llegar aquí.
-    # Por eso este punto es seguro para sustituir _candidatos_cartera sin tocar
-    # la definición de las rutas ni el worker Android.
-    _instalar_selector_sms()
+    # En este punto es seguro sustituir el selector y registrar el wizard.
+    _instalar_selector_sms(app)
 
     from starlette.exceptions import HTTPException as StarletteHTTPException
 
