@@ -2,23 +2,20 @@
 
 La tabla proceso_partes es la fuente estructural de las relaciones entre un
 expediente y sus personas/entidades. Durante la transición, este módulo mantiene
-sincronizados los campos históricos de procesos (id_cliente, demandante,
-id_demandado y demandado) para no romper módulos que todavía los leen.
+los campos históricos de procesos actualizados para no romper módulos que todavía
+los leen, pero evita la sincronización bidireccional durante el alta del proceso.
 
-No elimina tablas ni datos heredados. La migración es idempotente y reversible
-retirando este módulo del bootstrap cuando todo el ERP ya consulte
-proceso_partes directamente.
+No elimina tablas ni datos heredados. La migración es idempotente y reversible.
 """
 from __future__ import annotations
 
 import db
 from observability import log_msg
 
-
-_TRG_PARTES_A_PROCESO = "trg_sync_proceso_partes_a_proceso"
 _TRG_PROCESO_A_PARTES = "trg_sync_proceso_a_proceso_partes"
-_FN_PARTES_A_PROCESO = "fn_sync_proceso_partes_a_proceso"
 _FN_PROCESO_A_PARTES = "fn_sync_proceso_a_proceso_partes"
+_TRG_PARTES_A_PROCESO = "trg_sync_proceso_partes_a_proceso"
+_FN_PARTES_A_PROCESO = "fn_sync_proceso_partes_a_proceso"
 
 
 def _table_exists(cur, table_name: str) -> bool:
@@ -70,54 +67,16 @@ def _create_partes_indexes(cur) -> None:
 
 
 def _create_triggers(cur) -> None:
-    cur.execute(
-        f"""
-        CREATE OR REPLACE FUNCTION {_FN_PARTES_A_PROCESO}()
-        RETURNS trigger
-        LANGUAGE plpgsql
-        AS $$
-        DECLARE
-            v_radicado TEXT;
-            v_cliente_ids TEXT;
-            v_cliente_nombres TEXT;
-            v_demandado_ids TEXT;
-            v_demandado_nombres TEXT;
-        BEGIN
-            v_radicado := COALESCE(NEW.radicado_interno, OLD.radicado_interno);
-            IF v_radicado IS NULL THEN
-                RETURN COALESCE(NEW, OLD);
-            END IF;
+    """Instala solo la sincronización procesos -> proceso_partes.
 
-            SELECT
-                string_agg(c.identificacion, ' | ' ORDER BY pp.es_principal DESC, c.id),
-                string_agg(c.nombre, ' | ' ORDER BY pp.es_principal DESC, c.id)
-            INTO v_cliente_ids, v_cliente_nombres
-            FROM proceso_partes pp
-            JOIN contactos c ON c.id = pp.contacto_id
-            WHERE pp.radicado_interno = v_radicado
-              AND pp.rol = 'DEMANDANTE';
-
-            SELECT
-                string_agg(c.identificacion, ' | ' ORDER BY pp.es_principal DESC, c.id),
-                string_agg(c.nombre, ' | ' ORDER BY pp.es_principal DESC, c.id)
-            INTO v_demandado_ids, v_demandado_nombres
-            FROM proceso_partes pp
-            JOIN contactos c ON c.id = pp.contacto_id
-            WHERE pp.radicado_interno = v_radicado
-              AND pp.rol = 'DEMANDADO';
-
-            UPDATE procesos
-            SET id_cliente = COALESCE(v_cliente_ids, ''),
-                demandante = COALESCE(v_cliente_nombres, ''),
-                id_demandado = COALESCE(v_demandado_ids, ''),
-                demandado = COALESCE(v_demandado_nombres, '')
-            WHERE radicado_interno = v_radicado;
-
-            RETURN COALESCE(NEW, OLD);
-        END;
-        $$;
-        """
-    )
+    La sincronización inversa se desactiva durante la transición para evitar
+    recursividad al insertar/editar un expediente. Los campos históricos de
+    procesos siguen siendo la compatibilidad de escritura hasta migrar main.py.
+    """
+    # Elimina el trigger bidireccional anterior y su función para que un alta
+    # de proceso no intente modificar el mismo registro desde un trigger anidado.
+    cur.execute(f"DROP TRIGGER IF EXISTS {_TRG_PARTES_A_PROCESO} ON proceso_partes")
+    cur.execute(f"DROP FUNCTION IF EXISTS {_FN_PARTES_A_PROCESO}()")
 
     cur.execute(
         f"""
@@ -173,16 +132,6 @@ def _create_triggers(cur) -> None:
         """
     )
 
-    cur.execute(f"DROP TRIGGER IF EXISTS {_TRG_PARTES_A_PROCESO} ON proceso_partes")
-    cur.execute(
-        f"""
-        CREATE TRIGGER {_TRG_PARTES_A_PROCESO}
-        AFTER INSERT OR UPDATE OR DELETE ON proceso_partes
-        FOR EACH ROW
-        EXECUTE FUNCTION {_FN_PARTES_A_PROCESO}()
-        """
-    )
-
     cur.execute(f"DROP TRIGGER IF EXISTS {_TRG_PROCESO_A_PARTES} ON procesos")
     cur.execute(
         f"""
@@ -224,7 +173,8 @@ def _backfill_legacy_processes(cur) -> int:
             WITH ORDINALITY AS s(value, ordinality)
         JOIN contactos c ON c.identificacion = trim(s.value)
         WHERE NOT EXISTS (
-            SELECT 1 FROM proceso_partes pp
+            SELECT 1
+            FROM proceso_partes pp
             WHERE pp.radicado_interno = p.radicado_interno
         )
         ON CONFLICT (radicado_interno, contacto_id, rol) DO NOTHING
@@ -244,12 +194,14 @@ def _backfill_legacy_processes(cur) -> int:
             WITH ORDINALITY AS s(value, ordinality)
         JOIN contactos c ON c.identificacion = trim(s.value)
         WHERE EXISTS (
-            SELECT 1 FROM proceso_partes pp
+            SELECT 1
+            FROM proceso_partes pp
             WHERE pp.radicado_interno = p.radicado_interno
               AND pp.rol = 'DEMANDANTE'
         )
           AND NOT EXISTS (
-            SELECT 1 FROM proceso_partes pp
+            SELECT 1
+            FROM proceso_partes pp
             WHERE pp.radicado_interno = p.radicado_interno
               AND pp.rol = 'DEMANDADO'
         )
