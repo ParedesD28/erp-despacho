@@ -7,16 +7,23 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <style>
-        body { background-color: #f4f6f9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        .card { border-radius: 10px; border: none; box-shadow: 0 2px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
-        .metric-card { border-left: 4px solid; }
-        .badge-pendiente { background-color: #ffc107; color: #000; }
-        .badge-enviado { background-color: #198754; color: #fff; }
-        .badge-fallido { background-color: #dc3545; color: #fff; }
-        .badge-cancelado { background-color: #6c757d; color: #fff; }
-        .badge-cartera-pre { background-color: #fff3cd; color: #856404; }
-        .badge-cartera-jur { background-color: #cfe2ff; color: #084298; }
-        .candidate-row.selected { background: #eef6ff; }
+        body{background:#f4f6f9;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+        .card{border-radius:12px;border:none;box-shadow:0 2px 7px rgba(0,0,0,.05);margin-bottom:20px}
+        .metric-card{border-left:4px solid}
+        .candidate-row.selected{background:#eef6ff}
+        .step{display:none}.step.active{display:block}
+        .step-pill{min-width:34px;height:34px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700}
+        .step-pill.active{background:#0d6efd;color:#fff}.step-pill.done{background:#198754;color:#fff}.step-pill.todo{background:#e9ecef;color:#6c757d}
+        .phone{width:290px;max-width:100%;margin:auto;background:#111;border-radius:30px;padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.18)}
+        .phone-screen{background:#f7f7f7;border-radius:22px;min-height:500px;padding:18px 14px;display:flex;flex-direction:column}
+        .phone-header{text-align:center;font-size:.78rem;color:#666;margin-bottom:18px}
+        .sms-bubble{background:#e1ffc7;border-radius:18px 18px 4px 18px;padding:12px 14px;max-width:88%;margin-left:auto;font-size:.9rem;line-height:1.35;white-space:pre-wrap;word-break:break-word}
+        .review-card{border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:12px}
+        .review-card.active{border-color:#0d6efd;box-shadow:0 0 0 2px rgba(13,110,253,.08)}
+        .queue-table{max-height:460px;overflow:auto}
+        .sticky-head{position:sticky;top:0;z-index:2}
+        .source-badge{font-size:.72rem}
+        .counter-box{background:#f8f9fa;border-radius:10px;padding:10px 12px}
     </style>
 </head>
 <body>
@@ -39,9 +46,8 @@
 
     <div class="alert alert-info shadow-sm">
         <i class="bi bi-phone me-2"></i>
-        <strong>Envío automático:</strong> al generar la cola, el Worker Android recoge y envía los SMS automáticamente mientras esté activo.
-        <br>
-        <span class="small">Después de un envío exitoso, el mismo contacto queda bloqueado durante {{ bloqueo_reenvio_horas }} horas.</span>
+        <strong>Envío automático:</strong> al confirmar el paso 3, los mensajes pasan a la cola y el Worker Android los procesa.
+        <br><span class="small">Un contacto queda protegido contra reenvíos durante {{ bloqueo_reenvio_horas }} horas después de un envío exitoso.</span>
     </div>
 
     {% if mensaje %}<div class="alert alert-info shadow-sm">{{ mensaje }}</div>{% endif %}
@@ -51,125 +57,237 @@
         <div class="col-md-3"><div class="card metric-card p-3" style="border-left-color:#ffc107"><div class="text-muted small fw-bold">EN COLA</div><div class="fs-3 fw-bold">{{ metricas.pendientes }}</div><div class="small text-secondary">Saldo: ${{ "{:,.0f}".format(metricas.total_saldo_pendiente).replace(",", ".") }}</div></div></div>
         <div class="col-md-3"><div class="card metric-card p-3" style="border-left-color:#198754"><div class="text-muted small fw-bold">ENVIADOS</div><div class="fs-3 fw-bold text-success">{{ metricas.enviados }}</div></div></div>
         <div class="col-md-3"><div class="card metric-card p-3" style="border-left-color:#dc3545"><div class="text-muted small fw-bold">FALLIDOS</div><div class="fs-3 fw-bold text-danger">{{ metricas.fallidos }}</div></div></div>
-        <div class="col-md-3"><div class="card metric-card p-3" style="border-left-color:#0d6efd"><div class="text-muted small fw-bold">INMUEBLES EN MORA</div><div class="fs-3 fw-bold text-primary">{{ total_mora }}</div></div></div>
+        <div class="col-md-3"><div class="card metric-card p-3" style="border-left-color:#0d6efd"><div class="text-muted small fw-bold">CANDIDATOS</div><div class="fs-3 fw-bold text-primary">{{ candidatos|length }}</div></div></div>
     </div>
 
-    <div class="row">
-        <div class="col-lg-4">
-            <div class="card p-3">
-                <h5 class="fw-bold mb-3"><i class="bi bi-funnel-fill me-2"></i>Segmentar cartera</h5>
-                <form action="/sms" method="GET">
-                    <div class="mb-3">
-                        <label class="form-label small fw-bold">Tipo de cartera</label>
-                        <select name="tipo_cartera" class="form-select">
-                            <option value="" {% if not tipo_cartera %}selected{% endif %}>Todas</option>
-                            <option value="PREJURIDICO" {% if tipo_cartera == 'PREJURIDICO' %}selected{% endif %}>Prejurídico</option>
-                            <option value="JURIDICO" {% if tipo_cartera == 'JURIDICO' %}selected{% endif %}>Jurídico</option>
-                        </select>
-                    </div>
-                    <div class="row g-2 mb-3">
-                        <div class="col-6"><label class="form-label small fw-bold">Deuda desde</label><input type="number" name="saldo_minimo" value="{{ saldo_minimo or 0 }}" min="0" step="1000" class="form-control"></div>
-                        <div class="col-6"><label class="form-label small fw-bold">Deuda hasta</label><input type="number" name="saldo_maximo" value="{{ saldo_maximo or '' }}" min="0" step="1000" class="form-control"></div>
-                    </div>
-                    <button class="btn btn-outline-primary w-100 fw-bold"><i class="bi bi-search me-1"></i> Aplicar filtros</button>
-                </form>
+    <div class="card p-3 mb-4">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+            <div class="d-flex align-items-center gap-3">
+                <div id="pill1" class="step-pill active">1</div>
+                <div><strong>Segmentar y seleccionar</strong><div class="small text-muted">Elige cartera, rango y destinatarios.</div></div>
+                <div class="text-muted">→</div>
+                <div id="pill2" class="step-pill todo">2</div>
+                <div><strong>Revisar mensajes</strong><div class="small text-muted">Edita o retira cada mensaje.</div></div>
+                <div class="text-muted">→</div>
+                <div id="pill3" class="step-pill todo">3</div>
+                <div><strong>Enviar a cola</strong><div class="small text-muted">Confirmación final.</div></div>
             </div>
-
-            <div class="card p-3">
-                <h5 class="fw-bold mb-3"><i class="bi bi-shield-check me-2"></i>Protecciones activas</h5>
-                <div class="small text-muted">
-                    <div class="mb-2">✓ Horario de Ley 2300 validado en servidor.</div>
-                    <div class="mb-2">✓ Reenvío al mismo contacto bloqueado durante {{ bloqueo_reenvio_horas }} horas.</div>
-                    <div class="mb-2">✓ Reclamo exclusivo con token de procesamiento.</div>
-                    <div>✓ Auditoría CRM idempotente.</div>
-                </div>
-            </div>
+            <div class="counter-box"><strong id="wizardCounter">0</strong> seleccionados</div>
         </div>
+    </div>
 
-        <div class="col-lg-8">
-            <div class="card p-3">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <div>
-                        <h5 class="fw-bold m-0">Seleccionar destinatarios</h5>
-                        <div class="small text-muted">Los contactos enviados en las últimas {{ bloqueo_reenvio_horas }} horas no aparecen como candidatos.</div>
+    <div class="step active" id="step1">
+        <div class="row">
+            <div class="col-lg-4">
+                <div class="card p-3">
+                    <h5 class="fw-bold mb-3"><i class="bi bi-funnel-fill me-2"></i>1. Segmentar</h5>
+                    <form action="/sms" method="GET" id="filtrosForm">
+                        <div class="mb-3">
+                            <label class="form-label small fw-bold">Tipo de cartera</label>
+                            <select name="tipo_cartera" class="form-select">
+                                <option value="" {% if not tipo_cartera %}selected{% endif %}>Todas</option>
+                                <option value="PREJURIDICO" {% if tipo_cartera == 'PREJURIDICO' %}selected{% endif %}>Prejurídico</option>
+                                <option value="JURIDICO" {% if tipo_cartera == 'JURIDICO' %}selected{% endif %}>Jurídico</option>
+                            </select>
+                            <div class="form-text">La condición base es demandado + proceso vigente + teléfono.</div>
+                        </div>
+                        <div class="row g-2 mb-3">
+                            <div class="col-6"><label class="form-label small fw-bold">Valor desde</label><input type="number" name="saldo_minimo" value="{{ saldo_minimo or 0 }}" min="0" step="1000" class="form-control"></div>
+                            <div class="col-6"><label class="form-label small fw-bold">Valor hasta</label><input type="number" name="saldo_maximo" value="{{ saldo_maximo or '' }}" min="0" step="1000" class="form-control"></div>
+                        </div>
+                        <button class="btn btn-outline-primary w-100 fw-bold"><i class="bi bi-search me-1"></i> Aplicar filtros</button>
+                    </form>
+                    <hr>
+                    <div class="small text-muted">
+                        <div>✓ Reenvío bloqueado por {{ bloqueo_reenvio_horas }} h.</div>
+                        <div>✓ Un candidato por contacto, aunque tenga varios procesos.</div>
+                        <div>✓ El valor puede venir de expensas, obligación o pretensiones.</div>
                     </div>
-                    <button class="btn btn-sm btn-outline-primary" onclick="window.location.reload();">Actualizar</button>
                 </div>
+            </div>
 
-                <form action="/sms/generar-cola" method="POST" id="formCampana">
+            <div class="col-lg-8">
+                <div class="card p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div><h5 class="fw-bold m-0">Seleccionar destinatarios</h5><div class="small text-muted">{{ candidatos|length }} candidatos con proceso vigente y teléfono válido.</div></div>
+                        <button class="btn btn-sm btn-outline-primary" onclick="window.location.reload();">Actualizar</button>
+                    </div>
                     <div class="row g-2 mb-3">
                         <div class="col-md-6">
-                            <label class="form-label small fw-bold">Plantilla</label>
-                            <select name="tipo_campana" class="form-select">
+                            <label class="form-label small fw-bold">Plantilla inicial</label>
+                            <select id="tipoCampana" class="form-select">
                                 {% for p in plantillas %}<option value="{{ p.tipo }}">{{ p.nombre }}</option>{% endfor %}
                             </select>
                         </div>
-                        <div class="col-md-3"><label class="form-label small fw-bold">Mínimo</label><input type="number" name="saldo_minimo" class="form-control" value="{{ saldo_minimo or 0 }}"></div>
-                        <div class="col-md-3"><label class="form-label small fw-bold">Máximo</label><input type="number" name="saldo_maximo" class="form-control" value="{{ saldo_maximo or '' }}"></div>
-                    </div>
-                    <input type="hidden" name="tipo_cartera" value="{{ tipo_cartera }}">
-
-                    <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
-                        <div class="small text-muted"><strong>{{ candidatos|length }}</strong> candidatos disponibles</div>
-                        <div><button type="button" class="btn btn-sm btn-outline-secondary me-1" onclick="seleccionarVisibles(true)">Seleccionar visibles</button><button type="button" class="btn btn-sm btn-outline-secondary" onclick="seleccionarVisibles(false)">Limpiar selección</button></div>
+                        <div class="col-md-6 d-flex align-items-end justify-content-end gap-2">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="seleccionarVisibles(true)">Seleccionar visibles</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="seleccionarVisibles(false)">Limpiar</button>
+                        </div>
                     </div>
 
                     <div class="table-responsive" style="max-height:520px;overflow:auto;">
                         <table class="table table-hover table-sm align-middle small">
-                            <thead class="table-light sticky-top">
-                            <tr><th style="width:38px"><input type="checkbox" class="form-check-input" onclick="seleccionarVisibles(this.checked)"></th><th>Destinatario</th><th>Cartera</th><th>Unidad</th><th>Saldo</th></tr>
+                            <thead class="table-light sticky-head">
+                            <tr><th style="width:38px"><input type="checkbox" class="form-check-input" onclick="seleccionarVisibles(this.checked)"></th><th>Destinatario</th><th>Proceso</th><th>Fuente valor</th><th>Valor</th></tr>
                             </thead>
                             <tbody>
                             {% for c in candidatos %}
-                            <tr class="candidate-row">
-                                <td><input type="checkbox" class="form-check-input selector-candidato" name="seleccionados" value="{{ c.contacto_id }}" onchange="actualizarSeleccion(this)"></td>
+                            <tr class="candidate-row" data-contacto-id="{{ c.contacto_id }}" data-nombre="{{ c.nombre|e }}" data-identificacion="{{ c.identificacion|e }}" data-telefono="{{ c.telefono|e }}" data-radicado="{{ c.radicado_interno|e }}" data-naturaleza="{{ c.naturaleza|e }}" data-etapa="{{ c.etapa_actual|e }}" data-cartera="{{ c.tipo_cartera|e }}" data-inmueble-id="{{ c.inmueble_id or '' }}" data-conjunto="{{ c.conjunto_residencial|e }}" data-unidad="{{ c.torre_apto|e }}" data-saldo="{{ c.saldo_total }}" data-fuente="{{ c.saldo_fuente|e }}">
+                                <td><input type="checkbox" class="form-check-input selector-candidato" value="{{ c.contacto_id }}" onchange="actualizarSeleccion(this)"></td>
                                 <td><strong>{{ c.nombre }}</strong><br><span class="text-muted">{{ c.identificacion }}</span><br><code>+57{{ c.telefono }}</code></td>
-                                <td>{% if c.tipo_cartera == 'JURIDICO' %}<span class="badge badge-cartera-jur">JURÍDICO</span>{% else %}<span class="badge badge-cartera-pre">PREJURÍDICO</span>{% endif %}</td>
-                                <td>{{ c.conjunto_residencial }}<br><span class="text-muted">{{ c.torre_apto }}</span></td>
-                                <td class="fw-bold">${{ "{:,.0f}".format(c.saldo_total).replace(",", ".") }}</td>
+                                <td><strong>{{ c.radicado_interno }}</strong><br><span class="text-muted">{{ c.naturaleza or '' }}</span><br><span class="badge {% if c.tipo_cartera == 'JURIDICO' %}bg-primary{% else %}bg-warning text-dark{% endif %}">{{ c.tipo_cartera or 'PREJURIDICO' }}</span></td>
+                                <td><span class="badge bg-light text-dark border">{{ c.saldo_fuente }}</span></td>
+                                <td class="fw-bold">${{ "{:,.0f}".format(c.saldo_total or 0).replace(",", ".") }}</td>
                             </tr>
-                            {% else %}<tr><td colspan="5" class="text-center text-muted py-4">No hay candidatos disponibles con los filtros actuales.</td></tr>{% endfor %}
+                            {% else %}<tr><td colspan="5" class="text-center text-muted py-4">No hay candidatos con los filtros actuales.</td></tr>{% endfor %}
                             </tbody>
                         </table>
                     </div>
-
-                    <div class="d-flex flex-wrap justify-content-between align-items-center border-top pt-3 mt-3 gap-2">
+                    <div class="d-flex justify-content-between align-items-center border-top pt-3 mt-3">
                         <div><strong>Seleccionados:</strong> <span id="contadorSeleccion">0</span></div>
-                        <button type="submit" class="btn btn-primary fw-bold" {% if not candidatos %}disabled{% endif %}>Generar cola y enviar automáticamente</button>
+                        <button type="button" class="btn btn-primary fw-bold" onclick="irPaso2()" {% if not candidatos %}disabled{% endif %}>Continuar <i class="bi bi-arrow-right"></i></button>
                     </div>
-                </form>
-            </div>
-
-            <div class="card p-3">
-                <div class="d-flex justify-content-between align-items-center mb-3"><h5 class="fw-bold m-0">Cola de envíos recientes</h5><button class="btn btn-sm btn-outline-primary" onclick="window.location.reload();">Actualizar</button></div>
-                <div class="table-responsive">
-                    <table class="table table-hover table-sm align-middle small">
-                        <thead class="table-light"><tr><th>Destinatario</th><th>Unidad</th><th>Celular</th><th>Saldo</th><th>Estado</th><th>Mensaje</th></tr></thead>
-                        <tbody>
-                        {% for c in cola %}<tr><td><strong>{{ c.nombre }}</strong><br><span class="text-muted">{{ c.identificacion }}</span></td><td>{{ c.conjunto_residencial }}<br><span class="text-muted">{{ c.torre_apto }}</span></td><td><code>+57{{ c.telefono }}</code></td><td>${{ "{:,.0f}".format(c.saldo_calculado).replace(",", ".") }}</td><td><span class="badge badge-{{ c.estado.lower() }}">{{ c.estado }}</span></td><td class="text-truncate" style="max-width:250px" title="{{ c.mensaje_texto }}">{{ c.mensaje_texto }}</td></tr>
-                        {% else %}<tr><td colspan="6" class="text-center text-muted py-4">No hay mensajes en la cola.</td></tr>{% endfor %}
-                        </tbody>
-                    </table>
                 </div>
             </div>
+        </div>
+    </div>
 
-            <div class="card p-3">
-                <h5 class="fw-bold mb-3">Plantillas de cobranza</h5>
-                <div class="accordion" id="accordionPlantillas">
-                    {% for p in plantillas %}
-                    <div class="accordion-item"><h2 class="accordion-header"><button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ p.id }}">{{ p.nombre }} <span class="badge bg-secondary ms-2">{{ p.tipo }}</span></button></h2><div id="collapse{{ p.id }}" class="accordion-collapse collapse" data-bs-parent="#accordionPlantillas"><div class="accordion-body"><form action="/sms/plantillas/guardar" method="POST"><input type="hidden" name="tipo" value="{{ p.tipo }}"><textarea name="cuerpo" class="form-control" rows="3">{{ p.cuerpo_template }}</textarea><div class="form-text small">Variables: <code>{nombre}</code>, <code>{conjunto}</code>, <code>{unidad}</code>, <code>{saldo}</code>, <code>{telefono_wa}</code>.</div><button type="submit" class="btn btn-primary btn-sm mt-2">Guardar cambios</button></form></div></div></div>
-                    {% endfor %}
+    <div class="step" id="step2">
+        <div class="row">
+            <div class="col-lg-8">
+                <div class="card p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div><h5 class="fw-bold m-0">2. Verificar mensajes</h5><div class="small text-muted">Puedes editar el texto o retirar cualquier destinatario antes de crear la cola.</div></div>
+                        <span class="badge bg-primary" id="step2Count">0 mensajes</span>
+                    </div>
+                    <div id="reviewList"></div>
+                    <div class="d-flex justify-content-between pt-2 border-top">
+                        <button type="button" class="btn btn-outline-secondary" onclick="irPaso(1)"><i class="bi bi-arrow-left"></i> Volver</button>
+                        <button type="button" class="btn btn-primary fw-bold" onclick="irPaso3()">Continuar a confirmación <i class="bi bi-arrow-right"></i></button>
+                    </div>
                 </div>
             </div>
+            <div class="col-lg-4">
+                <div class="card p-3 sticky-lg-top" style="top:15px">
+                    <h6 class="fw-bold mb-3">Vista previa en teléfono</h6>
+                    <div class="phone">
+                        <div class="phone-screen">
+                            <div class="phone-header"><strong id="phoneHeader">Gestión de cobranza</strong><br><span id="phoneRecipient">Destinatario</span></div>
+                            <div class="sms-bubble" id="phoneBubble">Selecciona un destinatario para ver el SMS.</div>
+                            <div class="mt-auto text-center small text-muted pt-3">Vista previa aproximada</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="step" id="step3">
+        <div class="card p-4">
+            <h5 class="fw-bold">3. Confirmar y enviar a cola</h5>
+            <p class="text-muted">Aquí todavía no se envía el SMS desde el teléfono. Se crean los registros en la cola; el Worker Android los procesa automáticamente.</p>
+            <div id="summaryBox" class="row g-3 mb-4"></div>
+            <div id="sendResult"></div>
+            <div class="d-flex justify-content-between">
+                <button type="button" class="btn btn-outline-secondary" onclick="irPaso(2)"><i class="bi bi-arrow-left"></i> Volver a revisar</button>
+                <button type="button" id="btnConfirmar" class="btn btn-success btn-lg fw-bold" onclick="confirmarCola()"><i class="bi bi-send-check"></i> Enviar a cola</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="card p-3">
+        <details>
+            <summary class="fw-bold" style="cursor:pointer"><i class="bi bi-clock-history me-2"></i>Cola de envíos recientes ({{ cola|length }})</summary>
+            <div class="d-flex justify-content-end my-3"><button class="btn btn-sm btn-outline-primary" onclick="window.location.reload();">Actualizar</button></div>
+            <div class="table-responsive queue-table">
+                <table class="table table-hover table-sm align-middle small">
+                    <thead class="table-light sticky-head"><tr><th>Destinatario</th><th>Proceso / Unidad</th><th>Celular</th><th>Valor</th><th>Estado</th><th>Mensaje</th></tr></thead>
+                    <tbody>
+                    {% for c in cola %}
+                    <tr><td><strong>{{ c.nombre }}</strong><br><span class="text-muted">{{ c.identificacion }}</span></td><td>{{ c.conjunto_residencial or '' }}<br><span class="text-muted">{{ c.torre_apto or '' }}</span></td><td><code>+57{{ c.telefono }}</code></td><td>${{ "{:,.0f}".format(c.saldo_calculado or 0).replace(",", ".") }}</td><td><span class="badge bg-secondary">{{ c.estado }}</span></td><td class="text-truncate" style="max-width:340px" title="{{ c.mensaje_texto }}">{{ c.mensaje_texto }}</td></tr>
+                    {% else %}<tr><td colspan="6" class="text-center text-muted py-4">No hay mensajes en la cola.</td></tr>{% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+    </div>
+
+    <div class="card p-3">
+        <h5 class="fw-bold mb-3">Plantillas de cobranza</h5>
+        <div class="accordion" id="accordionPlantillas">
+            {% for p in plantillas %}
+            <div class="accordion-item">
+                <h2 class="accordion-header"><button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ p.id }}">{{ p.nombre }} <span class="badge bg-secondary ms-2">{{ p.tipo }}</span></button></h2>
+                <div id="collapse{{ p.id }}" class="accordion-collapse collapse" data-bs-parent="#accordionPlantillas">
+                    <div class="accordion-body">
+                        <form action="/sms/plantillas/guardar" method="POST"><input type="hidden" name="tipo" value="{{ p.tipo }}"><textarea name="cuerpo" class="form-control" rows="3">{{ p.cuerpo_template }}</textarea><div class="form-text small">Variables: <code>{nombre}</code>, <code>{conjunto}</code>, <code>{unidad}</code>, <code>{saldo}</code>, <code>{telefono_wa}</code>.</div><button type="submit" class="btn btn-primary btn-sm mt-2">Guardar cambios</button></form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
         </div>
     </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-function actualizarSeleccion(cb){ cb.closest('tr').classList.toggle('selected', cb.checked); actualizarContador(); }
-function seleccionarVisibles(marcar){ document.querySelectorAll('.selector-candidato').forEach(cb=>{ const row=cb.closest('tr'); if(row && row.style.display !== 'none'){ cb.checked=marcar; row.classList.toggle('selected', marcar); }}); actualizarContador(); }
-function actualizarContador(){ document.getElementById('contadorSeleccion').textContent = document.querySelectorAll('.selector-candidato:checked').length; }
+const whatsappOficial = "+57{{ whatsapp_oficial }}";
+const plantillas = {
+{% for p in plantillas %}
+"{{ p.tipo }}": {{ p.cuerpo_template|tojson|safe }},{% endfor %}
+};
+let wizardItems = [];
+let pasoActual = 1;
+
+function fmtSaldo(v){ return new Intl.NumberFormat('es-CO',{maximumFractionDigits:0}).format(Number(v||0)); }
+function reemplazarPlantilla(template,c){
+  return String(template||'')
+    .replaceAll('{nombre}',c.nombre||'')
+    .replaceAll('{conjunto}',c.conjunto||'')
+    .replaceAll('{unidad}',c.unidad||'')
+    .replaceAll('{saldo}',fmtSaldo(c.saldo))
+    .replaceAll('{telefono_wa}',whatsappOficial);
+}
+function leerCandidatos(){
+  const rows=[...document.querySelectorAll('.candidate-row')];
+  return rows.filter(r=>r.querySelector('.selector-candidato')?.checked).map(r=>({
+    contacto_id:Number(r.dataset.contactoId),nombre:r.dataset.nombre,identificacion:r.dataset.identificacion,telefono:r.dataset.telefono,
+    radicado:r.dataset.radicado,naturaleza:r.dataset.naturaleza,etapa:r.dataset.etapa,cartera:r.dataset.cartera,
+    inmueble_id:r.dataset.inmuebleId?Number(r.dataset.inmuebleId):null,conjunto:r.dataset.conjunto,unidad:r.dataset.unidad,
+    saldo:Number(r.dataset.saldo||0),fuente:r.dataset.fuente||'SIN_VALOR'
+  }));
+}
+function actualizarContador(){ document.getElementById('contadorSeleccion').textContent=document.querySelectorAll('.selector-candidato:checked').length; }
+function actualizarSeleccion(cb){ cb.closest('tr').classList.toggle('selected',cb.checked); actualizarContador(); }
+function seleccionarVisibles(marcar){ document.querySelectorAll('.selector-candidato').forEach(cb=>{cb.checked=marcar; cb.closest('tr')?.classList.toggle('selected',marcar)}); actualizarContador(); }
+function irPaso(n){ pasoActual=n; [1,2,3].forEach(i=>document.getElementById('step'+i).classList.toggle('active',i===n)); [1,2,3].forEach(i=>{const p=document.getElementById('pill'+i);p.className='step-pill '+(i<n?'done':i===n?'active':'todo');}); window.scrollTo({top:0,behavior:'smooth'}); }
+function irPaso2(){
+  wizardItems=leerCandidatos();
+  if(!wizardItems.length){ alert('Selecciona al menos un destinatario.'); return; }
+  const tipo=document.getElementById('tipoCampana').value;
+  wizardItems=wizardItems.map(c=>({...c,mensaje_texto:reemplazarPlantilla(plantillas[tipo]||'',c)}));
+  renderReview(); irPaso(2);
+}
+function renderReview(){
+  const box=document.getElementById('reviewList'); document.getElementById('step2Count').textContent=`${wizardItems.length} mensajes`;
+  box.innerHTML=wizardItems.map((c,i)=>`<div class="review-card ${i===0?'active':''}" id="review-${c.contacto_id}">
+    <div class="d-flex justify-content-between align-items-start gap-2"><div><strong>${escapeHtml(c.nombre)}</strong><div class="small text-muted">CC/NIT ${escapeHtml(c.identificacion)} · <code>+57${escapeHtml(c.telefono)}</code></div><div class="small mt-1"><span class="badge bg-light text-dark border">${escapeHtml(c.radicado)}</span> <span class="badge bg-light text-dark border">${escapeHtml(c.fuente)}</span> ${c.saldo?`<span class="badge bg-light text-dark border">$${fmtSaldo(c.saldo)}</span>`:''}</div></div><button class="btn btn-sm btn-outline-danger" onclick="retirar(${c.contacto_id})"><i class="bi bi-x-lg"></i> Retirar</button></div>
+    <textarea class="form-control mt-3 mensaje-editor" rows="4" data-id="${c.contacto_id}" oninput="actualizarMensaje(${c.contacto_id},this.value)">${escapeHtml(c.mensaje_texto)}</textarea>
+    <div class="small text-muted mt-2">Proceso: ${escapeHtml(c.naturaleza||'')} · Etapa: ${escapeHtml(c.etapa||'')}</div>
+  </div>`).join('');
+  if(wizardItems[0]) seleccionarPreview(wizardItems[0]);
+  document.querySelectorAll('.review-card').forEach((el,idx)=>el.addEventListener('click',()=>{ if(wizardItems[idx]) seleccionarPreview(wizardItems[idx]); }));
+}
+function actualizarMensaje(id,texto){ const x=wizardItems.find(x=>x.contacto_id===id); if(x)x.mensaje_texto=texto; seleccionarPreview(x); }
+function retirar(id){ wizardItems=wizardItems.filter(x=>x.contacto_id!==id); renderReview(); if(!wizardItems.length) irPaso(1); }
+function seleccionarPreview(c){ if(!c)return; document.getElementById('phoneRecipient').textContent=`${c.nombre} · +57${c.telefono}`; document.getElementById('phoneBubble').textContent=c.mensaje_texto||''; document.querySelectorAll('.review-card').forEach(e=>e.classList.remove('active')); document.getElementById(`review-${c.contacto_id}`)?.classList.add('active'); }
+function irPaso3(){ if(!wizardItems.length){alert('No hay mensajes para enviar.');return;} document.getElementById('summaryBox').innerHTML=`<div class="col-md-4"><div class="border rounded p-3"><div class="small text-muted">DESTINATARIOS</div><div class="fs-3 fw-bold">${wizardItems.length}</div></div></div><div class="col-md-4"><div class="border rounded p-3"><div class="small text-muted">CAMPAÑA</div><div class="fw-bold">${escapeHtml(document.getElementById('tipoCampana').value)}</div></div></div><div class="col-md-4"><div class="border rounded p-3"><div class="small text-muted">ACCION</div><div class="fw-bold">Crear cola SMS</div></div></div>`; document.getElementById('sendResult').innerHTML=''; irPaso(3); }
+async function confirmarCola(){
+  const btn=document.getElementById('btnConfirmar'); btn.disabled=true; btn.innerHTML='<span class="spinner-border spinner-border-sm me-2"></span>Creando cola...';
+  const params=new URLSearchParams(window.location.search);
+  const payload={tipo_campana:document.getElementById('tipoCampana').value,tipo_cartera:params.get('tipo_cartera')||'',saldo_minimo:Number(params.get('saldo_minimo')||0),saldo_maximo:params.get('saldo_maximo')?Number(params.get('saldo_maximo')):null,mensajes:wizardItems.map(x=>({contacto_id:x.contacto_id,mensaje_texto:x.mensaje_texto}))};
+  try{ const r=await fetch('/sms/wizard/confirmar-cola',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await r.json(); if(!r.ok) throw new Error(data.detail||data.error||'No fue posible crear la cola.'); document.getElementById('sendResult').innerHTML=`<div class="alert alert-success"><strong>${data.insertados}</strong> mensajes quedaron en cola. El Worker Android los procesará automáticamente.${data.omitidos?.length?`<hr><strong>Omitidos:</strong> ${data.omitidos.map(x=>escapeHtml(x.motivo)).join('<br>')}`:''}</div>`; wizardItems=[]; }catch(e){document.getElementById('sendResult').innerHTML=`<div class="alert alert-danger">${escapeHtml(e.message||String(e))}</div>`;} finally{btn.disabled=false;btn.innerHTML='<i class="bi bi-send-check"></i> Enviar a cola';}}
+function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[m]));}
 actualizarContador();
 </script>
 </body>
