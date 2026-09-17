@@ -51,6 +51,51 @@ def _column_exists(cur, table_name: str, column_name: str) -> bool:
     return bool(row[0] if row else False)
 
 
+def _ensure_contactos_identificacion_unique(cur) -> None:
+    """Garantiza la unicidad de la identidad base usada por ON CONFLICT.
+
+    La aplicación trata contactos.identificacion como identificador único.
+    Antes de crear la restricción se valida que no existan duplicados para no
+    alterar datos ni ocultar inconsistencias durante el arranque.
+    """
+    cur.execute(
+        """
+        SELECT identificacion, COUNT(*)
+        FROM contactos
+        WHERE identificacion IS NOT NULL
+        GROUP BY identificacion
+        HAVING COUNT(*) > 1
+        LIMIT 1
+        """
+    )
+    duplicate = cur.fetchone()
+    if duplicate:
+        raise RuntimeError(
+            "Existen identificaciones duplicadas en contactos; "
+            f"no se puede crear la unicidad: {duplicate[0]} ({duplicate[1]} registros)"
+        )
+
+    cur.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND tablename = 'contactos'
+                  AND indexdef ILIKE 'CREATE UNIQUE INDEX%'
+                  AND indexdef ILIKE '%(identificacion)%'
+            ) THEN
+                ALTER TABLE public.contactos
+                    ADD CONSTRAINT uq_contactos_identificacion UNIQUE (identificacion);
+            END IF;
+        END
+        $$;
+        """
+    )
+
+
 def _create_partes_indexes(cur) -> None:
     cur.execute(
         """
@@ -228,6 +273,7 @@ def ensure_schema() -> None:
                 if not _column_exists(cur, "procesos", column):
                     raise RuntimeError(f"Falta columna procesos.{column}")
 
+            _ensure_contactos_identificacion_unique(cur)
             _create_partes_indexes(cur)
             _create_triggers(cur)
             backfilled = _backfill_legacy_processes(cur)
