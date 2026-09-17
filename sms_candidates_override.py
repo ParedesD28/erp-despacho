@@ -190,8 +190,19 @@ def install() -> None:
     import sms_router
     _ensure_sms_candidate_indexes()
     sms_router._candidatos_cartera = candidatos_cartera
+
+    if not getattr(sms_router, "_sms_reclamo_unitario", False):
+        original_reclamar = sms_router._reclamar_lote
+
+        def reclamar_uno(cur, limite: int):
+            """Compatibilidad de seguridad: nunca reclamar más de un SMS."""
+            return original_reclamar(cur, 1)
+
+        sms_router._reclamar_lote = reclamar_uno
+        sms_router._sms_reclamo_unitario = True
+
     print(
         "✅ [SMS CANDIDATOS] Selector normalizado activo: proceso_partes -> contactos | "
-        "demandados con proceso vigente + teléfono | bloqueo 24h",
+        "demandados con proceso vigente + teléfono | bloqueo 24h | reclamo unitario",
         flush=True,
     )
