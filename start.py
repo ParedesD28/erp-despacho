@@ -56,6 +56,13 @@ if __name__ == "__main__":
     # la capa de acceso, no fuerza una conexión contra Neon.
     db.install_psycopg2_pool()
 
+    # La estructura normalizada y la unicidad de contactos deben estar listas
+    # antes de aceptar tráfico. Antes se ejecutaban en segundo plano y dejaban
+    # una ventana en la que /crear_expediente_completo podía fallar.
+    log_msg("🔧 [BOOTSTRAP]", "Verificando esquema de procesos y contactos antes del tráfico...")
+    proceso_partes_service.ensure_schema()
+    log_msg("✅ [BOOTSTRAP]", "Esquema de procesos y contactos verificado.")
+
     # Las lecturas normalizadas se activan antes de aceptar tráfico.
     proceso_partes_runtime.install()
 
