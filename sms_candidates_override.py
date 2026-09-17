@@ -41,28 +41,28 @@ def candidatos_cartera(
     params: List[Any] = list(saldo_params)
 
     where = [
-        "c.telefono IS NOT NULL",
-        "TRIM(c.telefono) <> ''",
-        "regexp_replace(c.telefono, '[^0-9]', ' ', 'g') ~ '(^| )3[0-9]{9}( |$)'",
+        "base.telefono IS NOT NULL",
+        "TRIM(base.telefono) <> ''",
+        "regexp_replace(base.telefono, '[^0-9]', ' ', 'g') ~ '(^| )3[0-9]{9}( |$)'",
         "NOT EXISTS ("
         " SELECT 1 FROM sms_cola_envios prev"
-        " WHERE prev.contacto_id = c.id"
+        " WHERE prev.contacto_id = base.contacto_id"
         "   AND prev.estado = 'ENVIADO'"
         "   AND prev.fecha_envio >= NOW() - INTERVAL '24 hours'"
         ")",
         "NOT EXISTS ("
         " SELECT 1 FROM sms_cola_envios cola"
-        " WHERE cola.contacto_id = c.id"
+        " WHERE cola.contacto_id = base.contacto_id"
         "   AND cola.estado IN ('PENDIENTE','EN_PROCESO')"
         ")",
         f"{saldo_where}",
     ]
 
     if cartera:
-        where.append("COALESCE(v.tipo_cartera, 'PREJURIDICO') = %s")
+        where.append("COALESCE(base.tipo_cartera, 'PREJURIDICO') = %s")
         params.append(cartera)
     if ids:
-        where.append("c.id = ANY(%s)")
+        where.append("base.contacto_id = ANY(%s)")
         params.append(ids)
 
     query = f"""
@@ -147,22 +147,22 @@ def candidatos_cartera(
             LEFT JOIN saldo_obligaciones so ON so.identificacion_deudor = c.identificacion
         )
         SELECT
-            contacto_id,
-            identificacion,
-            nombre,
-            telefono,
-            radicado_interno,
-            naturaleza,
-            etapa_actual,
-            tipo_cartera,
-            inmueble_id,
-            COALESCE(conjunto_residencial, 'Proceso ' || radicado_interno) AS conjunto_residencial,
-            COALESCE(torre_apto, '') AS torre_apto,
-            saldo_total,
-            saldo_fuente
+            base.contacto_id,
+            base.identificacion,
+            base.nombre,
+            base.telefono,
+            base.radicado_interno,
+            base.naturaleza,
+            base.etapa_actual,
+            base.tipo_cartera,
+            base.inmueble_id,
+            COALESCE(base.conjunto_residencial, 'Proceso ' || base.radicado_interno) AS conjunto_residencial,
+            COALESCE(base.torre_apto, '') AS torre_apto,
+            base.saldo_total,
+            base.saldo_fuente
         FROM base
         WHERE {' AND '.join(where)}
-        ORDER BY nombre ASC, contacto_id ASC;
+        ORDER BY base.nombre ASC, base.contacto_id ASC;
     """
 
     cur.execute(query, params)
