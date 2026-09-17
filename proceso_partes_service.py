@@ -75,9 +75,6 @@ def _ensure_contactos_identificacion_unique(cur) -> None:
             f"no se puede crear la unicidad: {duplicate[0]} ({duplicate[1]} registros)"
         )
 
-    # Un índice UNIQUE es suficiente para ON CONFLICT y evita depender del nombre
-    # o del estado previo de una constraint. IF NOT EXISTS permite arrancar de
-    # forma idempotente en despliegues repetidos.
     cur.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_contactos_identificacion_idx
@@ -101,6 +98,23 @@ def _create_partes_indexes(cur) -> None:
     )
 
 
+def _insert_partes_if_missing(cur, radicado: str, contacto_id: int, rol: str, es_principal: bool) -> None:
+    cur.execute(
+        """
+        INSERT INTO proceso_partes (radicado_interno, contacto_id, rol, es_principal)
+        SELECT %s, %s, %s, %s
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM proceso_partes
+            WHERE radicado_interno = %s
+              AND contacto_id = %s
+              AND rol = %s
+        )
+        """,
+        (radicado, contacto_id, rol, es_principal, radicado, contacto_id, rol),
+    )
+
+
 def _create_triggers(cur) -> None:
     """Instala solo la sincronización procesos -> proceso_partes.
 
@@ -117,6 +131,8 @@ def _create_triggers(cur) -> None:
         RETURNS trigger
         LANGUAGE plpgsql
         AS $$
+        DECLARE
+            parte RECORD;
         BEGIN
             IF pg_trigger_depth() > 1 THEN
                 RETURN NEW;
@@ -125,39 +141,47 @@ def _create_triggers(cur) -> None:
             DELETE FROM proceso_partes
             WHERE radicado_interno = NEW.radicado_interno;
 
-            INSERT INTO proceso_partes (radicado_interno, contacto_id, rol, es_principal)
-            SELECT
-                NEW.radicado_interno,
-                c.id,
-                'DEMANDANTE',
-                rn = 1
-            FROM (
+            FOR parte IN
                 SELECT
                     trim(value) AS identificacion,
                     row_number() OVER (ORDER BY ordinality) AS rn
                 FROM regexp_split_to_table(COALESCE(NEW.id_cliente, ''), '\\s*\\|\\s*')
                      WITH ORDINALITY AS s(value, ordinality)
                 WHERE trim(value) <> ''
-            ) d
-            JOIN contactos c ON c.identificacion = d.identificacion
-            ON CONFLICT (radicado_interno, contacto_id, rol) DO NOTHING;
+            LOOP
+                INSERT INTO proceso_partes (radicado_interno, contacto_id, rol, es_principal)
+                SELECT NEW.radicado_interno, c.id, 'DEMANDANTE', parte.rn = 1
+                FROM contactos c
+                WHERE c.identificacion = parte.identificacion
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM proceso_partes pp
+                      WHERE pp.radicado_interno = NEW.radicado_interno
+                        AND pp.contacto_id = c.id
+                        AND pp.rol = 'DEMANDANTE'
+                  );
+            END LOOP;
 
-            INSERT INTO proceso_partes (radicado_interno, contacto_id, rol, es_principal)
-            SELECT
-                NEW.radicado_interno,
-                c.id,
-                'DEMANDADO',
-                rn = 1
-            FROM (
+            FOR parte IN
                 SELECT
                     trim(value) AS identificacion,
                     row_number() OVER (ORDER BY ordinality) AS rn
                 FROM regexp_split_to_table(COALESCE(NEW.id_demandado, ''), '\\s*\\|\\s*')
                      WITH ORDINALITY AS s(value, ordinality)
                 WHERE trim(value) <> ''
-            ) d
-            JOIN contactos c ON c.identificacion = d.identificacion
-            ON CONFLICT (radicado_interno, contacto_id, rol) DO NOTHING;
+            LOOP
+                INSERT INTO proceso_partes (radicado_interno, contacto_id, rol, es_principal)
+                SELECT NEW.radicado_interno, c.id, 'DEMANDADO', parte.rn = 1
+                FROM contactos c
+                WHERE c.identificacion = parte.identificacion
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM proceso_partes pp
+                      WHERE pp.radicado_interno = NEW.radicado_interno
+                        AND pp.contacto_id = c.id
+                        AND pp.rol = 'DEMANDADO'
+                  );
+            END LOOP;
 
             RETURN NEW;
         END;
@@ -195,12 +219,10 @@ def _backfill_legacy_processes(cur) -> int:
 
     cur.execute(
         """
-        INSERT INTO proceso_partes (radicado_interno, contacto_id, rol, es_principal)
         SELECT
             p.radicado_interno,
             c.id,
-            'DEMANDANTE',
-            ROW_NUMBER() OVER (PARTITION BY p.radicado_interno ORDER BY s.ordinality) = 1
+            ROW_NUMBER() OVER (PARTITION BY p.radicado_interno ORDER BY s.ordinality) = 1 AS es_principal
         FROM procesos p
         CROSS JOIN LATERAL regexp_split_to_table(COALESCE(p.id_cliente, ''), '\\s*\\|\\s*')
             WITH ORDINALITY AS s(value, ordinality)
@@ -210,18 +232,17 @@ def _backfill_legacy_processes(cur) -> int:
             FROM proceso_partes pp
             WHERE pp.radicado_interno = p.radicado_interno
         )
-        ON CONFLICT (radicado_interno, contacto_id, rol) DO NOTHING
         """
     )
+    for radicado, contacto_id, es_principal in cur.fetchall():
+        _insert_partes_if_missing(cur, radicado, contacto_id, "DEMANDANTE", bool(es_principal))
 
     cur.execute(
         """
-        INSERT INTO proceso_partes (radicado_interno, contacto_id, rol, es_principal)
         SELECT
             p.radicado_interno,
             c.id,
-            'DEMANDADO',
-            ROW_NUMBER() OVER (PARTITION BY p.radicado_interno ORDER BY s.ordinality) = 1
+            ROW_NUMBER() OVER (PARTITION BY p.radicado_interno ORDER BY s.ordinality) = 1 AS es_principal
         FROM procesos p
         CROSS JOIN LATERAL regexp_split_to_table(COALESCE(p.id_demandado, ''), '\\s*\\|\\s*')
             WITH ORDINALITY AS s(value, ordinality)
@@ -238,9 +259,11 @@ def _backfill_legacy_processes(cur) -> int:
             WHERE pp.radicado_interno = p.radicado_interno
               AND pp.rol = 'DEMANDADO'
         )
-        ON CONFLICT (radicado_interno, contacto_id, rol) DO NOTHING
         """
     )
+    for radicado, contacto_id, es_principal in cur.fetchall():
+        _insert_partes_if_missing(cur, radicado, contacto_id, "DEMANDADO", bool(es_principal))
+
     return pendientes
 
 
