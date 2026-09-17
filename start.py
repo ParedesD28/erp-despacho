@@ -22,6 +22,7 @@ import main
 import proceso_partes_runtime
 import proceso_partes_service
 import security
+import sms_cartera_runtime
 import tasas
 from observability import log_msg
 
@@ -65,6 +66,10 @@ if __name__ == "__main__":
 
     # Las lecturas normalizadas se activan antes de aceptar tráfico.
     proceso_partes_runtime.install()
+
+    # SMS usa contactos + proceso_partes como fuente adicional de candidatos,
+    # sin eliminar el flujo existente de propiedad horizontal.
+    sms_cartera_runtime.install()
 
     # Registro único de las rutas de agenda sobre main.app. No hay lógica de
     # negocio ni duplicación de endpoints dentro del arranque.
