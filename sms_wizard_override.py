@@ -13,7 +13,7 @@ from psycopg2.extras import RealDictCursor
 
 import db
 from sms_candidates_override import candidatos_cartera
-from sms_router import _get_api_token, normalizar_telefono, validar_horario_ley_2300
+from sms_router import normalizar_telefono, validar_horario_ley_2300
 
 
 class WizardMensaje(BaseModel):
@@ -31,13 +31,7 @@ class WizardConfirmacion(BaseModel):
 
 def _mapa_candidatos(cur, data: WizardConfirmacion) -> dict[int, dict[str, Any]]:
     ids = list(dict.fromkeys(int(x.contacto_id) for x in data.mensajes))
-    rows = candidatos_cartera(
-        cur,
-        data.tipo_cartera,
-        data.saldo_minimo,
-        data.saldo_maximo,
-        ids,
-    )
+    rows = candidatos_cartera(cur, data.tipo_cartera, data.saldo_minimo, data.saldo_maximo, ids)
     return {
         int(row["contacto_id"] if isinstance(row, dict) else row[1]): dict(row)
         for row in rows
@@ -59,7 +53,10 @@ def _contactos_bloqueados(cur, ids: list[int]) -> set[int]:
         """,
         (ids,),
     )
-    return {int(row[0]) for row in cur.fetchall()}
+    return {
+        int(row["contacto_id"] if isinstance(row, dict) else row[0])
+        for row in cur.fetchall()
+    }
 
 
 def _conflicto_cola(cur, inmueble_id: Optional[int], telefono: str, tipo_campana: str) -> bool:
@@ -95,12 +92,7 @@ def _confirmar_cola(data: WizardConfirmacion):
     try:
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Bloquea los contactos seleccionados para evitar carreras durante
-                # la confirmación y duplicados PENDIENTE/EN_PROCESO concurrentes.
-                cur.execute(
-                    "SELECT id FROM contactos WHERE id = ANY(%s) FOR UPDATE;",
-                    (ids,),
-                )
+                cur.execute("SELECT id FROM contactos WHERE id = ANY(%s) FOR UPDATE;", (ids,))
 
                 candidatos = _mapa_candidatos(cur, data)
                 bloqueados = _contactos_bloqueados(cur, ids)
@@ -154,16 +146,14 @@ def _confirmar_cola(data: WizardConfirmacion):
                     )
                     row = cur.fetchone()
                     if row:
-                        insertados.append(int(row["id"]))
+                        insertados.append(int(row["id"] if isinstance(row, dict) else row[0]))
 
-        return {
-            "status": "ok",
-            "insertados": len(insertados),
-            "ids": insertados,
-            "omitidos": omitidos,
-        }
+        return {"status": "ok", "insertados": len(insertados), "ids": insertados, "omitidos": omitidos}
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         raise
     finally:
         conn.release()
