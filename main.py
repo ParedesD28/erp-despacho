@@ -1106,6 +1106,13 @@ async def guardar_expediente_estructurado(request: Request):
                         "Un proceso ejecutivo debe tener al menos una obligación financiera vinculada"
                     )
 
+                tipo_proceso_editado = catalogos_service.obtener_tipo_proceso(
+                    cur,
+                    naturaleza,
+                )
+                if not tipo_proceso_editado:
+                    raise ValueError("El procedimiento seleccionado no está configurado")
+
                 rama_form = str(form.get("radicado_rama") or "").strip().upper()
                 if rama_form in {"EN REPARTO", "PREJURIDICO", "PRE-JURIDICO"}:
                     rama_form = ""
@@ -1138,7 +1145,9 @@ async def guardar_expediente_estructurado(request: Request):
 
                 editable = {
                     "radicado_rama": rama,
+                    "estado_rama": estado_rama,
                     "tipo_cartera": tipo_cartera_form,
+                    "tipo_proceso_id": tipo_proceso_editado["id"],
                     "naturaleza": naturaleza,
                     "juzgado": juzgado,
                     "pretensiones": pretensiones,
