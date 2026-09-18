@@ -325,7 +325,10 @@ ALTER TABLE sms_cola_envios
 ALTER TABLE vencimientos
     ADD COLUMN IF NOT EXISTS obligacion_id INTEGER NULL;
 
-DO $$
+ALTER TABLE solicitudes_paz_y_salvo
+    ADD COLUMN IF NOT EXISTS obligacion_id INTEGER NULL;
+
+DO $
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_crm_obligacion') THEN
         ALTER TABLE gestiones_crm
@@ -356,7 +359,13 @@ BEGIN
             ADD CONSTRAINT fk_vencimiento_obligacion
             FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
     END IF;
-END $$;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_paz_salvo_obligacion') THEN
+        ALTER TABLE solicitudes_paz_y_salvo
+            ADD CONSTRAINT fk_paz_salvo_obligacion
+            FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
+    END IF;
+END $;
 
 CREATE INDEX IF NOT EXISTS idx_gestiones_crm_obligacion
     ON gestiones_crm(obligacion_id,fecha DESC);
@@ -368,6 +377,8 @@ CREATE INDEX IF NOT EXISTS idx_sms_obligacion
     ON sms_cola_envios(obligacion_id,estado);
 CREATE INDEX IF NOT EXISTS idx_vencimientos_obligacion
     ON vencimientos(obligacion_id,fecha_vencimiento);
+CREATE INDEX IF NOT EXISTS idx_paz_salvo_obligacion
+    ON solicitudes_paz_y_salvo(obligacion_id);
 
 -- Backfill seguro cuando la relación proceso -> obligación es unívoca.
 UPDATE gestiones_crm g
@@ -395,6 +406,13 @@ SET obligacion_id=po.obligacion_id
 FROM proceso_obligaciones po
 WHERE v.obligacion_id IS NULL
   AND v.radicado_interno=po.radicado_interno;
+
+UPDATE solicitudes_paz_y_salvo s
+SET obligacion_id=r.obligacion_id
+FROM recaudos_contabilidad r
+WHERE s.obligacion_id IS NULL
+  AND s.recaudo_id=r.id
+  AND r.obligacion_id IS NOT NULL;
 
 -- No se vinculan automáticamente acuerdos antiguos sin inmueble/proceso,
 -- porque su identificación actual no permite una relación inequívoca.
