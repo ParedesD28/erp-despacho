@@ -171,7 +171,7 @@ async def reportar_abono_agente(request: Request):
                     FROM acuerdos_pago 
                     WHERE obligacion_id = %s AND estado = 'PENDIENTE'
                     ORDER BY id DESC LIMIT 1;
-                """, (inmueble_id,))
+                """, (obligacion_id,))
                 ac = cur.fetchone()
                 if ac:
                     if ac["cuota_actual"] >= ac["numero_cuotas"]:
@@ -195,7 +195,7 @@ async def reportar_abono_agente(request: Request):
                             inmueble_id, obligacion_id, identificacion_deudor, nombre_deudor,
                             conjunto_residencial, torre_apto, recaudo_id, estado
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'PENDIENTE_REVISION');
-                    """, (inmueble_id, inm["identificacion"], inm["nombre"], inm["conjunto_residencial"], inm["torre_apto"], recaudo_id))
+                    """, (inmueble_id, obligacion_id, inm["identificacion"], inm["nombre"], inm["conjunto_residencial"], inm["torre_apto"], recaudo_id))
             solicitud_creada = True
 
         return JSONResponse({
@@ -268,9 +268,14 @@ def aprobar_paz_y_salvo_humano(solicitud_id: int, request: Request, usuario_apro
                 # Asentar en CRM
                 cur.execute("""
                     INSERT INTO gestiones_crm (
-                        inmueble_id, identificacion_deudor, tipo_contacto, resumen, usuario, estado
+                        inmueble_id, obligacion_id, identificacion_deudor,
+                        tipo_contacto, resumen, usuario, estado
                     ) VALUES (%s, %s, %s, 'Paz y Salvo Aprobado', %s, %s, 'FINALIZADO');
-                """, (sol["inmueble_id"], sol["obligacion_id"], sol["identificacion_deudor"], f"Paz y Salvo APROBADO por {usuario_aprobador}. Código verificación: {codigo_verif}", usuario_aprobador))
+                """, (
+                    sol["inmueble_id"], sol["obligacion_id"], sol["identificacion_deudor"],
+                    f"Paz y Salvo APROBADO por {usuario_aprobador}. Código verificación: {codigo_verif}",
+                    usuario_aprobador,
+                ))
 
         return JSONResponse({
             "status": "success",
