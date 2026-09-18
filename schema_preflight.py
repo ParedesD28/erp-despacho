@@ -61,7 +61,10 @@ def _table_columns(cur, table: str) -> set[str]:
     return {str(row[0]).lower() for row in cur.fetchall()}
 
 
-def verify(required_version: str | None = "20260918_proceso_obligacion_base") -> None:
+def verify(required_versions: tuple[str, ...] = (
+    "20260918_runtime_schema_base",
+    "20260918_proceso_obligacion_base",
+)) -> None:
     conn = db.get_connection()
     try:
         with conn.cursor() as cur:
@@ -119,7 +122,7 @@ def verify(required_version: str | None = "20260918_proceso_obligacion_base") ->
                     "[SCHEMA PREFLIGHT] Falta unicidad de radicados Rama reales"
                 )
 
-            if required_version:
+            for required_version in required_versions:
                 cur.execute(
                     """
                     SELECT 1
