@@ -94,6 +94,17 @@ CREATE INDEX IF NOT EXISTS idx_acuerdos_pago_cuotas_fecha
 CREATE INDEX IF NOT EXISTS idx_acuerdos_pago_obligacion
     ON acuerdos_pago(obligacion_id);
 
+INSERT INTO acuerdos_pago_cuotas (
+    acuerdo_id, numero_cuota, fecha_vencimiento, valor_cuota, abogado_id
+)
+SELECT
+    a.id, 1, a.fecha_compromiso, a.valor_acordado, a.abogado_id
+FROM acuerdos_pago a
+WHERE NOT EXISTS (
+    SELECT 1 FROM acuerdos_pago_cuotas c
+    WHERE c.acuerdo_id=a.id
+);
+
 CREATE TABLE IF NOT EXISTS agenda_auditoria (
     id BIGSERIAL PRIMARY KEY,
     fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -190,7 +201,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 INSERT INTO schema_migrations(version)
-VALUES ('20260918_runtime_schema_base')
+VALUES ('20260918_00_runtime_schema_base')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
