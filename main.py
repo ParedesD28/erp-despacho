@@ -440,14 +440,7 @@ def procesos(request: Request):
             contrapartes = [dict(r) for r in cur.fetchall()]
             cur.execute("SELECT id, nombre FROM abogados ORDER BY nombre")
             abogados = [dict(r) for r in cur.fetchall()]
-            cur.execute("""
-                SELECT DISTINCT conjunto_residencial
-                FROM inmuebles_ph
-                WHERE NULLIF(TRIM(conjunto_residencial), '') IS NOT NULL
-                  AND UPPER(TRIM(conjunto_residencial)) <> 'SIN CONJUNTO'
-                ORDER BY conjunto_residencial
-            """)
-            conjuntos = [str(r["conjunto_residencial"]) for r in cur.fetchall()]
+            conjuntos = [r["nombre"] for r in _listar_conjuntos(cur)]
         return render_template("procesos.html", {
             "request": request,
             "contactos_clientes": clientes,
@@ -902,11 +895,46 @@ def eliminar_actuacion(actuacion_id: int, radicado_interno: str):
 # ==============================================================================
 # CRM (GESTIÓN EXTRAJUDICIAL Y ANULACIÓN AUDITABLE)
 # ==============================================================================
+def _ensure_conjuntos_schema(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS conjuntos_residenciales (
+            id BIGSERIAL PRIMARY KEY,
+            nombre VARCHAR(255) NOT NULL UNIQUE,
+            activo BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        INSERT INTO conjuntos_residenciales (nombre)
+        SELECT DISTINCT TRIM(conjunto_residencial)
+        FROM inmuebles_ph
+        WHERE NULLIF(TRIM(conjunto_residencial), '') IS NOT NULL
+          AND UPPER(TRIM(conjunto_residencial)) <> 'SIN CONJUNTO'
+        ON CONFLICT (nombre) DO NOTHING
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_conjuntos_residenciales_activo_nombre
+        ON conjuntos_residenciales (activo, nombre)
+    """)
+
+
+def _listar_conjuntos(cur):
+    _ensure_conjuntos_schema(cur)
+    cur.execute("""
+        SELECT id, nombre
+        FROM conjuntos_residenciales
+        WHERE activo=TRUE
+        ORDER BY nombre
+    """)
+    return [dict(r) for r in cur.fetchall()]
+
+
 def _ensure_crm_and_vencimientos_schema():
     conn = db.get_connection()
     try:
         with conn:
             with conn.cursor() as cur:
+                _ensure_conjuntos_schema(cur)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS gestiones_crm (
                         id BIGSERIAL PRIMARY KEY,
@@ -979,18 +1007,38 @@ def startup_schema_init():
     print("[STARTUP] Esquema verificado y asegurado correctamente.", flush=True)
 
 
+@app.post("/crm/conjuntos/guardar")
+def crm_conjunto_guardar(nombre: str = Form(...)):
+    nombre = " ".join(str(nombre or "").strip().split())
+    if not nombre:
+        return _redirect("/crm", error="El+nombre+del+conjunto+es+obligatorio")
+    if nombre.upper() == "SIN CONJUNTO":
+        return _redirect("/crm", error="No+puedes+crear+SIN+CONJUNTO+como+conjunto")
+    _ensure_crm_and_vencimientos_schema()
+    conn = db.get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO conjuntos_residenciales (nombre)
+                    VALUES (%s)
+                    ON CONFLICT (nombre) DO UPDATE SET activo=TRUE
+                """, (nombre,))
+        return _redirect("/crm", mensaje="Conjunto+creado+correctamente")
+    except Exception as exc:
+        print(f"[CRM][CONJUNTOS] Error creando conjunto: {exc!r}", flush=True)
+        return _redirect("/crm", error="No+fue+posible+crear+el+conjunto")
+    finally:
+        conn.release()
+
+
 @app.get("/crm")
 def crm(request: Request, buscar_inmueble: str | None = None):
     conn = db.get_connection()
     try:
         inmuebles = cargar_inmuebles_ph(conn)
-        conjuntos = sorted({
-        str(x.get("conjunto_residencial")).strip()
-        for x in inmuebles
-        if x.get("conjunto_residencial")
-        and str(x.get("conjunto_residencial")).strip()
-        and str(x.get("conjunto_residencial")).strip().upper() != "SIN CONJUNTO"
-    })
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            conjuntos = [r["nombre"] for r in _listar_conjuntos(cur)]
         filtro = {}
         for item in inmuebles:
             filtro.setdefault(item.get("conjunto_residencial") or "SIN CONJUNTO", []).append({
