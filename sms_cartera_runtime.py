@@ -48,9 +48,12 @@ def _install_candidate_query() -> None:
             "   AND prev.estado = 'ENVIADO'"
             "   AND prev.fecha_envio >= NOW() - INTERVAL '24 hours'"
             ")",
+            "NOT EXISTS ("
+            " SELECT 1 FROM sms_cola_envios cola"
+            " WHERE cola.contacto_id = c.id"
+            "   AND cola.estado IN ('PENDIENTE','EN_PROCESO')"
+            ")",
         ]
-        if saldo_maximo is not None:
-            where.append("COALESCE(p.pretensiones, 0) <= %s")
         if cartera:
             where.append("COALESCE(p.tipo_cartera,'PREJURIDICO') = %s")
             params.append(cartera)
