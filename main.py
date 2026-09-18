@@ -166,6 +166,23 @@ def _redirect(path: str, **params) -> RedirectResponse:
     return RedirectResponse(url=f"{path}{sep}{query}", status_code=303)
 
 
+def _generar_radicado_interno(cur) -> str:
+    """Genera el ID interno secuencial EXP-xxxx, independiente del radicado Rama."""
+    cur.execute("SELECT pg_advisory_xact_lock(%s)", (71302541,))
+    cur.execute(
+        """
+        SELECT COALESCE(
+            MAX(CAST(SUBSTRING(radicado_interno FROM 5) AS BIGINT)),
+            0
+        )
+        FROM procesos
+        WHERE radicado_interno ~ '^EXP-[0-9]+$'
+        """
+    )
+    row = cur.fetchone()
+    ultimo = int(row[0] or 0) if row else 0
+    return f"EXP-{ultimo + 1:04d}"
+
 def cargar_inmuebles_ph(conn=None) -> list[dict]:
     external_conn = conn is not None
     if not external_conn:
@@ -431,7 +448,8 @@ def procesos(request: Request):
 @app.post("/crear_expediente_completo")
 async def crear_expediente_completo(request: Request):
     form = await request.form()
-    radicado_rama = str(form.get("radicado_rama", "")).strip()
+    tipo_cartera = str(form.get("tipo_cartera") or "JURIDICO").strip().upper()
+    radicado_rama = str(form.get("radicado_rama") or "").strip()
     naturaleza = str(form.get("naturaleza", "")).strip()
     juzgado = f"{form.get('juzgado_numero','')} {form.get('juzgado_tipo','')} - {form.get('juzgado_ciudad','')}".strip()
     apto = str(form.get("apto", "")).strip()
@@ -449,8 +467,12 @@ async def crear_expediente_completo(request: Request):
     demandados, nuevos_ddo = split_values("demandados_existentes", "nuevo_ddo_id", "nuevo_ddo_nombre")
     demandantes += [x[0] for x in nuevos_dem]
     demandados += [x[0] for x in nuevos_ddo]
-    if not radicado_rama or not demandantes or not demandados:
+
+    if not demandantes or not demandados:
         return _redirect("/procesos", error="Debe+seleccionar+al+menos+un+demandante+y+un+demandado")
+
+    if tipo_cartera == "JURIDICO":
+        radicado_rama = radicado_rama or "EN REPARTO"
 
     conn = db.get_connection()
     try:
@@ -468,9 +490,29 @@ async def crear_expediente_completo(request: Request):
                         "ON CONFLICT (identificacion) DO UPDATE SET nombre=EXCLUDED.nombre",
                         (ident, nombre),
                     )
-                cur.execute("SELECT 1 FROM procesos WHERE radicado_rama=%s LIMIT 1", (radicado_rama,))
-                if cur.fetchone():
-                    return _redirect("/procesos", error="El+radicado+Rama+Judicial+ya+existe")
+
+                radicado_interno = _generar_radicado_interno(cur)
+                if tipo_cartera == "PREJURIDICO" and (not radicado_rama or radicado_rama.upper() == "EN REPARTO"):
+                    radicado_rama = f"PREJ-{radicado_interno}"
+
+                if tipo_cartera == "JURIDICO" and radicado_rama.upper() != "EN REPARTO":
+                    cur.execute(
+                        "SELECT 1 FROM procesos WHERE radicado_rama=%s LIMIT 1",
+                        (radicado_rama,),
+                    )
+                    if cur.fetchone():
+                        raise ValueError("El radicado Rama Judicial ya existe")
+
+                all_ids = list(dict.fromkeys(demandantes + demandados))
+                placeholders = ",".join(["%s"] * len(all_ids))
+                cur.execute(
+                    f"SELECT identificacion, nombre FROM contactos WHERE identificacion IN ({placeholders})",
+                    all_ids,
+                )
+                nombres = {str(r[0]): str(r[1] or "") for r in cur.fetchall()}
+                faltantes = [ident for ident in all_ids if ident not in nombres]
+                if faltantes:
+                    raise RuntimeError("Hay partes seleccionadas que no existen en Contactos")
 
                 cliente = demandantes[0]
                 cur.execute(
@@ -479,10 +521,12 @@ async def crear_expediente_completo(request: Request):
                 )
                 row = cur.fetchone()
                 conjunto = row[0] if row else "SIN CONJUNTO"
+
                 cur.execute("SELECT id FROM contactos WHERE identificacion=%s", (demandados[0],))
                 ddo = cur.fetchone()
                 if not ddo:
                     raise RuntimeError("Demandado no existe")
+
                 cur.execute(
                     "INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) VALUES (%s,%s,%s) RETURNING id",
                     (ddo[0], conjunto, apto),
@@ -491,15 +535,17 @@ async def crear_expediente_completo(request: Request):
 
                 cols = expedientes_service._cols(cur, "procesos")
                 data = {
-                    "radicado_interno": radicado_rama,
+                    "radicado_interno": radicado_interno,
                     "radicado_rama": radicado_rama,
+                    "tipo_cartera": tipo_cartera,
                     "naturaleza": naturaleza,
                     "juzgado": juzgado,
                     "estado": "Activo",
                     "id_demandado": " | ".join(demandados),
-                    "demandado": " | ".join(demandados),
+                    "demandado": " | ".join(nombres.get(x, x) for x in demandados),
                     "inmueble_id": inmueble_id,
-                    "id_cliente": cliente,
+                    "id_cliente": " | ".join(demandantes),
+                    "demandante": " | ".join(nombres.get(x, x) for x in demandantes),
                     "pretensiones": pretensiones,
                     "medidas_cautelares": medidas,
                     "abogado_id": abogado_id,
@@ -509,19 +555,21 @@ async def crear_expediente_completo(request: Request):
                     f"INSERT INTO procesos ({', '.join(usable)}) VALUES ({', '.join(['%s']*len(usable))})",
                     [data[c] for c in usable],
                 )
+
                 if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
                     lit_cols = expedientes_service._cols(cur, "procesos_litisconsorcio")
                     for ident in demandados:
-                        payload = {"radicado_interno": radicado_rama, "identificacion_demandado": ident}
+                        payload = {"radicado_interno": radicado_interno, "identificacion_demandado": ident}
                         use = [c for c in payload if c in lit_cols]
                         cur.execute(
                             f"INSERT INTO procesos_litisconsorcio ({', '.join(use)}) VALUES ({', '.join(['%s']*len(use))})",
                             [payload[c] for c in use],
                         )
+
                 if expedientes_service._table_exists(cur, "actuaciones"):
                     act_cols = expedientes_service._cols(cur, "actuaciones")
                     payload = {
-                        "radicado_interno": radicado_rama,
+                        "radicado_interno": radicado_interno,
                         "fecha": date.today(),
                         "etapa": "Inicio",
                         "descripcion": "Presentación inicial de la demanda",
@@ -533,9 +581,15 @@ async def crear_expediente_completo(request: Request):
                         f"INSERT INTO actuaciones ({', '.join(use)}) VALUES ({', '.join(['%s']*len(use))})",
                         [payload[c] for c in use],
                     )
+
+                print(
+                    f"[RADICACION] ID interno={radicado_interno} | "
+                    f"radicado_rama={radicado_rama} | tipo={tipo_cartera}",
+                    flush=True,
+                )
         return _redirect("/expedientes", mensaje="Proceso+creado+exitosamente")
     except Exception as exc:
-        print(f"[PROCESOS] Error creando expediente: {exc}", flush=True)
+        print(f"[PROCESOS] Error creando expediente: {exc!r}", flush=True)
         return _redirect("/procesos", error="No+fue+posible+crear+el+expediente")
     finally:
         conn.release()
@@ -696,10 +750,13 @@ async def guardar_expediente_estructurado(request: Request):
                     "demandados": [dict(x) for x in expedientes_service._get_demandados(cur, radicado)],
                 }
 
+                tipo_cartera_form = str(form.get("tipo_cartera") or proceso.get("tipo_cartera") or "JURIDICO").strip().upper()
                 rama = str(form.get("radicado_rama") or "").strip()
-                if not rama:
-                    raise ValueError("El radicado Rama Judicial es obligatorio")
-                if "radicado_rama" in cols:
+                if tipo_cartera_form == "JURIDICO" and not rama:
+                    rama = "EN REPARTO"
+                if tipo_cartera_form != "JURIDICO" and not rama:
+                    rama = proceso.get("radicado_rama") or None
+                if "radicado_rama" in cols and rama and rama.upper() != "EN REPARTO":
                     cur.execute(
                         "SELECT 1 FROM procesos WHERE radicado_rama=%s AND radicado_interno<>%s LIMIT 1",
                         (rama, radicado),
@@ -719,6 +776,7 @@ async def guardar_expediente_estructurado(request: Request):
 
                 editable = {
                     "radicado_rama": rama,
+                    "tipo_cartera": tipo_cartera_form,
                     "naturaleza": naturaleza,
                     "juzgado": juzgado,
                     "pretensiones": pretensiones,

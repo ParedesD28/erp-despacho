@@ -38,8 +38,9 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
                     <div>
                         <label id="label-radicado-rama" class="block text-xs font-semibold text-slate-600 uppercase mb-1">Radicado Rama Judicial *</label>
+                        <p class="text-[11px] text-slate-500 mb-1">Este campo es independiente del <strong>ID interno EXP-xxxx</strong>, que el sistema genera automáticamente. <strong>EN REPARTO</strong> puede repetirse en varios expedientes mientras no exista aún el radicado judicial definitivo.</p>
                         <input type="text" id="radicado_rama" name="radicado_rama" value="EN REPARTO" required class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-teal-500 outline-none uppercase font-mono">
-                        <p id="ayuda-radicado" class="text-xs text-slate-500 mt-1 hidden">Para PREJURÍDICO se usa temporalmente un identificador interno. Al pasar a JURÍDICO se reemplaza por el radicado Rama Judicial real.</p>
+                        <p id="ayuda-radicado" class="text-xs text-slate-500 mt-1 hidden">El ID interno EXP-xxxx siempre identifica la cuenta/expediente. En JURÍDICO, este campo corresponde al radicado Rama Judicial; EN REPARTO es válido como estado temporal.</p>
                     </div>
                     <div id="bloque-naturaleza">
                         <label class="block text-xs font-semibold text-slate-600 uppercase mb-1">Naturaleza *</label>

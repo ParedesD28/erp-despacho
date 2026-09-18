@@ -8,6 +8,31 @@ from __future__ import annotations
 import expedientes_service
 
 
+def _value(row, key, index, default=None):
+    if row is None:
+        return default
+    if hasattr(row, "get"):
+        value = row.get(key, default)
+        return default if value is None else value
+    try:
+        return row[index]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
+def _build_party(row):
+    return {
+        "identificacion": _value(row, "identificacion", 0),
+        "nombre": _value(row, "nombre", 1),
+        "tipo": _value(row, "tipo", 2),
+        "telefono": _value(row, "telefono", 3, "") or "",
+        "email": _value(row, "email", 4, "") or "",
+        "direccion": _value(row, "direccion", 5, "") or "",
+        "ciudad": _value(row, "ciudad", 6, "") or "",
+        "es_principal": bool(_value(row, "es_principal", 7, False)),
+    }
+
+
 def _get_demandantes(cur, proceso):
     if not proceso:
         return []
@@ -27,19 +52,7 @@ def _get_demandantes(cur, proceso):
         """,
         (radicado,),
     )
-    return [
-        {
-            "identificacion": row[0],
-            "nombre": row[1],
-            "tipo": row[2],
-            "telefono": row[3] or "",
-            "email": row[4] or "",
-            "direccion": row[5] or "",
-            "ciudad": row[6] or "",
-            "es_principal": bool(row[7]),
-        }
-        for row in cur.fetchall()
-    ]
+    return [_build_party(row) for row in cur.fetchall()]
 
 
 def _get_demandados(cur, radicado):
@@ -59,19 +72,7 @@ def _get_demandados(cur, radicado):
         """,
         (radicado,),
     )
-    return [
-        {
-            "identificacion": row[0],
-            "nombre": row[1],
-            "tipo": row[2],
-            "telefono": row[3] or "",
-            "email": row[4] or "",
-            "direccion": row[5] or "",
-            "ciudad": row[6] or "",
-            "es_principal": bool(row[7]),
-        }
-        for row in cur.fetchall()
-    ]
+    return [_build_party(row) for row in cur.fetchall()]
 
 
 def install() -> None:
