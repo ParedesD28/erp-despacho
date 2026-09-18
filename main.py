@@ -1504,7 +1504,8 @@ def crm(
                         p.tipo_cartera,
                         p.naturaleza,
                         p.estado,
-                        p.pretensiones,
+                        po.obligacion_id,
+                        po.tipo_obligacion,
                         p.inmueble_id,
                         p.id_demandado,
                         p.demandado,
@@ -1512,6 +1513,17 @@ def crm(
                         i.torre_apto
                     FROM procesos p
                     LEFT JOIN inmuebles_ph i ON i.id=p.inmueble_id
+                    LEFT JOIN LATERAL (
+                        SELECT
+                            o.id AS obligacion_id,
+                            tob.nombre AS tipo_obligacion
+                        FROM proceso_obligaciones po0
+                        JOIN obligaciones o ON o.id=po0.obligacion_id
+                        JOIN tipos_obligacion tob ON tob.id=o.tipo_obligacion_id
+                        WHERE po0.radicado_interno=p.radicado_interno
+                        ORDER BY po0.es_principal DESC, po0.id
+                        LIMIT 1
+                    ) po ON TRUE
                     WHERE %s = ANY(
                         string_to_array(replace(COALESCE(p.id_cliente,''), ' ', ''), '|')
                     )
@@ -1635,6 +1647,7 @@ def crm_guardar(
     request: Request,
     radicado_interno: str | None = Form(None),
     inmueble_id: int | None = Form(None),
+    obligacion_id: int | None = Form(None),
     tipo_contacto: str = Form(...),
     resumen: str = Form(...),
     promesa_pago_fecha: date | None = Form(None),
@@ -1644,23 +1657,29 @@ def crm_guardar(
     try:
         with conn:
             with conn.cursor() as cur:
+                if not obligacion_id and radicado_interno:
+                    obligacion = obligaciones_service.obtener_obligacion_principal(cur, radicado_interno)
+                    obligacion_id = int(obligacion["id"]) if obligacion else None
+
                 cur.execute(
                     """
                     INSERT INTO gestiones_crm
                         (
                             radicado_interno,
                             inmueble_id,
+                            obligacion_id,
                             tipo_contacto,
                             resumen,
                             promesa_pago_fecha,
                             identificacion_deudor,
                             usuario
                         )
-                    VALUES (%s, %s, %s, %s, %s, %s, 'ERP')
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'ERP')
                     """,
                     (
                         str(radicado_interno or "").strip() or None,
                         inmueble_id,
+                        obligacion_id,
                         tipo_contacto.strip(),
                         resumen.strip(),
                         promesa_pago_fecha,
