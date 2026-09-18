@@ -246,6 +246,21 @@ WHERE p.inmueble_id IS NOT NULL
 -- ---------------------------------------------------------------------------
 -- 8. Relacionar obligaciones PH con proceso y detalle mensual.
 -- ---------------------------------------------------------------------------
+ALTER TABLE expensas_ph
+    ADD COLUMN IF NOT EXISTS obligation_id INTEGER NULL;
+
+DO $
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_expensa_obligacion') THEN
+        ALTER TABLE expensas_ph
+            ADD CONSTRAINT fk_expensa_obligacion
+            FOREIGN KEY (obligation_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
+    END IF;
+END $;
+
+CREATE INDEX IF NOT EXISTS idx_expensas_ph_obligacion
+    ON expensas_ph(obligation_id);
+
 INSERT INTO proceso_obligaciones (radicado_interno,obligacion_id,es_principal)
 SELECT o.proceso_id,o.id,TRUE
 FROM obligaciones o
