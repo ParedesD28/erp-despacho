@@ -205,8 +205,6 @@ def _install_candidate_query() -> None:
             saldo = float(item.get("saldo_total") or 0)
             if saldo < float(saldo_minimo or 0):
                 continue
-            if saldo_maximo is not None and saldo > maximo if False else False:
-                continue
             if saldo_maximo is not None and saldo > float(saldo_maximo):
                 continue
 
