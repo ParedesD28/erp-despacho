@@ -77,6 +77,11 @@ if __name__ == "__main__":
     # la capa de acceso, no fuerza una conexión contra Neon.
     db.install_psycopg2_pool()
 
+    log_msg("🔧 [SMS PREFLIGHT]", "Verificando dependencias y esquema SMS antes del tráfico...")
+    _verificar_dependencias_sms()
+    sms_router._ensure_sms_schema()
+    log_msg("✅ [SMS PREFLIGHT]", "Dependencias y esquema SMS verificados.")
+
     # La estructura normalizada y la unicidad de contactos deben estar listas
     # antes de aceptar tráfico. Antes se ejecutaban en segundo plano y dejaban
     # una ventana en la que /crear_expediente_completo podía fallar.
