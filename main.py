@@ -2015,6 +2015,7 @@ def guardar_vencimiento(
     radicado_interno: str = Form(...),
     titulo: str = Form(...),
     fecha_vencimiento: date = Form(...),
+    obligacion_id: int | None = Form(None),
     observaciones: str = Form(""),
 ):
     _ensure_crm_and_vencimientos_schema()
@@ -2022,10 +2023,19 @@ def guardar_vencimiento(
     try:
         with conn:
             with conn.cursor() as cur:
+                if not obligacion_id and radicado_interno:
+                    obligacion = obligaciones_service.obtener_obligacion_principal(cur, radicado_interno.strip())
+                    obligacion_id = int(obligacion["id"]) if obligacion else None
                 cur.execute(
-                    "INSERT INTO vencimientos (radicado_interno, titulo, fecha_vencimiento, observaciones) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (radicado_interno.strip(), titulo.strip(), fecha_vencimiento, observaciones.strip()),
+                    "INSERT INTO vencimientos (radicado_interno, obligacion_id, titulo, fecha_vencimiento, observaciones) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (
+                        radicado_interno.strip(),
+                        obligacion_id,
+                        titulo.strip(),
+                        fecha_vencimiento,
+                        observaciones.strip(),
+                    ),
                 )
         return RedirectResponse("/vencimientos", status_code=303)
     finally:
