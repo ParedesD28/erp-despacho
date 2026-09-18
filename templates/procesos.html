@@ -208,7 +208,7 @@ function configurarTipoProceso(){
         ? '<strong>Cuotas de administración:</strong> conjunto + inmueble + deudor. El demandante sale automáticamente de la persona jurídica del conjunto.'
         : '<strong>'+opt.text+'</strong>: el expediente no requiere conjunto ni inmueble. La obligación se registra como título y queda vinculada al proceso.';
 
-    document.getElementById('naturaleza').value = codigo === 'CUOTAS_ADMINISTRACION' ? 'EJECUTIVO SINGULAR' : (codigo === 'OTRO' ? 'EJECUTIVO SINGULAR' : opt.text.toUpperCase());
+    document.getElementById('naturaleza').value = 'EJECUTIVO SINGULAR';
 }
 
 document.getElementById('tipo_cartera').addEventListener('change',()=>{
