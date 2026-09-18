@@ -2015,7 +2015,8 @@ def calcular_liquidador(
     fecha_corte: date = Form(...),
 ):
     resultados, resumen, _ = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        autocausar=True,
     )
     if not resultados:
         return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "error": "No hay deudas.", "resultados": None})
@@ -2080,7 +2081,8 @@ async def exportar_pdf(
         fecha_corte = date.today()
 
     resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        autocausar=True,
     )
     path = exportaciones.generar_pdf_liquidacion(inmueble_id, fecha_corte, resultados, resumen, inm_info)
     return FileResponse(
@@ -2101,7 +2103,8 @@ async def exportar_excel(
     fecha_corte: date = Form(...),
 ):
     resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        autocausar=True,
     )
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -2272,7 +2275,8 @@ async def carga_masiva_excel(
             print(f"[LIQUIDADOR] Error procesando carga masiva: {e}", flush=True)
 
     resultados, resumen, _ = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        autocausar=True,
     )
     lista_inmuebles = cargar_inmuebles_ph()
     return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
