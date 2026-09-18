@@ -121,7 +121,8 @@ async def reportar_abono_agente(request: Request):
                     if not inmueble_id:
                         raise HTTPException(status_code=422, detail="La obligación PH no tiene inmueble asociado")
                     _, resumen_prev, _ = liquidador.motor_calculo_judicial(
-                        int(inmueble_id), "usura", 2.5, 23.8, 0.0, fecha_pago
+                        int(inmueble_id), "usura", 2.5, 23.8, 0.0, fecha_pago,
+                        autocausar=True,
                     )
                     imputacion = recaudos_service.calcular_imputacion_abono(
                         float(resumen_prev.get("intereses", 0.0)),
