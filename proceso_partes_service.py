@@ -268,39 +268,67 @@ def _backfill_legacy_processes(cur) -> int:
 
 
 def ensure_schema() -> None:
-    """Instala la capa de compatibilidad normalizada de forma idempotente."""
+    """Verifica la capa normalizada de partes; las migraciones hacen cualquier DDL."""
     conn = None
     try:
         conn = db.get_connection()
         with conn.cursor() as cur:
-            required = ("procesos", "contactos", "proceso_partes")
-            missing = [table for table in required if not _table_exists(cur, table)]
+            required_tables = ("procesos", "contactos", "proceso_partes")
+            missing = [table for table in required_tables if not _table_exists(cur, table)]
             if missing:
                 raise RuntimeError(
-                    "Faltan tablas requeridas para normalizar partes: " + ", ".join(missing)
+                    "Faltan tablas requeridas para partes: " + ", ".join(missing)
                 )
 
-            for column in ("id_cliente", "demandante", "id_demandado", "demandado"):
-                if not _column_exists(cur, "procesos", column):
-                    raise RuntimeError(f"Falta columna procesos.{column}")
+            required_columns = {
+                "procesos": {"radicado_interno", "id_cliente", "demandante", "id_demandado", "demandado"},
+                "contactos": {"id", "identificacion", "nombre"},
+                "proceso_partes": {"radicado_interno", "contacto_id", "rol", "es_principal"},
+            }
+            for table, expected in required_columns.items():
+                cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name=%s
+                    """,
+                    (table,),
+                )
+                actual = {str(row[0]) for row in cur.fetchall()}
+                missing_cols = sorted(expected - actual)
+                if missing_cols:
+                    raise RuntimeError(
+                        f"Faltan columnas en {table}: {', '.join(missing_cols)}"
+                    )
 
-            _ensure_contactos_identificacion_unique(cur)
-            _create_partes_indexes(cur)
-            _create_triggers(cur)
-            backfilled = _backfill_legacy_processes(cur)
-            conn.commit()
+            cur.execute(
+                """
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname='public'
+                  AND indexname='uq_contactos_identificacion_idx'
+                LIMIT 1
+                """
+            )
+            if not cur.fetchone():
+                raise RuntimeError("Falta índice UNIQUE de contactos.identificacion")
 
-        log_msg(
-            "✅ [PROCESO_PARTES]",
-            f"Compatibilidad normalizada activa | procesos iniciales migrados: {backfilled}",
-        )
+            cur.execute(
+                """
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname='public'
+                  AND indexname='idx_proceso_partes_radicado_rol'
+                LIMIT 1
+                """
+            )
+            if not cur.fetchone():
+                raise RuntimeError("Falta índice idx_proceso_partes_radicado_rol")
+
+        log_msg("✅ [PROCESO_PARTES]", "Contrato normalizado verificado; sin DDL de runtime.")
     except Exception as exc:
-        if conn is not None:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-        log_msg("⚠️ [PROCESO_PARTES]", f"No se pudo activar la sincronización: {exc}")
+        log_msg("⚠️ [PROCESO_PARTES]", f"Preflight incompleto: {exc}")
+        raise
     finally:
         if conn is not None:
             conn.release()
