@@ -531,13 +531,7 @@ async def crear_expediente_completo(request: Request):
                 if faltantes:
                     raise RuntimeError("Hay partes seleccionadas que no existen en Contactos")
 
-                cliente = demandantes[0]
-                cur.execute(
-                    "SELECT conjunto_residencial FROM inmuebles_ph i JOIN contactos c ON c.id=i.contacto_id WHERE c.identificacion=%s ORDER BY i.id DESC LIMIT 1",
-                    (cliente,),
-                )
-                row = cur.fetchone()
-                conjunto = row[0] if row else "SIN CONJUNTO"
+                conjunto = conjunto_residencial
 
                 cur.execute("SELECT id FROM contactos WHERE identificacion=%s", (demandados[0],))
                 ddo = cur.fetchone()
