@@ -103,40 +103,21 @@ ALTER TABLE obligaciones
     ADD COLUMN IF NOT EXISTS capital_inicial NUMERIC(14,2) NULL,
     ADD COLUMN IF NOT EXISTS fuente_saldo TEXT NULL;
 
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname='fk_obligacion_tipo_obligacion'
-    ) THEN
-        ALTER TABLE obligaciones
-            ADD CONSTRAINT fk_obligacion_tipo_obligacion
-            FOREIGN KEY (tipo_obligacion_id) REFERENCES tipos_obligacion(id) ON DELETE RESTRICT;
-    END IF;
+ALTER TABLE obligaciones
+    ADD CONSTRAINT fk_obligacion_tipo_obligacion
+    FOREIGN KEY (tipo_obligacion_id) REFERENCES tipos_obligacion(id) ON DELETE RESTRICT;
 
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname='fk_obligacion_deudor_contacto'
-    ) THEN
-        ALTER TABLE obligaciones
-            ADD CONSTRAINT fk_obligacion_deudor_contacto
-            FOREIGN KEY (deudor_contacto_id) REFERENCES contactos(id) ON DELETE RESTRICT;
-    END IF;
+ALTER TABLE obligaciones
+    ADD CONSTRAINT fk_obligacion_deudor_contacto
+    FOREIGN KEY (deudor_contacto_id) REFERENCES contactos(id) ON DELETE RESTRICT;
 
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname='fk_obligacion_acreedor_contacto'
-    ) THEN
-        ALTER TABLE obligaciones
-            ADD CONSTRAINT fk_obligacion_acreedor_contacto
-            FOREIGN KEY (acreedor_contacto_id) REFERENCES contactos(id) ON DELETE RESTRICT;
-    END IF;
+ALTER TABLE obligaciones
+    ADD CONSTRAINT fk_obligacion_acreedor_contacto
+    FOREIGN KEY (acreedor_contacto_id) REFERENCES contactos(id) ON DELETE RESTRICT;
 
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname='fk_obligacion_inmueble'
-    ) THEN
-        ALTER TABLE obligaciones
-            ADD CONSTRAINT fk_obligacion_inmueble
-            FOREIGN KEY (inmueble_id) REFERENCES inmuebles_ph(id) ON DELETE SET NULL;
-    END IF;
-END $$;
+ALTER TABLE obligaciones
+    ADD CONSTRAINT fk_obligacion_inmueble
+    FOREIGN KEY (inmueble_id) REFERENCES inmuebles_ph(id) ON DELETE SET NULL;
 
 CREATE INDEX IF NOT EXISTS idx_obligaciones_tipo_obligacion
     ON obligaciones(tipo_obligacion_id);
@@ -286,14 +267,9 @@ WHERE p.inmueble_id IS NOT NULL
 ALTER TABLE expensas_ph
     ADD COLUMN IF NOT EXISTS obligation_id INTEGER NULL;
 
-DO $
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_expensa_obligacion') THEN
-        ALTER TABLE expensas_ph
-            ADD CONSTRAINT fk_expensa_obligacion
-            FOREIGN KEY (obligation_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
-    END IF;
-END $;
+ALTER TABLE expensas_ph
+    ADD CONSTRAINT fk_expensa_obligacion
+    FOREIGN KEY (obligation_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
 
 CREATE INDEX IF NOT EXISTS idx_expensas_ph_obligacion
     ON expensas_ph(obligation_id);
@@ -333,44 +309,29 @@ ALTER TABLE vencimientos
 ALTER TABLE solicitudes_paz_y_salvo
     ADD COLUMN IF NOT EXISTS obligacion_id INTEGER NULL;
 
-DO $
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_crm_obligacion') THEN
-        ALTER TABLE gestiones_crm
-            ADD CONSTRAINT fk_crm_obligacion
-            FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
-    END IF;
+ALTER TABLE gestiones_crm
+    ADD CONSTRAINT fk_crm_obligacion
+    FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_acuerdo_obligacion') THEN
-        ALTER TABLE acuerdos_pago
-            ADD CONSTRAINT fk_acuerdo_obligacion
-            FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
-    END IF;
+ALTER TABLE acuerdos_pago
+    ADD CONSTRAINT fk_acuerdo_obligacion
+    FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_recaudo_obligacion') THEN
-        ALTER TABLE recaudos_contabilidad
-            ADD CONSTRAINT fk_recaudo_obligacion
-            FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
-    END IF;
+ALTER TABLE recaudos_contabilidad
+    ADD CONSTRAINT fk_recaudo_obligacion
+    FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_sms_obligacion') THEN
-        ALTER TABLE sms_cola_envios
-            ADD CONSTRAINT fk_sms_obligacion
-            FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
-    END IF;
+ALTER TABLE sms_cola_envios
+    ADD CONSTRAINT fk_sms_obligacion
+    FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_vencimiento_obligacion') THEN
-        ALTER TABLE vencimientos
-            ADD CONSTRAINT fk_vencimiento_obligacion
-            FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
-    END IF;
+ALTER TABLE vencimientos
+    ADD CONSTRAINT fk_vencimiento_obligacion
+    FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='fk_paz_salvo_obligacion') THEN
-        ALTER TABLE solicitudes_paz_y_salvo
-            ADD CONSTRAINT fk_paz_salvo_obligacion
-            FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
-    END IF;
-END $;
+ALTER TABLE solicitudes_paz_y_salvo
+    ADD CONSTRAINT fk_paz_salvo_obligacion
+    FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE SET NULL;
 
 CREATE INDEX IF NOT EXISTS idx_gestiones_crm_obligacion
     ON gestiones_crm(obligacion_id,fecha DESC);
