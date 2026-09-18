@@ -72,8 +72,8 @@ def _install_candidate_query() -> None:
                 p.inmueble_id,
                 p.radicado_rama,
                 p.naturaleza,
-                p.pretensiones AS saldo_total,
                 COALESCE(p.tipo_cartera,'PREJURIDICO') AS tipo_cartera,
+                pob.obligacion_id,
                 c.identificacion,
                 c.nombre,
                 c.telefono,
@@ -86,7 +86,17 @@ def _install_candidate_query() -> None:
               ON c.id = pp.contacto_id
             LEFT JOIN inmuebles_ph i
               ON i.id = p.inmueble_id
-            WHERE {' AND '.join(where)}
+            LEFT JOIN LATERAL (
+                SELECT po.obligacion_id
+                FROM proceso_obligaciones po
+                JOIN obligaciones o ON o.id=po.obligacion_id
+                WHERE po.radicado_interno=p.radicado_interno
+                  AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+                ORDER BY po.es_principal DESC, po.id
+                LIMIT 1
+            ) pob ON TRUE
+            WHERE pob.obligacion_id IS NOT NULL
+              AND {' AND '.join(where)}
             ORDER BY pp.contacto_id, p.radicado_interno DESC;
             """,
             params,
@@ -108,8 +118,8 @@ def _install_candidate_query() -> None:
                 "inmueble_id": row[2],
                 "radicado_rama": row[3],
                 "naturaleza": row[4],
-                "saldo_total": row[5],
-                "tipo_cartera": row[6],
+                "tipo_cartera": row[5],
+                "obligacion_id": row[6],
                 "identificacion": row[7],
                 "nombre": row[8],
                 "telefono": row[9],
@@ -125,8 +135,8 @@ def _install_candidate_query() -> None:
                 "identificacion": data["identificacion"],
                 "nombre": data["nombre"],
                 "telefono": data["telefono"],
-                "saldo_total": float(data["saldo_total"] or 0),
                 "tipo_cartera": data["tipo_cartera"],
+                "obligacion_id": data["obligacion_id"],
                 "fuente_cobro": "PROCESO",
                 "radicado_interno": data["radicado_interno"],
                 "radicado_rama": data["radicado_rama"],
