@@ -43,6 +43,7 @@ REQUIRED_COLUMNS = {
         "anio", "mes", "tasa_usura_ea", "ibc_ea", "modalidad", "validado_sfc",
     },
     "schema_migrations": {"version", "applied_at"},
+    "expediente_ediciones": {"id", "radicado_interno", "usuario", "accion", "antes", "despues"},
 }
 
 
@@ -82,7 +83,11 @@ def verify() -> None:
                     detail.append("columnas faltantes: " + "; ".join(missing_columns))
                 raise RuntimeError("[SCHEMA PREFLIGHT] " + " | ".join(detail))
 
-            for index_name in ("uq_contactos_identificacion_idx", "uq_procesos_radicado_rama_real"):
+            for index_name in (
+                "uq_contactos_identificacion_idx",
+                "uq_procesos_radicado_rama_real",
+                "uq_proceso_obligacion_principal",
+            ):
                 cur.execute(
                     """
                     SELECT 1
@@ -107,6 +112,20 @@ def verify() -> None:
                 raise RuntimeError(
                     "[SCHEMA PREFLIGHT] No está registrada la migración "
                     "20260918_proceso_obligacion_base"
+                )
+
+            cur.execute(
+                """
+                SELECT 1
+                FROM schema_migrations
+                WHERE version='20260918_fase3_4_endurecimiento'
+                LIMIT 1
+                """
+            )
+            if not cur.fetchone():
+                raise RuntimeError(
+                    "[SCHEMA PREFLIGHT] No está registrada la migración "
+                    "20260918_fase3_4_endurecimiento"
                 )
 
             cur.execute(
