@@ -31,6 +31,7 @@ from psycopg2.extras import RealDictCursor
 
 import db
 import expedientes_service
+from sms_saldo_service import actualizar_item_cola
 
 try:
     from zoneinfo import ZoneInfo
@@ -558,12 +559,13 @@ def _liberar_claims_vencidos(cur) -> None:
 
 
 def _reclamar_lote(cur, limite: int):
-    """Reclama mensajes de forma exclusiva y compatible con cursores dict/tupla."""
+    """Reclama mensajes y verifica el saldo con el liquidador antes de entregarlos."""
     cur.execute(
         """
         SELECT id
         FROM sms_cola_envios
         WHERE estado='PENDIENTE'
+          AND COALESCE(saldo_verificado,FALSE)=TRUE
         ORDER BY id ASC
         LIMIT %s
         FOR UPDATE SKIP LOCKED;
@@ -582,15 +584,62 @@ def _reclamar_lote(cur, limite: int):
             SET estado='EN_PROCESO', fecha_proceso=CURRENT_TIMESTAMP, processing_token=%s
             WHERE id=%s AND estado='PENDIENTE'
             RETURNING id,inmueble_id,contacto_id,telefono,mensaje_texto,
-                      tipo_campana,saldo_calculado,processing_token;
+                      tipo_campana,saldo_calculado,saldo_fuente,
+                      saldo_verificado,processing_token;
             """,
             (token, fila_id),
         )
-        row = cur.fetchone()
-        if row:
-            reclamados.append(row)
-    return reclamados
+        row=cur.fetchone()
+        if not row:
+            continue
 
+        try:
+            refreshed=actualizar_item_cola(
+                cur,
+                dict(row) if isinstance(row,dict) else {
+                    "id":row[0],"inmueble_id":row[1],"contacto_id":row[2],
+                    "telefono":row[3],"mensaje_texto":row[4],"tipo_campana":row[5],
+                },
+            )
+            if refreshed.get("bloqueado_envio"):
+                cur.execute(
+                    """
+                    UPDATE sms_cola_envios
+                    SET estado='FALLIDO',fecha_proceso=NULL,processing_token=NULL
+                    WHERE id=%s AND estado='EN_PROCESO'
+                    """,
+                    (fila_id,),
+                )
+                continue
+
+            cur.execute(
+                """
+                UPDATE sms_cola_envios
+                SET processing_token=%s, fecha_proceso=CURRENT_TIMESTAMP
+                WHERE id=%s AND estado='EN_PROCESO'
+                RETURNING id,inmueble_id,contacto_id,telefono,mensaje_texto,
+                          tipo_campana,saldo_calculado,saldo_fuente,
+                          saldo_verificado,processing_token;
+                """,
+                (token,fila_id),
+            )
+            refreshed_row=cur.fetchone()
+            if refreshed_row:
+                reclamados.append(refreshed_row)
+        except Exception as exc:
+            cur.execute(
+                """
+                UPDATE sms_cola_envios
+                SET estado='FALLIDO',
+                    fecha_proceso=NULL,
+                    processing_token=NULL,
+                    error_detalle=%s
+                WHERE id=%s AND estado='EN_PROCESO'
+                """,
+                (f"Saldo no pudo ser verificado antes del envío: {str(exc)[:180]}",fila_id),
+            )
+
+    return reclamados
 
 def _autenticar_bearer(authorization: Optional[str] = Header(None)) -> None:
     token_esperado = _get_api_token()
@@ -644,7 +693,7 @@ def vista_sms(
                        COUNT(*) FILTER (WHERE estado='ENVIADO') AS enviados,
                        COUNT(*) FILTER (WHERE estado='FALLIDO') AS fallidos,
                        COALESCE(
-                           SUM(saldo_calculado) FILTER (WHERE estado IN ('PENDIENTE','EN_PROCESO')),
+                           SUM(saldo_calculado) FILTER (WHERE estado IN ('PENDIENTE','EN_PROCESO') AND COALESCE(saldo_verificado,FALSE)=TRUE),
                            0
                        ) AS total_saldo_pendiente
                 FROM sms_cola_envios;
@@ -660,7 +709,8 @@ def vista_sms(
             cur.execute(
                 """
                 SELECT id,identificacion,nombre,conjunto_residencial,torre_apto,
-                       telefono,saldo_calculado,mensaje_texto,tipo_campana,estado,
+                       telefono,saldo_calculado,saldo_fuente,saldo_verificado,
+                       saldo_calculado_en,mensaje_texto,tipo_campana,estado,
                        fecha_creacion,fecha_proceso,fecha_envio,error_detalle
                 FROM sms_cola_envios
                 ORDER BY id DESC LIMIT 50;
@@ -761,6 +811,9 @@ def generar_cola(
                     if not tel:
                         continue
 
+                    if not d.get("saldo_verificado"):
+                        continue
+
                     nombre_corto = (d["nombre"] or "Propietario").strip().title()
                     conjunto = (d["conjunto_residencial"] or "Copropiedad").strip()
                     unidad = (d["torre_apto"] or "").strip()
@@ -778,9 +831,11 @@ def generar_cola(
                         INSERT INTO sms_cola_envios(
                             inmueble_id,contacto_id,identificacion,nombre,
                             conjunto_residencial,torre_apto,telefono,
-                            saldo_calculado,mensaje_texto,tipo_campana,estado
+                            saldo_calculado,saldo_fuente,saldo_verificado,
+                            saldo_calculado_en,mensaje_template,mensaje_texto,
+                            tipo_campana,estado
                         )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
                         ON CONFLICT(inmueble_id,telefono,tipo_campana)
                         WHERE estado IN ('PENDIENTE','EN_PROCESO') DO NOTHING;
                         """,
@@ -793,6 +848,10 @@ def generar_cola(
                             unidad,
                             tel,
                             d["saldo_total"],
+                            d.get("saldo_fuente"),
+                            True,
+                            d.get("saldo_calculado_en"),
+                            template,
                             msg,
                             tipo_campana,
                         ),
