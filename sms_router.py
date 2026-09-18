@@ -159,14 +159,12 @@ def _candidatos_cartera(
     ids: Optional[List[int]] = None,
     conjunto: str = "",
 ):
-    """Devuelve candidatos por contacto y excluye reenvíos realizados en las últimas 24 h."""
+    """Devuelve candidatos PH asociados a una obligación canónica activa."""
     cartera = (tipo_cartera or "").upper().strip()
     if cartera and cartera not in CARTERAS_VALIDAS:
         raise ValueError("Tipo de cartera no válido.")
 
-    saldo_where, params = _saldo_clause(saldo_minimo, saldo_maximo)
     where = [
-        saldo_where,
         "c.telefono IS NOT NULL",
         "TRIM(c.telefono) <> ''",
         "NOT EXISTS ("
@@ -176,6 +174,7 @@ def _candidatos_cartera(
         "   AND prev.fecha_envio >= NOW() - INTERVAL '24 hours'"
         ")",
     ]
+    params: List[Any] = []
 
     if cartera:
         where.append("COALESCE(p.tipo_cartera,'PREJURIDICO')=%s")
@@ -184,53 +183,11 @@ def _candidatos_cartera(
         where.append("c.id = ANY(%s)")
         params.append(ids)
     if conjunto:
-        where.append("COALESCE(i.conjunto_residencial, '') = %s")
+        where.append("COALESCE(i.conjunto_residencial,'')=%s")
         params.append(conjunto.strip())
 
-    cur.execute("SELECT to_regclass('public.inmueble_propietarios') AS tabla;")
-    fila_tabla = cur.fetchone()
-    if isinstance(fila_tabla, dict):
-        tiene_tabla_multiple = fila_tabla.get("tabla") is not None
-    else:
-        tiene_tabla_multiple = fila_tabla is not None and fila_tabla[0] is not None
-
-    if tiene_tabla_multiple:
-        propietarios_cte = """
-            propietarios AS (
-                SELECT ip.inmueble_id, ip.contacto_id
-                FROM inmueble_propietarios ip
-                UNION ALL
-                SELECT i.id, i.contacto_id
-                FROM inmuebles_ph i
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM inmueble_propietarios ip2
-                    WHERE ip2.inmueble_id=i.id
-                )
-            )
-        """
-    else:
-        propietarios_cte = """
-            propietarios AS (
-                SELECT i.id AS inmueble_id, i.contacto_id
-                FROM inmuebles_ph i
-            )
-        """
-
-    query = f"""
-        WITH {propietarios_cte},
-        saldos AS (
-            SELECT inmueble_id,
-                   SUM(
-                       CASE WHEN LOWER(COALESCE(concepto,'')) != 'abono'
-                            THEN valor_capital ELSE -valor_capital END
-                   ) AS saldo_total
-            FROM expensas_ph
-            GROUP BY inmueble_id
-            HAVING SUM(
-                CASE WHEN LOWER(COALESCE(concepto,'')) != 'abono'
-                     THEN valor_capital ELSE -valor_capital END
-            ) > 0
-        )
+    cur.execute(
+        f"""
         SELECT DISTINCT ON (i.id,c.id)
             i.id AS inmueble_id,
             c.id AS contacto_id,
@@ -239,26 +196,29 @@ def _candidatos_cartera(
             c.identificacion,
             c.nombre,
             c.telefono,
-            s.saldo_total,
-            COALESCE(p.tipo_cartera,'PREJURIDICO') AS tipo_cartera
-        FROM saldos s
-        JOIN inmuebles_ph i ON i.id=s.inmueble_id
-        JOIN propietarios pr ON pr.inmueble_id=i.id
-        JOIN contactos c ON c.id=pr.contacto_id
+            o.id AS obligacion_id,
+            COALESCE(p.tipo_cartera,'PREJURIDICO') AS tipo_cartera,
+            p.radicado_interno
+        FROM obligaciones o
+        JOIN inmuebles_ph i ON i.id=o.inmueble_id
+        JOIN contactos c ON c.id=o.deudor_contacto_id
         LEFT JOIN LATERAL (
-            SELECT tipo_cartera
+            SELECT p0.tipo_cartera,p0.radicado_interno
             FROM procesos p0
-            WHERE p0.inmueble_id=i.id
-            ORDER BY CASE WHEN p0.tipo_cartera='JURIDICO' THEN 0 ELSE 1 END,
-                     p0.radicado_interno DESC
+            JOIN proceso_obligaciones po0
+              ON po0.radicado_interno=p0.radicado_interno
+             AND po0.obligacion_id=o.id
+            ORDER BY po0.es_principal DESC, po0.id
             LIMIT 1
         ) p ON TRUE
-        WHERE {' AND '.join(where)}
-        ORDER BY i.id,c.id,s.saldo_total DESC;
-    """
-    cur.execute(query, params)
+        WHERE UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+          AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+          AND {' AND '.join(where)}
+        ORDER BY i.id,c.id,o.id DESC
+        """,
+        params,
+    )
     return cur.fetchall()
-
 
 def _filtrar_saldos_verificados(candidatos, saldo_minimo: float, saldo_maximo: Optional[float]):
     """Aplica el filtro monetario sobre el saldo REAL del liquidador, no sobre el saldo preliminar."""
@@ -303,6 +263,7 @@ def _registrar_en_crm_idempotente(
     item_id: int,
     inmueble_id: Optional[int],
     contacto_id: Optional[int],
+    obligacion_id: Optional[int],
     telefono: str,
     mensaje: str,
     tipo_campana: str,
@@ -352,6 +313,10 @@ def _registrar_en_crm_idempotente(
         data["inmueble_id"] = inmueble_id
     if "contacto_id" in cols:
         data["contacto_id"] = contacto_id
+    if "obligacion_id" in cols:
+        if not obligacion_id:
+            raise RuntimeError("El SMS no tiene obligación financiera asociada.")
+        data["obligacion_id"] = obligacion_id
     data[texto_col] = f"{marker} [SMS - {tipo_campana}] {mensaje}"
 
     if "canal" in cols:
@@ -431,7 +396,7 @@ def _asentar_resultado_sms_y_crm(
                     WHERE id=%s
                       AND estado='EN_PROCESO'
                       AND processing_token=%s
-                    RETURNING id,inmueble_id,contacto_id,telefono,
+                    RETURNING id,inmueble_id,contacto_id,obligacion_id,telefono,
                               mensaje_texto,tipo_campana,saldo_calculado;
                     """,
                     (
@@ -462,6 +427,7 @@ def _asentar_resultado_sms_y_crm(
                     item_id=item["id"],
                     inmueble_id=item["inmueble_id"],
                     contacto_id=item["contacto_id"],
+                    obligacion_id=item["obligacion_id"],
                     telefono=item["telefono"],
                     mensaje=item["mensaje_texto"],
                     tipo_campana=item["tipo_campana"],
