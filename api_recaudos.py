@@ -41,12 +41,13 @@ async def reportar_abono_agente(request: Request):
         raise HTTPException(status_code=422, detail="Cuerpo de petición inválido (JSON esperado)")
         
     try:
-        inmueble_id = int(data.get("inmueble_id"))
+        obligacion_id = int(data.get("obligacion_id")) if data.get("obligacion_id") else None
+        inmueble_id = int(data.get("inmueble_id")) if data.get("inmueble_id") else None
         valor_abono = float(data.get("valor"))
-        if valor_abono <= 0:
+        if valor_abono <= 0 or (not obligacion_id and not inmueble_id):
             raise ValueError()
     except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="inmueble_id y valor (> 0) son obligatorios")
+        raise HTTPException(status_code=422, detail="obligacion_id/inmueble_id y valor (> 0) son obligatorios")
         
     fecha_pago_raw = str(data.get("fecha_pago") or date.today().isoformat())
     try:
@@ -62,16 +63,60 @@ async def reportar_abono_agente(request: Request):
     try:
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Resolver la obligación canónica. Este endpoint sigue limitado a PH
+                # porque su asiento histórico todavía usa expensas_ph.
+                if obligacion_id:
+                    cur.execute(
+                        """
+                        SELECT o.id,o.inmueble_id,o.fuente_saldo,
+                               c.identificacion,c.nombre,c.telefono,
+                               i.conjunto_residencial,i.torre_apto
+                        FROM obligaciones o
+                        JOIN contactos c ON c.id=o.deudor_contacto_id
+                        LEFT JOIN inmuebles_ph i ON i.id=o.inmueble_id
+                        WHERE o.id=%s
+                        LIMIT 1
+                        """,
+                        (obligacion_id,),
+                    )
+                    ob = cur.fetchone()
+                    if not ob:
+                        raise HTTPException(status_code=404, detail="Obligación no encontrada")
+                    if str(ob["fuente_saldo"] or "").upper() != "EXPENSAS_PH":
+                        raise HTTPException(status_code=409, detail="Este endpoint de recaudo está configurado para obligaciones PH")
+                    inmueble_id = int(ob["inmueble_id"]) if ob["inmueble_id"] else None
+                elif inmueble_id:
+                    cur.execute(
+                        """
+                        SELECT o.id,o.inmueble_id,o.fuente_saldo,
+                               c.identificacion,c.nombre,c.telefono,
+                               i.conjunto_residencial,i.torre_apto
+                        FROM obligaciones o
+                        JOIN contactos c ON c.id=o.deudor_contacto_id
+                        LEFT JOIN inmuebles_ph i ON i.id=o.inmueble_id
+                        WHERE o.inmueble_id=%s
+                          AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+                          AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+                        ORDER BY o.id DESC
+                        LIMIT 1
+                        """,
+                        (inmueble_id,),
+                    )
+                    ob = cur.fetchone()
+                    if ob:
+                        obligacion_id = int(ob["id"])
+                if not obligacion_id or not inmueble_id or not ob:
+                    raise HTTPException(status_code=404, detail="No existe una obligación PH activa para la cuenta indicada")
+
                 # 1. Obtener información del inmueble y deudor
-                cur.execute("""
-                    SELECT i.id, i.conjunto_residencial, i.torre_apto, c.identificacion, c.nombre, c.telefono
-                    FROM inmuebles_ph i
-                    JOIN contactos c ON i.contacto_id = c.id
-                    WHERE i.id = %s
-                """, (inmueble_id,))
-                inm = cur.fetchone()
-                if not inm:
-                    raise HTTPException(status_code=404, detail="Inmueble no encontrado")
+                inm = {
+                    "id": inmueble_id,
+                    "conjunto_residencial": ob["conjunto_residencial"],
+                    "torre_apto": ob["torre_apto"],
+                    "identificacion": ob["identificacion"],
+                    "nombre": ob["nombre"],
+                    "telefono": ob["telefono"],
+                }
 
                 # 2. Liquidación previa para calcular imputación exacta
                 _, resumen_prev, _ = liquidador.motor_calculo_judicial(
@@ -97,13 +142,13 @@ async def reportar_abono_agente(request: Request):
                 # 4. Registrar discriminación de fondos por cuenta en recaudos_contabilidad
                 cur.execute("""
                     INSERT INTO recaudos_contabilidad (
-                        inmueble_id, identificacion_deudor, nombre_deudor, fecha_pago,
+                        inmueble_id, obligacion_id, identificacion_deudor, nombre_deudor, fecha_pago,
                         valor_total, abono_intereses, abono_capital, honorarios_cobro,
                         banco_origen, referencia_transaccion, soporte_url, estado_conciliacion
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDIENTE_CONCILIACION')
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDIENTE_CONCILIACION')
                     RETURNING id;
                 """, (
-                    inmueble_id, inm["identificacion"], inm["nombre"], fecha_pago,
+                    inmueble_id, obligacion_id, inm["identificacion"], inm["nombre"], fecha_pago,
                     valor_abono, imputacion["abono_intereses"], imputacion["abono_capital"],
                     imputacion["honorarios_cobro"], banco, referencia, soporte_url
                 ))
@@ -112,11 +157,11 @@ async def reportar_abono_agente(request: Request):
                 # 5. Asentar en el CRM del ERP
                 cur.execute("""
                     INSERT INTO gestiones_crm (
-                        inmueble_id, identificacion_deudor, tipo_contacto,
+                        inmueble_id, obligacion_id, identificacion_deudor, tipo_contacto,
                         resumen, usuario, estado
-                    ) VALUES (%s, %s, 'WhatsApp IA - Comprobante', %s, 'Bot Vision', 'ACTIVO');
+                    ) VALUES (%s, %s, %s, 'WhatsApp IA - Comprobante', %s, 'Bot Vision', 'ACTIVO');
                 """, (
-                    inmueble_id, inm["identificacion"],
+                    inmueble_id, obligacion_id, inm["identificacion"],
                     f"Abono reportado por IA: ${valor_abono:,.0f} ({banco} Ref: {referencia}). Imputado: Capital ${imputacion['abono_capital']:,.0f}, Intereses ${imputacion['abono_intereses']:,.0f}."
                 ))
 
@@ -124,7 +169,7 @@ async def reportar_abono_agente(request: Request):
                 cur.execute("""
                     SELECT id, cuota_actual, numero_cuotas 
                     FROM acuerdos_pago 
-                    WHERE inmueble_id = %s AND estado = 'PENDIENTE'
+                    WHERE obligacion_id = %s AND estado = 'PENDIENTE'
                     ORDER BY id DESC LIMIT 1;
                 """, (inmueble_id,))
                 ac = cur.fetchone()
@@ -147,7 +192,7 @@ async def reportar_abono_agente(request: Request):
                 with conn.cursor() as cur:
                     cur.execute("""
                         INSERT INTO solicitudes_paz_y_salvo (
-                            inmueble_id, identificacion_deudor, nombre_deudor,
+                            inmueble_id, obligacion_id, identificacion_deudor, nombre_deudor,
                             conjunto_residencial, torre_apto, recaudo_id, estado
                         ) VALUES (%s, %s, %s, %s, %s, %s, 'PENDIENTE_REVISION');
                     """, (inmueble_id, inm["identificacion"], inm["nombre"], inm["conjunto_residencial"], inm["torre_apto"], recaudo_id))
