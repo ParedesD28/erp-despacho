@@ -17,15 +17,13 @@ load_dotenv()
 
 import agenda_service
 import db
-import liquidador
 import main
 import proceso_partes_runtime
-import proceso_partes_service
 import security
+import schema_preflight
 import sms_cartera_runtime
 import sms_saldo_service
 import sms_router
-import tasas
 from observability import log_msg
 
 def _verificar_dependencias_sms() -> None:
@@ -48,26 +46,16 @@ def _verificar_dependencias_sms() -> None:
 
 
 def _ejecutar_mantenimiento_segundo_plano() -> None:
-    """Tareas idempotentes de mantenimiento que no deben bloquear el arranque."""
+    """Tareas no estructurales que no deben modificar el esquema al arrancar."""
     time.sleep(1)
-    log_msg("⚙️ [BACKGROUND]", "Iniciando tareas de verificación y sincronización...")
-
+    log_msg("⚙️ [BACKGROUND]", "Iniciando verificaciones de mantenimiento no estructural...")
     try:
         migrated = security.migrate_legacy_passwords(db.POOL)
         if migrated:
-            log_msg("🔑 [SEGURIDAD]", f"Migradas {migrated} contraseñas heredadas a bcrypt")
+            log_msg("🔑 [SEGURIDAD]", f"Contraseñas heredadas migradas: {migrated}")
     except Exception as exc:
-        log_msg("⚠️ [SEGURIDAD]", f"Aviso en migración de contraseñas: {exc}")
-
-    try:
-        liquidador.dedupe_expensas()
-        tasas.asegurar_tabla_tasas()
-        agenda_service.ensure_schema()
-        proceso_partes_service.ensure_schema()
-        tasas.prueba_conexion_sfc()
-        log_msg("✅ [BACKGROUND]", "Mantenimiento inicial completado")
-    except Exception as exc:
-        log_msg("⚠️ [BACKGROUND]", f"Aviso en mantenimiento inicial: {exc}")
+        log_msg("⚠️ [SEGURIDAD]", f"Aviso en migración de credenciales: {exc}")
+    log_msg("✅ [BACKGROUND]", "Mantenimiento no estructural completado")
 
 
 if __name__ == "__main__":
@@ -77,23 +65,18 @@ if __name__ == "__main__":
     # la capa de acceso, no fuerza una conexión contra Neon.
     db.install_psycopg2_pool()
 
-    log_msg("🔧 [SMS PREFLIGHT]", "Verificando dependencias y esquema SMS antes del tráfico...")
+    log_msg("🔧 [SCHEMA PREFLIGHT]", "Verificando contrato estructural antes del tráfico...")
+    schema_preflight.verify()
+    log_msg("✅ [SCHEMA PREFLIGHT]", "Contrato estructural verificado.")
+
     _verificar_dependencias_sms()
     sms_router._ensure_sms_schema()
-    log_msg("✅ [SMS PREFLIGHT]", "Dependencias y esquema SMS verificados.")
 
-    # La estructura normalizada y la unicidad de contactos deben estar listas
-    # antes de aceptar tráfico. Antes se ejecutaban en segundo plano y dejaban
-    # una ventana en la que /crear_expediente_completo podía fallar.
-    log_msg("🔧 [BOOTSTRAP]", "Verificando esquema de procesos y contactos antes del tráfico...")
-    proceso_partes_service.ensure_schema()
-    log_msg("✅ [BOOTSTRAP]", "Esquema de procesos y contactos verificado.")
-
-    # Las lecturas normalizadas se activan antes de aceptar tráfico.
+    # Las lecturas normalizadas son canónicas; no se ejecutan migraciones DDL
+    # desde el proceso de arranque.
     proceso_partes_runtime.install()
 
-    # SMS usa contactos + proceso_partes como fuente adicional de candidatos,
-    # sin eliminar el flujo existente de propiedad horizontal.
+    # SMS agrega cartera procesal a la cartera PH sin usar pretensiones como saldo.
     sms_cartera_runtime.install()
 
     # Registro único de las rutas de agenda sobre main.app. No hay lógica de
