@@ -1107,40 +1107,6 @@ def eliminar_actuacion(actuacion_id: int, radicado_interno: str):
 # ==============================================================================
 # CRM (GESTIÓN EXTRAJUDICIAL Y ANULACIÓN AUDITABLE)
 # ==============================================================================
-def _ensure_conjuntos_schema(cur):
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS conjuntos_residenciales (
-            id BIGSERIAL PRIMARY KEY,
-            nombre VARCHAR(255) NOT NULL UNIQUE,
-            activo BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    cur.execute("""
-        INSERT INTO conjuntos_residenciales (nombre)
-        SELECT DISTINCT TRIM(conjunto_residencial)
-        FROM inmuebles_ph
-        WHERE NULLIF(TRIM(conjunto_residencial), '') IS NOT NULL
-          AND UPPER(TRIM(conjunto_residencial)) <> 'SIN CONJUNTO'
-        ON CONFLICT (nombre) DO NOTHING
-    """)
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_conjuntos_residenciales_activo_nombre
-        ON conjuntos_residenciales (activo, nombre)
-    """)
-
-
-def _listar_conjuntos(cur):
-    _ensure_conjuntos_schema(cur)
-    cur.execute("""
-        SELECT id, nombre
-        FROM conjuntos_residenciales
-        WHERE activo=TRUE
-        ORDER BY nombre
-    """)
-    return [dict(r) for r in cur.fetchall()]
-
-
 def _ensure_crm_and_vencimientos_schema():
     conn = db.get_connection()
     try:
@@ -1219,31 +1185,6 @@ def startup_schema_init():
     print("[STARTUP] Esquema verificado y asegurado correctamente.", flush=True)
 
 
-@app.post("/crm/conjuntos/guardar")
-def crm_conjunto_guardar(nombre: str = Form(...)):
-    nombre = " ".join(str(nombre or "").strip().split())
-    if not nombre:
-        return _redirect("/crm", error="El+nombre+del+conjunto+es+obligatorio")
-    if nombre.upper() == "SIN CONJUNTO":
-        return _redirect("/crm", error="No+puedes+crear+SIN+CONJUNTO+como+conjunto")
-    _ensure_crm_and_vencimientos_schema()
-    conn = db.get_connection()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO conjuntos_residenciales (nombre)
-                    VALUES (%s)
-                    ON CONFLICT (nombre) DO UPDATE SET activo=TRUE
-                """, (nombre,))
-        return _redirect("/crm", mensaje="Conjunto+creado+correctamente")
-    except Exception as exc:
-        print(f"[CRM][CONJUNTOS] Error creando conjunto: {exc!r}", flush=True)
-        return _redirect("/crm", error="No+fue+posible+crear+el+conjunto")
-    finally:
-        conn.release()
-
-
 @app.get("/crm")
 def crm(request: Request, buscar_inmueble: str | None = None):
     conn = db.get_connection()
@@ -1272,21 +1213,34 @@ def crm(request: Request, buscar_inmueble: str | None = None):
         propietarios, historial = [], []
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if inmueble_actual:
-                cedula = inmueble_actual.get("cedula")
                 cur.execute(
-                    "SELECT identificacion, nombre, telefono, email FROM contactos WHERE identificacion=%s",
-                    (cedula,),
+                    """
+                    SELECT c.identificacion, c.nombre, c.telefono, c.email, ip.es_principal
+                    FROM inmueble_propietarios ip
+                    JOIN contactos c ON c.id=ip.contacto_id
+                    WHERE ip.inmueble_id=%s
+                    ORDER BY ip.es_principal DESC, c.nombre ASC
+                    """,
+                    (int(inmueble_id_limpio),),
                 )
                 propietarios = [dict(r) for r in cur.fetchall()]
-                if not propietarios and cedula:
-                    propietarios = [{"identificacion": cedula, "nombre": inmueble_actual.get("nombre")}]
+                if not propietarios and inmueble_actual.get("cedula"):
+                    propietarios = [{
+                        "identificacion": inmueble_actual.get("cedula"),
+                        "nombre": inmueble_actual.get("nombre"),
+                        "telefono": None,
+                        "email": None,
+                        "es_principal": True,
+                    }]
+                ids_propietarios = [str(p["identificacion"]).strip() for p in propietarios if p.get("identificacion")]
                 cur.execute(
                     "SELECT id, tipo_contacto AS tipo, identificacion_deudor AS deudor_nombre, "
                     "resumen, promesa_pago_fecha AS promesa, usuario, fecha "
                     "FROM gestiones_crm "
-                    "WHERE (inmueble_id=%s OR identificacion_deudor=%s) AND COALESCE(anulado,FALSE)=FALSE "
+                    "WHERE (inmueble_id=%s OR identificacion_deudor = ANY(%s)) "
+                    "AND COALESCE(anulado,FALSE)=FALSE "
                     "ORDER BY fecha DESC LIMIT 200",
-                    (inmueble_id_limpio, str(cedula).strip()),
+                    (int(inmueble_id_limpio), ids_propietarios),
                 )
                 historial = []
                 for r in cur.fetchall():
@@ -1294,12 +1248,12 @@ def crm(request: Request, buscar_inmueble: str | None = None):
                     row_d["tabla_origen"] = "gestiones_crm"
                     historial.append(row_d)
 
-                if expedientes_service._table_exists(cur, "gestiones_cartera") and cedula:
+                if expedientes_service._table_exists(cur, "gestiones_cartera") and ids_propietarios:
                     cur.execute(
                         "SELECT * FROM gestiones_cartera "
-                        "WHERE REGEXP_REPLACE(COALESCE(identificacion_deudor::text,''), '[^0-9]', '', 'g')=%s "
+                        "WHERE REGEXP_REPLACE(COALESCE(identificacion_deudor::text,''), '[^0-9]', '', 'g') = ANY(%s) "
                         "LIMIT 200",
-                        (str(cedula).replace(".", ""),),
+                        ([str(x).replace(".", "") for x in ids_propietarios],),
                     )
                     for r in cur.fetchall():
                         d = dict(r)
