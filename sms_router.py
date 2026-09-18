@@ -81,6 +81,10 @@ def _ensure_sms_schema() -> None:
                         torre_apto VARCHAR(100),
                         telefono VARCHAR(20) NOT NULL,
                         saldo_calculado NUMERIC(14,2) DEFAULT 0.0,
+                        saldo_fuente VARCHAR(80),
+                        saldo_verificado BOOLEAN NOT NULL DEFAULT FALSE,
+                        saldo_calculado_en TIMESTAMP,
+                        mensaje_template TEXT,
                         mensaje_texto TEXT NOT NULL,
                         tipo_campana VARCHAR(50) DEFAULT 'PREJUDICIAL',
                         estado VARCHAR(30) DEFAULT 'PENDIENTE',
@@ -108,6 +112,18 @@ def _ensure_sms_schema() -> None:
                 )
                 cur.execute(
                     "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS crm_auditoria_fecha TIMESTAMP;"
+                )
+                cur.execute(
+                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS saldo_fuente VARCHAR(80);"
+                )
+                cur.execute(
+                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS saldo_verificado BOOLEAN NOT NULL DEFAULT FALSE;"
+                )
+                cur.execute(
+                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS saldo_calculado_en TIMESTAMP;"
+                )
+                cur.execute(
+                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS mensaje_template TEXT;"
                 )
                 cur.execute(
                     """
@@ -736,8 +752,10 @@ def vista_sms(
                 ORDER BY nombre
             """)
             conjuntos = [str(r["nombre"]) for r in cur.fetchall()]
-            candidatos = _candidatos_cartera(
-                cur, tipo_cartera, float(saldo_minimo or 0), saldo_max, None, conjunto
+            candidatos = enriquecer_candidatos(
+                _candidatos_cartera(
+                    cur, tipo_cartera, float(saldo_minimo or 0), saldo_max, None, conjunto
+                )
             )
 
         return templates.TemplateResponse(
@@ -797,13 +815,15 @@ def generar_cola(
                     else "{nombre}, mora en {conjunto} {unidad}. WhatsApp: {telefono_wa}"
                 )
 
-                deudores = _candidatos_cartera(
-                    cur,
-                    tipo_cartera,
-                    saldo_minimo,
-                    saldo_max,
-                    seleccionados or None,
-                    conjunto,
+                deudores = enriquecer_candidatos(
+                    _candidatos_cartera(
+                        cur,
+                        tipo_cartera,
+                        saldo_minimo,
+                        saldo_max,
+                        seleccionados or None,
+                        conjunto,
+                    )
                 )
                 insertados = 0
                 for d in deudores:
