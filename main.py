@@ -1015,10 +1015,29 @@ def detalle_expediente(request: Request, radicado: str):
                 actuaciones = expedientes_service._get_actuaciones(cur, radicado)
                 contactos_opts = expedientes_service._contact_options(cur)
                 abogados_opts = expedientes_service._get_abogados(cur)
+                obligaciones = obligaciones_service.obtener_obligaciones_proceso(cur, radicado)
+                obligacion_principal = obligaciones[0] if obligaciones else None
                 ids = [x.get("identificacion") for x in demandantes + demandados]
                 acuerdos = expedientes_service._get_crm_agreements(cur, proceso.get("inmueble_id"), ids)
                 audit = expedientes_service._audit(cur, radicado)
-                return render_template("detalle_expediente_v4.html", {"request": request, "proceso": proceso, "demandantes": demandantes, "demandados": demandados, "contactos": contactos_opts, "abogados": abogados_opts, "actuaciones": actuaciones, "acuerdos_crm": acuerdos, "audit_ediciones": audit, "demandante_ids": {str(x.get("identificacion")) for x in demandantes if x.get("identificacion")}, "demandado_ids": {str(x.get("identificacion")) for x in demandados if x.get("identificacion")}})
+                return render_template(
+                    "detalle_expediente_v4.html",
+                    {
+                        "request": request,
+                        "proceso": proceso,
+                        "demandantes": demandantes,
+                        "demandados": demandados,
+                        "obligaciones": obligaciones,
+                        "obligacion_principal": obligacion_principal,
+                        "contactos": contactos_opts,
+                        "abogados": abogados_opts,
+                        "actuaciones": actuaciones,
+                        "acuerdos_crm": acuerdos,
+                        "audit_ediciones": audit,
+                        "demandante_ids": {str(x.get("identificacion")) for x in demandantes if x.get("identificacion")},
+                        "demandado_ids": {str(x.get("identificacion")) for x in demandados if x.get("identificacion")},
+                    },
+                )
     finally:
         conn.release()
 
@@ -1066,24 +1085,51 @@ async def guardar_expediente_estructurado(request: Request):
                     "demandados": [dict(x) for x in expedientes_service._get_demandados(cur, radicado)],
                 }
 
-                tipo_cartera_form = str(form.get("tipo_cartera") or proceso.get("tipo_cartera") or "JURIDICO").strip().upper()
-                rama = str(form.get("radicado_rama") or "").strip()
-                if tipo_cartera_form == "JURIDICO" and not rama:
-                    rama = "EN REPARTO"
-                if tipo_cartera_form != "JURIDICO" and not rama:
-                    rama = proceso.get("radicado_rama") or None
-                if "radicado_rama" in cols and rama and rama.upper() != "EN REPARTO":
+                tipo_cartera_form = str(
+                    form.get("tipo_cartera") or proceso.get("tipo_cartera") or "JURIDICO"
+                ).strip().upper()
+                if tipo_cartera_form not in {"JURIDICO", "PREJURIDICO"}:
+                    raise ValueError("Tipo de cartera no válido")
+
+                naturaleza = str(form.get("naturaleza") or "").strip().upper()
+                if naturaleza not in {"EJECUTIVO", "VERBAL"}:
+                    raise ValueError("La naturaleza debe ser EJECUTIVO o VERBAL")
+                if naturaleza == "VERBAL" and tipo_cartera_form == "PREJURIDICO":
+                    raise ValueError("Un proceso VERBAL no puede quedar PREJURÍDICO")
+
+                obligaciones_actuales = obligaciones_service.obtener_obligaciones_proceso(
+                    cur,
+                    radicado,
+                )
+                if naturaleza == "EJECUTIVO" and not obligaciones_actuales:
+                    raise ValueError(
+                        "Un proceso ejecutivo debe tener al menos una obligación financiera vinculada"
+                    )
+
+                rama_form = str(form.get("radicado_rama") or "").strip().upper()
+                if rama_form in {"EN REPARTO", "PREJURIDICO", "PRE-JURIDICO"}:
+                    rama_form = ""
+
+                if tipo_cartera_form == "PREJURIDICO":
+                    rama = None
+                    estado_rama = "NO_APLICA"
+                    juzgado = None
+                else:
+                    rama = rama_form or None
+                    estado_rama = "ASIGNADO" if rama else "PENDIENTE_REPARTO"
+                    juzgado = str(form.get("juzgado") or "").strip() or None
+                    if rama and not juzgado:
+                        raise ValueError(
+                            "Cuando existe radicado Rama debe existir juzgado de conocimiento"
+                        )
+
+                if "radicado_rama" in cols and rama:
                     cur.execute(
                         "SELECT 1 FROM procesos WHERE radicado_rama=%s AND radicado_interno<>%s LIMIT 1",
                         (rama, radicado),
                     )
                     if cur.fetchone():
                         raise ValueError("El radicado Rama ya pertenece a otro expediente")
-
-                naturaleza = str(form.get("naturaleza") or "").strip()
-                juzgado = str(form.get("juzgado") or "").strip()
-                if not naturaleza:
-                    raise ValueError("La naturaleza es obligatoria")
 
                 if "pretensiones" in form:
                     pretensiones = expedientes_service._parse_money(form.get("pretensiones"))
@@ -1097,6 +1143,10 @@ async def guardar_expediente_estructurado(request: Request):
                     "juzgado": juzgado,
                     "pretensiones": pretensiones,
                 }
+                if "estado_rama" in cols:
+                    editable["estado_rama"] = estado_rama
+                if "etapa_actual" in cols and tipo_cartera_form == "PREJURIDICO":
+                    editable["etapa_actual"] = None
                 if "medidas_cautelares" in cols:
                     editable["medidas_cautelares"] = "\n".join(medidas)
                 if "abogado_id" in cols:
@@ -1117,6 +1167,52 @@ async def guardar_expediente_estructurado(request: Request):
                         f"UPDATE procesos SET {', '.join(f'{k}=%s' for k in usable)} WHERE radicado_interno=%s",
                         [editable[k] for k in usable] + [radicado],
                     )
+
+                # Fuente canónica de partes: reconstruir proceso_partes según la edición.
+                if expedientes_service._table_exists(cur, "proceso_partes"):
+                    cur.execute(
+                        "DELETE FROM proceso_partes WHERE radicado_interno=%s",
+                        (radicado,),
+                    )
+                    for idx, ident in enumerate(demandante_ids):
+                        cur.execute(
+                            """
+                            SELECT id FROM contactos
+                            WHERE identificacion=%s
+                            LIMIT 1
+                            """,
+                            (ident,),
+                        )
+                        contacto = cur.fetchone()
+                        if contacto:
+                            cur.execute(
+                                """
+                                INSERT INTO proceso_partes
+                                    (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
+                                VALUES (%s,%s,'DEMANDANTE',%s,CURRENT_TIMESTAMP)
+                                """,
+                                (radicado, contacto["id"], idx == 0),
+                            )
+
+                    for idx, ident in enumerate(demandado_ids):
+                        cur.execute(
+                            """
+                            SELECT id FROM contactos
+                            WHERE identificacion=%s
+                            LIMIT 1
+                            """,
+                            (ident,),
+                        )
+                        contacto = cur.fetchone()
+                        if contacto:
+                            cur.execute(
+                                """
+                                INSERT INTO proceso_partes
+                                    (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
+                                VALUES (%s,%s,'DEMANDADO',%s,CURRENT_TIMESTAMP)
+                                """,
+                                (radicado, contacto["id"], idx == 0),
+                            )
 
                 if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
                     lcols = expedientes_service._cols(cur, "procesos_litisconsorcio")
