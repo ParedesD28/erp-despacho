@@ -1246,24 +1246,51 @@ async def guardar_expediente_estructurado(request: Request):
                     "demandados": [dict(x) for x in expedientes_service._get_demandados(cur, radicado)],
                 }
 
-                tipo_cartera_form = str(form.get("tipo_cartera") or proceso.get("tipo_cartera") or "JURIDICO").strip().upper()
-                rama = str(form.get("radicado_rama") or "").strip()
-                if tipo_cartera_form == "JURIDICO" and not rama:
-                    rama = "EN REPARTO"
-                if tipo_cartera_form != "JURIDICO" and not rama:
-                    rama = proceso.get("radicado_rama") or None
-                if "radicado_rama" in cols and rama and rama.upper() != "EN REPARTO":
+                tipo_cartera_form = str(
+                    form.get("tipo_cartera") or proceso.get("tipo_cartera") or "JURIDICO"
+                ).strip().upper()
+                if tipo_cartera_form not in {"JURIDICO", "PREJURIDICO"}:
+                    raise ValueError("Tipo de cartera no válido")
+
+                naturaleza = str(form.get("naturaleza") or "").strip().upper()
+                if naturaleza not in {"EJECUTIVO", "VERBAL"}:
+                    raise ValueError("La naturaleza debe ser EJECUTIVO o VERBAL")
+                if naturaleza == "VERBAL" and tipo_cartera_form == "PREJURIDICO":
+                    raise ValueError("Un proceso VERBAL no puede quedar PREJURÍDICO")
+
+                obligaciones_actuales = obligaciones_service.obtener_obligaciones_proceso(
+                    cur,
+                    radicado,
+                )
+                if naturaleza == "EJECUTIVO" and not obligaciones_actuales:
+                    raise ValueError(
+                        "Un proceso ejecutivo debe tener al menos una obligación financiera vinculada"
+                    )
+
+                rama_form = str(form.get("radicado_rama") or "").strip().upper()
+                if rama_form in {"EN REPARTO", "PREJURIDICO", "PRE-JURIDICO"}:
+                    rama_form = ""
+
+                if tipo_cartera_form == "PREJURIDICO":
+                    rama = None
+                    estado_rama = "NO_APLICA"
+                    juzgado = None
+                else:
+                    rama = rama_form or None
+                    estado_rama = "ASIGNADO" if rama else "PENDIENTE_REPARTO"
+                    juzgado = str(form.get("juzgado") or "").strip() or None
+                    if rama and not juzgado:
+                        raise ValueError(
+                            "Cuando existe radicado Rama debe existir juzgado de conocimiento"
+                        )
+
+                if "radicado_rama" in cols and rama:
                     cur.execute(
                         "SELECT 1 FROM procesos WHERE radicado_rama=%s AND radicado_interno<>%s LIMIT 1",
                         (rama, radicado),
                     )
                     if cur.fetchone():
                         raise ValueError("El radicado Rama ya pertenece a otro expediente")
-
-                naturaleza = str(form.get("naturaleza") or "").strip()
-                juzgado = str(form.get("juzgado") or "").strip()
-                if not naturaleza:
-                    raise ValueError("La naturaleza es obligatoria")
 
                 if "pretensiones" in form:
                     pretensiones = expedientes_service._parse_money(form.get("pretensiones"))
@@ -1277,6 +1304,10 @@ async def guardar_expediente_estructurado(request: Request):
                     "juzgado": juzgado,
                     "pretensiones": pretensiones,
                 }
+                if "estado_rama" in cols:
+                    editable["estado_rama"] = estado_rama
+                if "etapa_actual" in cols and tipo_cartera_form == "PREJURIDICO":
+                    editable["etapa_actual"] = None
                 if "medidas_cautelares" in cols:
                     editable["medidas_cautelares"] = "\n".join(medidas)
                 if "abogado_id" in cols:
