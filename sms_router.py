@@ -395,6 +395,7 @@ def _registrar_en_crm_idempotente(
     cur,
     item_id: int,
     inmueble_id: Optional[int],
+    obligacion_id: Optional[int],
     contacto_id: Optional[int],
     telefono: str,
     mensaje: str,
@@ -443,6 +444,8 @@ def _registrar_en_crm_idempotente(
     data: Dict[str, Any] = {}
     if "inmueble_id" in cols:
         data["inmueble_id"] = inmueble_id
+    if "obligacion_id" in cols and obligacion_id:
+        data["obligacion_id"] = obligacion_id
     if "contacto_id" in cols:
         data["contacto_id"] = contacto_id
     data[texto_col] = f"{marker} [SMS - {tipo_campana}] {mensaje}"
@@ -524,7 +527,7 @@ def _asentar_resultado_sms_y_crm(
                     WHERE id=%s
                       AND estado='EN_PROCESO'
                       AND processing_token=%s
-                    RETURNING id,inmueble_id,contacto_id,telefono,
+                    RETURNING id,inmueble_id,obligacion_id,contacto_id,telefono,
                               mensaje_texto,tipo_campana,saldo_calculado;
                     """,
                     (
@@ -554,6 +557,7 @@ def _asentar_resultado_sms_y_crm(
                     cur=cur,
                     item_id=item["id"],
                     inmueble_id=item["inmueble_id"],
+                    obligacion_id=item["obligacion_id"],
                     contacto_id=item["contacto_id"],
                     telefono=item["telefono"],
                     mensaje=item["mensaje_texto"],
