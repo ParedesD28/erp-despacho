@@ -18,6 +18,7 @@ load_dotenv()
 import agenda_service
 import db
 import liquidador
+import migracion_expedientes_runtime
 import main
 import proceso_partes_runtime
 import proceso_partes_service
@@ -63,6 +64,10 @@ if __name__ == "__main__":
     log_msg("🔧 [BOOTSTRAP]", "Verificando esquema de procesos y contactos antes del tráfico...")
     proceso_partes_service.ensure_schema()
     log_msg("✅ [BOOTSTRAP]", "Esquema de procesos y contactos verificado.")
+
+    # Migra de forma transaccional los antiguos EN REPARTO1..6 al esquema
+    # ID interno EXP-xxxx + radicado_rama=EN REPARTO antes de aceptar tráfico.
+    migracion_expedientes_runtime.migrate_legacy_en_reparto()
 
     # Las lecturas normalizadas se activan antes de aceptar tráfico.
     proceso_partes_runtime.install()
