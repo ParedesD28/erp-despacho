@@ -680,13 +680,12 @@ def vista_sms(
             cand = cur.fetchone()
             total_mora = cand["total_mora"] if cand else 0
             cur.execute("""
-                SELECT DISTINCT conjunto_residencial
-                FROM inmuebles_ph
-                WHERE NULLIF(TRIM(conjunto_residencial), '') IS NOT NULL
-                  AND UPPER(TRIM(conjunto_residencial)) <> 'SIN CONJUNTO'
-                ORDER BY conjunto_residencial
+                SELECT nombre
+                FROM conjuntos_residenciales
+                WHERE activo=TRUE
+                ORDER BY nombre
             """)
-            conjuntos = [str(r["conjunto_residencial"]) for r in cur.fetchall()]
+            conjuntos = [str(r["nombre"]) for r in cur.fetchall()]
             candidatos = _candidatos_cartera(
                 cur, tipo_cartera, float(saldo_minimo or 0), saldo_max, None, conjunto
             )
