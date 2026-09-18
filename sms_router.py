@@ -373,6 +373,13 @@ def _filtrar_saldos_verificados(candidatos, saldo_minimo: float, saldo_maximo: O
     return salida
 
 
+def _candidatos_liquidados(candidatos):
+    """Asegura una sola pasada por el motor de liquidación."""
+    if all(isinstance(item, dict) and "saldo_verificado" in item for item in candidatos):
+        return list(candidatos)
+    return enriquecer_candidatos(candidatos)
+
+
 def _columnas_existentes_crm(cur) -> Set[str]:
     cur.execute(
         """
@@ -773,7 +780,7 @@ def vista_sms(
             """)
             conjuntos = [str(r["nombre"]) for r in cur.fetchall()]
             candidatos = _filtrar_saldos_verificados(
-                enriquecer_candidatos(
+                _candidatos_liquidados(
                     _candidatos_cartera(
                         cur, tipo_cartera, float(saldo_minimo or 0), saldo_max, None, conjunto
                     )
@@ -840,7 +847,7 @@ def generar_cola(
                 )
 
                 deudores = _filtrar_saldos_verificados(
-                    enriquecer_candidatos(
+                    _candidatos_liquidados(
                         _candidatos_cartera(
                             cur,
                             tipo_cartera,
