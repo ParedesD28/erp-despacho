@@ -56,17 +56,18 @@ def build_signed_pdf_url(filename: str, base_url: str) -> str:
     return f"{base_url.rstrip('/')}/api/bot/pdf/{filename}?expires={expires}&token={token}"
 
 
-def _parse_payload(payload: Any) -> tuple[int, date]:
+def _parse_payload(payload: Any) -> tuple[int | None, int | None, date]:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="El cuerpo debe ser JSON")
 
     try:
-        inmueble_id = int(payload.get("inmueble_id"))
+        obligacion_id = int(payload.get("obligacion_id")) if payload.get("obligacion_id") else None
+        inmueble_id = int(payload.get("inmueble_id")) if payload.get("inmueble_id") else None
     except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="inmueble_id debe ser un entero")
+        raise HTTPException(status_code=422, detail="obligacion_id/inmueble_id deben ser enteros")
 
-    if inmueble_id <= 0:
-        raise HTTPException(status_code=422, detail="inmueble_id debe ser mayor que cero")
+    if not obligacion_id and not inmueble_id:
+        raise HTTPException(status_code=422, detail="Debe indicar obligacion_id o inmueble_id")
 
     fecha_texto = str(payload.get("fecha_corte") or "")
     try:
@@ -77,7 +78,7 @@ def _parse_payload(payload: Any) -> tuple[int, date]:
     if fecha_corte > date.today():
         raise HTTPException(status_code=422, detail="fecha_corte no puede ser futura")
 
-    return inmueble_id, fecha_corte
+    return obligacion_id, inmueble_id, fecha_corte
 
 
 def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[list[dict], dict, tuple]:
@@ -138,7 +139,50 @@ async def liquidar_para_bot(request: Request):
     except Exception:
         raise HTTPException(status_code=422, detail="El cuerpo debe ser JSON válido")
 
-    inmueble_id, fecha_corte = _parse_payload(payload)
+    obligacion_id, inmueble_id, fecha_corte = _parse_payload(payload)
+
+    import db
+    conn = db.get_connection()
+    try:
+        with conn.cursor() as cur:
+            if obligacion_id:
+                cur.execute(
+                    """
+                    SELECT o.id,o.inmueble_id,o.fuente_saldo
+                    FROM obligaciones o
+                    WHERE o.id=%s
+                    LIMIT 1
+                    """,
+                    (obligacion_id,),
+                )
+                ob=cur.fetchone()
+                if not ob:
+                    raise HTTPException(status_code=404, detail="Obligación no encontrada")
+                if str(ob["fuente_saldo"] or "").upper() != "EXPENSAS_PH":
+                    raise HTTPException(status_code=409, detail="La liquidación PDF de este endpoint requiere una obligación PH.")
+                inmueble_id=int(ob["inmueble_id"]) if ob["inmueble_id"] else None
+            else:
+                cur.execute(
+                    """
+                    SELECT o.id
+                    FROM obligaciones o
+                    WHERE o.inmueble_id=%s
+                      AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+                      AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+                    ORDER BY o.id DESC
+                    LIMIT 1
+                    """,
+                    (inmueble_id,),
+                )
+                ob=cur.fetchone()
+                if not ob:
+                    raise HTTPException(status_code=404, detail="No existe una obligación PH activa para el inmueble")
+                obligacion_id=int(ob["id"])
+    finally:
+        conn.release()
+
+    if not inmueble_id:
+        raise HTTPException(status_code=404, detail="La obligación no tiene inmueble PH")
 
     try:
         resultados, resumen, inm_info = _obtener_datos_liquidacion(inmueble_id, fecha_corte)
@@ -158,6 +202,7 @@ async def liquidar_para_bot(request: Request):
             "status": "success",
             "mensaje": "Liquidación generada correctamente",
             "datos": {
+                "obligacion_id": obligacion_id,
                 "inmueble_id": inmueble_id,
                 "deudor": inm_info[2],
                 "identificacion": inm_info[3],
