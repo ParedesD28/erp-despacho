@@ -88,6 +88,7 @@ def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[lis
         23.8,
         0.0,
         fecha_corte,
+        autocausar=True,
     )
     if not inm_info:
         raise HTTPException(status_code=404, detail="No existe información del inmueble")
