@@ -337,10 +337,11 @@ def _get_inmueble_info(cur, inmueble_id):
 def _get_process(cur, radicado):
     cols = _cols(cur, "procesos")
     wanted = [
-        "radicado_interno", "radicado_rama", "tipo_cartera", "naturaleza", "juzgado",
-        "etapa_actual", "estado", "pretensiones", "medidas_cautelares",
-        "id_cliente", "demandante", "id_demandado", "demandado",
-        "abogado_id", "inmueble_id", "fecha_radicacion", "torre_apto",
+        "radicado_interno", "radicado_rama", "estado_rama", "tipo_cartera",
+        "tipo_proceso_id", "naturaleza", "juzgado", "etapa_actual", "estado",
+        "pretensiones", "medidas_cautelares", "id_cliente", "demandante",
+        "id_demandado", "demandado", "abogado_id", "inmueble_id",
+        "fecha_radicacion", "torre_apto",
     ]
     avail = [c for c in wanted if c in cols]
     if not avail:
@@ -360,60 +361,69 @@ def _get_process(cur, radicado):
             proc["abogado_asignado"] = _row_value(ab_row, "nombre", _row_value(ab_row, 0))
     return proc
 
-
 def _get_demandantes(cur, proceso):
-    out = []
-    seen = set()
     if not proceso:
-        return out
+        return []
+    radicado = str(proceso.get("radicado_interno") or "").strip()
+    if _table_exists(cur, "proceso_partes") and _table_exists(cur, "contactos") and radicado:
+        cur.execute(
+            """
+            SELECT c.identificacion, c.nombre, c.tipo, c.telefono, c.email, c.direccion, c.ciudad,
+                   pp.es_principal
+            FROM proceso_partes pp
+            JOIN contactos c ON c.id=pp.contacto_id
+            WHERE pp.radicado_interno=%s
+              AND UPPER(pp.rol)='DEMANDANTE'
+            ORDER BY pp.es_principal DESC, c.nombre ASC
+            """,
+            (radicado,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        if rows:
+            return rows
     raw = proceso.get("id_cliente")
     ids = [str(x).strip() for x in str(raw or "").split("|") if str(x).strip()]
-    if ids and _table_exists(cur, "contactos"):
-        placeholders = ",".join(["%s"] * len(ids))
-        cur.execute(f"SELECT identificacion, nombre, tipo, telefono, email, direccion, ciudad FROM contactos WHERE identificacion IN ({placeholders}) ORDER BY nombre ASC", ids)
-        for r in cur.fetchall():
-            d = {k: _row_value(r, k) for k in ("identificacion", "nombre", "tipo", "telefono", "email", "direccion", "ciudad")}
-            ident = str(d.get("identificacion") or "").strip()
-            if ident and ident not in seen:
-                seen.add(ident)
-                out.append(d)
-    if not out and ids:
-        for i in ids:
-            if i not in seen:
-                seen.add(i)
-                out.append({"identificacion": i, "nombre": proceso.get("demandante") or i})
-    return out
-
+    if not ids or not _table_exists(cur, "contactos"):
+        return []
+    placeholders = ",".join(["%s"] * len(ids))
+    cur.execute(
+        f"SELECT identificacion,nombre,tipo,telefono,email,direccion,ciudad FROM contactos WHERE identificacion IN ({placeholders}) ORDER BY nombre ASC",
+        ids,
+    )
+    return [dict(r) for r in cur.fetchall()]
 
 def _get_demandados(cur, radicado):
-    out = []
-    seen = set()
-    if _table_exists(cur, "procesos_litisconsorcio") and _table_exists(cur, "contactos"):
-        cur.execute("""
-            SELECT c.identificacion, c.nombre, c.tipo, c.telefono, c.email, c.direccion, c.ciudad
-            FROM procesos_litisconsorcio pl JOIN contactos c ON c.identificacion=pl.identificacion_demandado
-            WHERE pl.radicado_interno=%s ORDER BY c.nombre ASC
-        """, (radicado,))
-        for r in cur.fetchall():
-            d = {k: _row_value(r, k) for k in ("identificacion", "nombre", "tipo", "telefono", "email", "direccion", "ciudad")}
-            ident = str(d.get("identificacion") or "").strip()
-            if ident and ident not in seen:
-                seen.add(ident)
-                out.append(d)
-    if not out:
-        cur.execute("SELECT id_demandado, demandado FROM procesos WHERE radicado_interno=%s LIMIT 1", (radicado,))
-        row = cur.fetchone()
-        if row:
-            raw_ids = _row_value(row, "id_demandado", _row_value(row, 0))
-            raw_nom = _row_value(row, "demandado", _row_value(row, 1))
-            ids = [str(x).strip() for x in str(raw_ids or "").split("|") if str(x).strip()]
-            noms = [str(x).strip() for x in str(raw_nom or "").split("|") if str(x).strip()]
-            for idx, ident in enumerate(ids):
-                if ident not in seen:
-                    seen.add(ident)
-                    out.append({"identificacion": ident, "nombre": noms[idx] if idx < len(noms) else ident})
-    return out
-
+    radicado = str(radicado or "").strip()
+    if not radicado:
+        return []
+    if _table_exists(cur, "proceso_partes") and _table_exists(cur, "contactos"):
+        cur.execute(
+            """
+            SELECT c.identificacion, c.nombre, c.tipo, c.telefono, c.email, c.direccion, c.ciudad,
+                   pp.es_principal
+            FROM proceso_partes pp
+            JOIN contactos c ON c.id=pp.contacto_id
+            WHERE pp.radicado_interno=%s
+              AND UPPER(pp.rol)='DEMANDADO'
+            ORDER BY pp.es_principal DESC, c.nombre ASC
+            """,
+            (radicado,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        if rows:
+            return rows
+    cur.execute("SELECT id_demandado,demandado FROM procesos WHERE radicado_interno=%s LIMIT 1", (radicado,))
+    row = cur.fetchone()
+    if not row:
+        return []
+    raw_ids = _row_value(row, "id_demandado", _row_value(row, 0))
+    raw_names = _row_value(row, "demandado", _row_value(row, 1))
+    ids = [str(x).strip() for x in str(raw_ids or "").split("|") if str(x).strip()]
+    names = [str(x).strip() for x in str(raw_names or "").split("|") if str(x).strip()]
+    return [
+        {"identificacion": ident, "nombre": names[i] if i < len(names) else ident}
+        for i, ident in enumerate(ids)
+    ]
 
 def _get_actuaciones(cur, radicado):
     if not _table_exists(cur, "actuaciones"):
