@@ -2,7 +2,7 @@
 
 {% block contenido %}
 <header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm">
-    <h2 class="text-xl font-semibold text-slate-800">CRM de Cartera - Propiedad Horizontal</h2>
+    <h2 class="text-xl font-semibold text-slate-800">CRM de Gestión de Cartera</h2>
 </header>
 
 <div class="p-8 grid grid-cols-1 xl:grid-cols-12 gap-8 items-start h-[calc(100vh-4rem)] overflow-y-auto">
@@ -15,19 +15,9 @@
             <i data-lucide="home" class="w-5 h-5 text-blue-600"></i> Buscar Inmueble
         </h3>
         
-        <div class="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-            <div class="text-xs font-bold uppercase text-emerald-700 mb-2">Administrar conjuntos</div>
-            <form method="POST" action="/crm/conjuntos/guardar" class="flex gap-2">
-                <input name="nombre" class="flex-1 border border-slate-300 rounded-md p-2.5 text-sm bg-white"
-                       placeholder="Ej: URBANIZACIÓN SANTA CLARA MANZANA 7 PH" required>
-                <button class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 rounded-md">Crear conjunto</button>
-            </form>
-            <div class="text-[11px] text-slate-500 mt-2">Una vez creado aparecerá automáticamente en Procesos, CRM y SMS.</div>
-        </div>
-
         <form method="GET" action="/crm" class="space-y-5" onsubmit="if(!document.getElementById('hidden_inmueble_id').value){ alert('⚠️ Selecciona un inmueble válido de la lista.'); return false; }">
             <div>
-                <label class="block text-xs font-bold text-slate-500 uppercase mb-2">1. Conjunto Residencial</label>
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-2">1. Conjunto Residencial (filtro opcional)</label>
                 <select id="filtro_conjunto" class="w-full border border-slate-300 rounded-md p-2.5 text-sm bg-slate-50 focus:border-blue-500 outline-none text-slate-700 shadow-sm" onchange="actualizarDatalist()">
                     <option value="TODOS" {% if conjunto_actual == 'TODOS' %}selected{% endif %}>Mostrar Todos</option>
                     {% for c in conjuntos %}
@@ -125,8 +115,8 @@
             <div class="space-y-4">
                 {% for p in propietarios %}
                 <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 shadow-sm relative overflow-hidden">
-                    <div class="absolute left-0 top-0 bottom-0 w-1 bg-blue-500"></div>
-                    <p class="text-sm font-bold text-slate-800 mb-2 pl-2">{{ p.nombre }}</p>
+                    <div class="absolute left-0 top-0 bottom-0 w-1 {% if p.es_principal %}bg-blue-500{% else %}bg-slate-300{% endif %}"></div>
+                    <div class="pl-2 flex items-center gap-2"><p class="text-sm font-bold text-slate-800 mb-2">{{ p.nombre }}</p>{% if p.es_principal %}<span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 mb-2">Principal</span>{% endif %}</div>
                     <div class="space-y-1.5 text-xs text-slate-600 pl-2">
                         <p class="flex items-center gap-2"><i data-lucide="credit-card" class="w-3.5 h-3.5 text-slate-400"></i> {{ p.identificacion }}</p>
                         <p class="flex items-center gap-2"><i data-lucide="phone" class="w-3.5 h-3.5 text-slate-400"></i> {{ p.telefono or 'No registrado' }}</p>
