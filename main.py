@@ -1187,104 +1187,189 @@ def startup_schema_init():
 
 
 @app.get("/crm")
-def crm(request: Request, buscar_inmueble: str | None = None):
+def crm(
+    request: Request,
+    buscar_acreedor: str | None = None,
+    acreedor_id: str | None = None,
+    radicado_interno: str | None = None,
+):
     conn = db.get_connection()
     try:
-        inmuebles = cargar_inmuebles_ph(conn)
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            conjuntos = [r["nombre"] for r in catalogos_service.listar_conjuntos(cur, activos=True)]
-        filtro = {}
-        for item in inmuebles:
-            filtro.setdefault(item.get("conjunto_residencial") or "SIN CONJUNTO", []).append({
-                "id": item.get("id"),
-                "nombre": f"{item.get('torre_apto') or ''} - {item.get('nombre') or ''} ({item.get('cedula') or ''})".strip(" -"),
-            })
-        
-        # Limpiar buscar_inmueble de caracteres espurios
-        inmueble_id_limpio = None
-        if buscar_inmueble:
-            m_id = re.search(r"\d+", str(buscar_inmueble))
-            if m_id:
-                inmueble_id_limpio = m_id.group(0)
+        acreedores = []
+        cuentas = []
+        acreedor_seleccionado = None
+        cuenta_actual = None
+        propietarios = []
+        historial = []
 
-        inmueble_actual = next(
-            (x for x in inmuebles if inmueble_id_limpio and str(x.get("id")) == str(inmueble_id_limpio)),
-            None,
-        )
-        propietarios, historial = [], []
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            if inmueble_actual:
+            termino = str(buscar_acreedor or "").strip()
+            if termino:
                 cur.execute(
                     """
-                    SELECT c.identificacion, c.nombre, c.telefono, c.email, ip.es_principal
-                    FROM inmueble_propietarios ip
-                    JOIN contactos c ON c.id=ip.contacto_id
-                    WHERE ip.inmueble_id=%s
-                    ORDER BY ip.es_principal DESC, c.nombre ASC
+                    SELECT identificacion, nombre, telefono, email
+                    FROM contactos
+                    WHERE tipo='Cliente'
+                      AND (identificacion ILIKE %s OR nombre ILIKE %s)
+                    ORDER BY nombre ASC
+                    LIMIT 100
                     """,
-                    (int(inmueble_id_limpio),),
+                    (f"%{termino}%", f"%{termino}%"),
                 )
-                propietarios = [dict(r) for r in cur.fetchall()]
-                if not propietarios and inmueble_actual.get("cedula"):
-                    propietarios = [{
-                        "identificacion": inmueble_actual.get("cedula"),
-                        "nombre": inmueble_actual.get("nombre"),
-                        "telefono": None,
-                        "email": None,
-                        "es_principal": True,
-                    }]
-                ids_propietarios = [str(p["identificacion"]).strip() for p in propietarios if p.get("identificacion")]
-                cur.execute(
-                    "SELECT id, tipo_contacto AS tipo, identificacion_deudor AS deudor_nombre, "
-                    "resumen, promesa_pago_fecha AS promesa, usuario, fecha "
-                    "FROM gestiones_crm "
-                    "WHERE (inmueble_id=%s OR identificacion_deudor = ANY(%s)) "
-                    "AND COALESCE(anulado,FALSE)=FALSE "
-                    "ORDER BY fecha DESC LIMIT 200",
-                    (int(inmueble_id_limpio), ids_propietarios),
-                )
-                historial = []
-                for r in cur.fetchall():
-                    row_d = dict(r)
-                    row_d["tabla_origen"] = "gestiones_crm"
-                    historial.append(row_d)
+                acreedores = [dict(r) for r in cur.fetchall()]
 
-                if expedientes_service._table_exists(cur, "gestiones_cartera") and ids_propietarios:
-                    cur.execute(
-                        "SELECT * FROM gestiones_cartera "
-                        "WHERE REGEXP_REPLACE(COALESCE(identificacion_deudor::text,''), '[^0-9]', '', 'g') = ANY(%s) "
-                        "LIMIT 200",
-                        ([str(x).replace(".", "") for x in ids_propietarios],),
+            if acreedor_id:
+                cur.execute(
+                    """
+                    SELECT identificacion, nombre, telefono, email
+                    FROM contactos
+                    WHERE tipo='Cliente' AND identificacion=%s
+                    LIMIT 1
+                    """,
+                    (str(acreedor_id).strip(),),
+                )
+                row = cur.fetchone()
+                if row:
+                    acreedor_seleccionado = dict(row)
+
+            if acreedor_seleccionado:
+                cur.execute(
+                    """
+                    SELECT
+                        p.radicado_interno,
+                        p.radicado_rama,
+                        p.tipo_cartera,
+                        p.naturaleza,
+                        p.estado,
+                        p.pretensiones,
+                        p.inmueble_id,
+                        p.id_demandado,
+                        p.demandado,
+                        i.conjunto_residencial,
+                        i.torre_apto
+                    FROM procesos p
+                    LEFT JOIN inmuebles_ph i ON i.id=p.inmueble_id
+                    WHERE %s = ANY(
+                        string_to_array(
+                            replace(COALESCE(p.id_cliente,''), ' ', ''),
+                            '|'
+                        )
                     )
+                    ORDER BY p.radicado_interno DESC
+                    """,
+                    (acreedor_seleccionado["identificacion"],),
+                )
+                cuentas = [dict(r) for r in cur.fetchall()]
+
+            if radicado_interno and acreedor_seleccionado:
+                cuenta_actual = next(
+                    (c for c in cuentas if str(c.get("radicado_interno")) == str(radicado_interno)),
+                    None,
+                )
+
+            if cuenta_actual:
+                inmueble_id = cuenta_actual.get("inmueble_id")
+
+                if inmueble_id:
+                    cur.execute(
+                        """
+                        SELECT c.identificacion, c.nombre, c.telefono, c.email, ip.es_principal
+                        FROM inmueble_propietarios ip
+                        JOIN contactos c ON c.id=ip.contacto_id
+                        WHERE ip.inmueble_id=%s
+                        ORDER BY ip.es_principal DESC, c.nombre ASC
+                        """,
+                        (int(inmueble_id),),
+                    )
+                    propietarios = [dict(r) for r in cur.fetchall()]
+
+                if expedientes_service._table_exists(cur, "gestiones_crm"):
+                    condiciones = ["radicado_interno=%s"]
+                    params = [cuenta_actual["radicado_interno"]]
+                    if inmueble_id:
+                        condiciones.append("(radicado_interno IS NULL AND inmueble_id=%s)")
+                        params.append(int(inmueble_id))
+
+                    cur.execute(
+                        f"""
+                        SELECT id, tipo_contacto AS tipo,
+                               identificacion_deudor AS deudor_nombre,
+                               resumen, promesa_pago_fecha AS promesa,
+                               usuario, fecha
+                        FROM gestiones_crm
+                        WHERE ({' OR '.join(condiciones)})
+                          AND COALESCE(anulado,FALSE)=FALSE
+                        ORDER BY fecha DESC
+                        LIMIT 200
+                        """,
+                        params,
+                    )
+                    historial = []
                     for r in cur.fetchall():
                         d = dict(r)
-                        # Filtrar anulados si existen columnas anulado o estado
-                        if d.get("anulado") is True or str(d.get("estado", "")).upper() == "ANULADO":
-                            continue
-                        gestion_fecha = next(
-                            (
-                                d.get(name)
-                                for name in (
-                                    "fecha", "fecha_gestion", "created_at", "createdAt",
-                                    "timestamp", "fecha_registro", "created",
-                                )
-                                if d.get(name) is not None
-                            ),
-                            None,
+                        d["tabla_origen"] = "gestiones_crm"
+                        historial.append(d)
+
+                if expedientes_service._table_exists(cur, "gestiones_cartera"):
+                    ids_deudores = [
+                        str(x).strip()
+                        for x in str(cuenta_actual.get("id_demandado") or "").split("|")
+                        if str(x).strip().isdigit()
+                    ]
+                    if ids_deudores:
+                        cur.execute(
+                            """
+                            SELECT * FROM gestiones_cartera
+                            WHERE REGEXP_REPLACE(
+                                COALESCE(identificacion_deudor::text,''),
+                                '[^0-9]', '', 'g'
+                            ) = ANY(%s)
+                            LIMIT 200
+                            """,
+                            (ids_deudores,),
                         )
-                        g_id = d.get("id") or d.get("id_gestion") or d.get("gestion_id")
-                        historial.append({
-                            "id": g_id,
-                            "tipo": d.get("tipo_contacto") or "WhatsApp IA",
-                            "deudor_nombre": d.get("identificacion_deudor") or (ids_propietarios[0] if ids_propietarios else ""),
-                            "resumen": d.get("resumen", ""),
-                            "promesa": d.get("promesa_pago_fecha"),
-                            "usuario": d.get("usuario", "Bot Claude"),
-                            "fecha": gestion_fecha,
-                            "tabla_origen": "gestiones_cartera",
-                        })
-                    historial.sort(key=lambda x: str(x.get("fecha") or ""), reverse=True)
-        return render_template("crm.html", {"request": request, "conjuntos": conjuntos, "json_filtro": json.dumps(filtro, ensure_ascii=False), "conjunto_actual": "TODOS", "inmueble_actual": inmueble_actual, "propietarios": propietarios, "historial": historial})
+                        for r in cur.fetchall():
+                            d = dict(r)
+                            if d.get("anulado") is True or str(d.get("estado", "")).upper() == "ANULADO":
+                                continue
+                            gestion_fecha = next(
+                                (
+                                    d.get(name)
+                                    for name in (
+                                        "fecha", "fecha_gestion", "created_at",
+                                        "createdAt", "timestamp", "fecha_registro", "created"
+                                    )
+                                    if d.get(name) is not None
+                                ),
+                                None,
+                            )
+                            g_id = d.get("id") or d.get("id_gestion") or d.get("gestion_id")
+                            historial.append({
+                                "id": g_id,
+                                "tipo": d.get("tipo_contacto") or "WhatsApp IA",
+                                "deudor_nombre": d.get("identificacion_deudor") or "",
+                                "resumen": d.get("resumen", ""),
+                                "promesa": d.get("promesa_pago_fecha"),
+                                "usuario": d.get("usuario", "Bot Claude"),
+                                "fecha": gestion_fecha,
+                                "tabla_origen": "gestiones_cartera",
+                            })
+                        historial.sort(key=lambda x: str(x.get("fecha") or ""), reverse=True)
+
+        return render_template(
+            "crm.html",
+            {
+                "request": request,
+                "buscar_acreedor": buscar_acreedor or "",
+                "acreedores": acreedores,
+                "acreedor_seleccionado": acreedor_seleccionado,
+                "cuentas": cuentas,
+                "cuenta_actual": cuenta_actual,
+                "inmueble_actual": cuenta_actual,
+                "propietarios": propietarios,
+                "historial": historial,
+            },
+        )
     finally:
         conn.release()
 
@@ -1292,7 +1377,8 @@ def crm(request: Request, buscar_inmueble: str | None = None):
 @app.post("/crm/guardar")
 def crm_guardar(
     request: Request,
-    inmueble_id: int = Form(...),
+    radicado_interno: str | None = Form(None),
+    inmueble_id: int | None = Form(None),
     tipo_contacto: str = Form(...),
     resumen: str = Form(...),
     promesa_pago_fecha: date | None = Form(None),
@@ -1302,15 +1388,40 @@ def crm_guardar(
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO gestiones_crm
-                        (inmueble_id, tipo_contacto, resumen, promesa_pago_fecha, identificacion_deudor, usuario)
-                    VALUES (%s, %s, %s, %s, %s, 'ERP')
-                """, (inmueble_id, tipo_contacto.strip(), resumen.strip(), promesa_pago_fecha, identificacion_deudor))
-        return _redirect(f"/crm?buscar_inmueble={inmueble_id}", mensaje="Gestión+registrada")
+                        (
+                            radicado_interno,
+                            inmueble_id,
+                            tipo_contacto,
+                            resumen,
+                            promesa_pago_fecha,
+                            identificacion_deudor,
+                            usuario
+                        )
+                    VALUES (%s, %s, %s, %s, %s, %s, 'ERP')
+                    """,
+                    (
+                        str(radicado_interno or "").strip() or None,
+                        inmueble_id,
+                        tipo_contacto.strip(),
+                        resumen.strip(),
+                        promesa_pago_fecha,
+                        identificacion_deudor,
+                    ),
+                )
+
+        params = {"mensaje": "Gestión registrada"}
+        if radicado_interno:
+            params["radicado_interno"] = radicado_interno
+        return _redirect("/crm", **params)
     except Exception as exc:
-        print(f"[CRM] Error guardando gestion: {exc}", flush=True)
-        return _redirect(f"/crm?buscar_inmueble={inmueble_id}", error="No+fue+posible+guardar+la+gestion")
+        print(f"[CRM] Error guardando gestion: {exc!r}", flush=True)
+        params = {"error": "No fue posible guardar la gestión"}
+        if radicado_interno:
+            params["radicado_interno"] = radicado_interno
+        return _redirect("/crm", **params)
     finally:
         conn.release()
 
@@ -1319,6 +1430,7 @@ def crm_guardar(
 def crm_anular(
     gestion_id: int = Form(...),
     inmueble_id: str | None = Form(None),
+    radicado_interno: str | None = Form(None),
     tabla_origen: str = Form("gestiones_crm"),
 ):
     conn = db.get_connection()
@@ -1326,40 +1438,62 @@ def crm_anular(
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 anulado = False
-                # 1. Anular en gestiones_crm
-                if tabla_origen == "gestiones_crm" or not anulado:
+
+                if tabla_origen == "gestiones_crm":
                     cur.execute("SELECT id FROM gestiones_crm WHERE id=%s LIMIT 1", (gestion_id,))
                     if cur.fetchone():
                         cols = expedientes_service._cols(cur, "gestiones_crm")
                         if "estado" in cols:
-                            cur.execute("UPDATE gestiones_crm SET anulado=TRUE, estado='ANULADO' WHERE id=%s", (gestion_id,))
+                            cur.execute(
+                                "UPDATE gestiones_crm SET anulado=TRUE, estado='ANULADO' WHERE id=%s",
+                                (gestion_id,),
+                            )
                         else:
-                            cur.execute("UPDATE gestiones_crm SET anulado=TRUE WHERE id=%s", (gestion_id,))
+                            cur.execute(
+                                "UPDATE gestiones_crm SET anulado=TRUE WHERE id=%s",
+                                (gestion_id,),
+                            )
                         anulado = True
 
-                # 2. Anular en gestiones_cartera
                 if not anulado and expedientes_service._table_exists(cur, "gestiones_cartera"):
                     cols_c = expedientes_service._cols(cur, "gestiones_cartera")
                     id_col = "id" if "id" in cols_c else ("id_gestion" if "id_gestion" in cols_c else "gestion_id")
                     if id_col in cols_c:
-                        cur.execute(f"SELECT {id_col} FROM gestiones_cartera WHERE {id_col}=%s LIMIT 1", (gestion_id,))
+                        cur.execute(
+                            f"SELECT {id_col} FROM gestiones_cartera WHERE {id_col}=%s LIMIT 1",
+                            (gestion_id,),
+                        )
                         if cur.fetchone():
                             if "anulado" in cols_c:
-                                cur.execute(f"UPDATE gestiones_cartera SET anulado=TRUE WHERE {id_col}=%s", (gestion_id,))
+                                cur.execute(
+                                    f"UPDATE gestiones_cartera SET anulado=TRUE WHERE {id_col}=%s",
+                                    (gestion_id,),
+                                )
                             elif "estado" in cols_c:
-                                cur.execute(f"UPDATE gestiones_cartera SET estado='ANULADO' WHERE {id_col}=%s", (gestion_id,))
+                                cur.execute(
+                                    f"UPDATE gestiones_cartera SET estado='ANULADO' WHERE {id_col}=%s",
+                                    (gestion_id,),
+                                )
                             else:
-                                cur.execute(f"DELETE FROM gestiones_cartera WHERE {id_col}=%s", (gestion_id,))
+                                cur.execute(
+                                    f"DELETE FROM gestiones_cartera WHERE {id_col}=%s",
+                                    (gestion_id,),
+                                )
                             anulado = True
 
-                dest = f"/crm?buscar_inmueble={inmueble_id}" if inmueble_id else "/crm"
+                params = {}
+                if radicado_interno:
+                    params["radicado_interno"] = radicado_interno
                 if not anulado:
-                    return _redirect(dest, error="Gestión no encontrada")
-        return _redirect(dest, mensaje="Gestión anulada exitosamente")
+                    return _redirect("/crm", error="Gestión no encontrada", **params)
+
+        return _redirect("/crm", mensaje="Gestión anulada exitosamente", **params)
     except Exception as exc:
         print(f"[CRM] Error anulando gestion: {exc!r}", flush=True)
-        dest = f"/crm?buscar_inmueble={inmueble_id}" if inmueble_id else "/crm"
-        return _redirect(dest, error="No fue posible anular la gestión")
+        params = {}
+        if radicado_interno:
+            params["radicado_interno"] = radicado_interno
+        return _redirect("/crm", error="No fue posible anular la gestión", **params)
     finally:
         conn.release()
 
