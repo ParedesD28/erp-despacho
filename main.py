@@ -577,6 +577,10 @@ async def crear_expediente_completo(request: Request):
     conjunto_nombre = str(form.get("conjunto_residencial") or "").strip()
     abogado_raw = str(form.get("abogado_id") or "").strip()
     abogado_id = int(abogado_raw) if abogado_raw.isdigit() else None
+    if abogado_id is None:
+        session_user = getattr(request.state, "user_id", None)
+        if str(session_user or "").isdigit():
+            abogado_id = int(session_user)
     medidas = str(form.get("medidas_cautelares") or "").strip()
 
     pretensiones = expedientes_service._parse_money(
@@ -738,26 +742,30 @@ async def crear_expediente_completo(request: Request):
                     numero = str(form.get("juzgado_numero") or "").strip()
                     tipo_juzgado = str(form.get("juzgado_tipo") or "").strip()
                     ciudad_juzgado = str(form.get("juzgado_ciudad") or "").strip()
-                    partes_juzgado = [x for x in (numero, tipo_juzgado, ciudad_juzgado) if x]
-                    juzgado = " ".join(partes_juzgado).strip() or None
+                    if numero:
+                        partes_juzgado = [numero, tipo_juzgado, ciudad_juzgado]
+                        juzgado = " ".join(x for x in partes_juzgado if x).strip() or None
+                    else:
+                        juzgado = None
 
                     if radicado_rama_db and not juzgado:
                         raise ValueError(
                             "Cuando ya existe radicado Rama debes indicar el juzgado de conocimiento"
                         )
 
-                cur.execute(
-                    """
-                    SELECT 1
-                    FROM procesos
-                    WHERE radicado_rama=%s
-                      AND radicado_rama IS NOT NULL
-                    LIMIT 1
-                    """,
-                    (radicado_rama_db,),
-                ) if radicado_rama_db else None
-                if radicado_rama_db and cur.fetchone():
-                    raise ValueError("El radicado Rama Judicial ya existe")
+                if radicado_rama_db:
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM procesos
+                        WHERE radicado_rama=%s
+                          AND radicado_rama IS NOT NULL
+                        LIMIT 1
+                        """,
+                        (radicado_rama_db,),
+                    )
+                    if cur.fetchone():
+                        raise ValueError("El radicado Rama Judicial ya existe")
 
                 all_ids = list(dict.fromkeys(demandantes + demandados))
                 placeholders = ",".join(["%s"] * len(all_ids))
