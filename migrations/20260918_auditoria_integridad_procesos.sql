@@ -39,6 +39,18 @@ SET naturaleza=CASE
     ELSE 'EJECUTIVO'
 END;
 
+UPDATE procesos
+SET etapa_actual='1. Presentación de la demanda'
+WHERE etapa_actual IS NULL
+  AND radicado_interno <> 'EXP-0006';
+
+-- EXP-0027 fue creado sin abogado; se asigna al abogado operativo principal
+-- utilizado en los procesos nuevos de esta cartera.
+UPDATE procesos
+SET abogado_id=2
+WHERE radicado_interno='EXP-0027'
+  AND abogado_id IS NULL;
+
 DELETE FROM procesos_litisconsorcio;
 
 INSERT INTO procesos_litisconsorcio
