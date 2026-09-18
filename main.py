@@ -725,9 +725,9 @@ async def crear_expediente_completo(request: Request):
                         raise ValueError("Debes indicar el número o referencia del documento")
                     if capital_titulo <= 0:
                         raise ValueError("El capital de la obligación debe ser mayor que cero")
-                elif tipo_obligacion and tipo_obligacion["codigo"] != "CUOTAS_ADMINISTRACION":
-                    if capital_titulo < 0:
-                        raise ValueError("El capital de la obligación no puede ser negativo")
+                elif tipo_obligacion:
+                    if capital_titulo <= 0:
+                        raise ValueError("El capital inicial de la obligación debe ser mayor que cero")
 
                 # Un radicado real solo existe cuando el usuario lo aporta.
                 # EN REPARTO se maneja como estado_rama, no como falso radicado.
