@@ -143,7 +143,7 @@ def _confirmar_cola(data: WizardConfirmacion):
                             saldo_calculado_en, mensaje_template, mensaje_texto,
                             tipo_campana, estado
                         )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
                         RETURNING id;
                         """,
                         (
