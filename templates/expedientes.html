@@ -53,8 +53,7 @@
                     <tr>
                         <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Expediente</th>
                         <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Cartera</th>
-                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Demandante</th>
-                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Demandado</th>
+                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Partes</th>
                     </tr>
                 </thead>
                 <tbody id="cuerpo-tabla" class="divide-y divide-slate-100">
@@ -71,8 +70,11 @@
                                 <span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-blue-100 text-blue-800 border border-blue-200">Jurídico</span>
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4 text-sm text-slate-700 font-bold uppercase">{{ p.demandante_db or p.id_cliente or 'SIN REGISTRO' }}</td>
-                        <td class="px-6 py-4 text-sm text-slate-700 font-medium uppercase">{{ p.demandado or 'SIN REGISTRO' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-700 font-medium uppercase">
+                            <div class="font-bold">{{ p.demandante_nombre or 'SIN DEMANDANTE' }}</div>
+                            <div class="text-[10px] font-black text-slate-400 uppercase my-1">vs</div>
+                            <div class="font-bold">{{ p.demandado_nombre or 'SIN DEMANDADO' }}</div>
+                        </td>
                     </tr>
                 {% endfor %}
                 </tbody>
