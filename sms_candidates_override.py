@@ -32,6 +32,7 @@ def candidatos_cartera(
     saldo_minimo: float = 0,
     saldo_maximo: Optional[float] = None,
     ids: Optional[List[int]] = None,
+    conjunto: str = "",
 ):
     cartera = (tipo_cartera or "").upper().strip()
     if cartera and cartera not in CARTERAS_VALIDAS:
@@ -64,6 +65,9 @@ def candidatos_cartera(
     if ids:
         where.append("base.contacto_id = ANY(%s)")
         params.append(ids)
+    if conjunto:
+        where.append("COALESCE(base.conjunto_residencial, '') = %s")
+        params.append(conjunto.strip())
 
     query = f"""
         WITH vigentes AS (
