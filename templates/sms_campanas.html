@@ -141,12 +141,12 @@
                             </thead>
                             <tbody>
                             {% for c in candidatos %}
-                            <tr class="candidate-row" data-contacto-id="{{ c.contacto_id }}" data-nombre="{{ c.nombre|e }}" data-identificacion="{{ c.identificacion|e }}" data-telefono="{{ c.telefono|e }}" data-radicado="{{ c.radicado_interno|e }}" data-naturaleza="{{ c.naturaleza|e }}" data-etapa="{{ c.etapa_actual|e }}" data-cartera="{{ c.tipo_cartera|e }}" data-inmueble-id="{{ c.inmueble_id or '' }}" data-conjunto="{{ c.conjunto_residencial|e }}" data-unidad="{{ c.torre_apto|e }}" data-saldo="{{ c.saldo_total }}" data-fuente="{{ c.saldo_fuente|e }}">
-                                <td><input type="checkbox" class="form-check-input selector-candidato" value="{{ c.contacto_id }}" onchange="actualizarSeleccion(this)"></td>
+                            <tr class="candidate-row {% if not c.saldo_verificado %}table-warning{% endif %}" data-contacto-id="{{ c.contacto_id }}" data-nombre="{{ c.nombre|e }}" data-identificacion="{{ c.identificacion|e }}" data-telefono="{{ c.telefono|e }}" data-radicado="{{ c.radicado_interno|e }}" data-naturaleza="{{ c.naturaleza|e }}" data-etapa="{{ c.etapa_actual|e }}" data-cartera="{{ c.tipo_cartera|e }}" data-inmueble-id="{{ c.inmueble_id or '' }}" data-conjunto="{{ c.conjunto_residencial|e }}" data-unidad="{{ c.torre_apto|e }}" data-saldo="{{ c.saldo_total or 0 }}" data-fuente="{{ c.saldo_fuente|e }}" data-saldo-verificado="{{ '1' if c.saldo_verificado else '0' }}">
+                                <td><input type="checkbox" class="form-check-input selector-candidato" value="{{ c.contacto_id }}" {% if not c.saldo_verificado %}disabled{% endif %} onchange="actualizarSeleccion(this)"></td>
                                 <td><strong>{{ c.nombre }}</strong><br><span class="text-muted">{{ c.identificacion }}</span><br><code>+57{{ c.telefono }}</code></td>
                                 <td><strong>{{ c.radicado_interno }}</strong><br><span class="text-muted">{{ c.naturaleza or '' }}</span><br><span class="badge {% if c.tipo_cartera == 'JURIDICO' %}bg-primary{% else %}bg-warning text-dark{% endif %}">{{ c.tipo_cartera or 'PREJURIDICO' }}</span></td>
-                                <td><span class="badge bg-light text-dark border">{{ c.saldo_fuente }}</span></td>
-                                <td class="fw-bold">${{ "{:,.0f}".format(c.saldo_total or 0).replace(",", ".") }}</td>
+                                <td>{% if c.saldo_verificado %}<span class="badge bg-success-subtle text-success border">LIQUIDADO</span> <span class="badge bg-light text-dark border">{{ c.saldo_fuente }}</span>{% else %}<span class="badge bg-warning-subtle text-warning-emphasis border">BLOQUEADO: SIN LIQUIDAR</span>{% endif %}</td>
+                                <td class="fw-bold">{% if c.saldo_verificado %}COP {{ "{:,.0f}".format(c.saldo_total or 0).replace(",", ".") }}{% else %}<span class="text-warning-emphasis">No disponible</span>{% endif %}</td>
                             </tr>
                             {% else %}<tr><td colspan="5" class="text-center text-muted py-4">No hay candidatos con los filtros actuales.</td></tr>{% endfor %}
                             </tbody>
@@ -259,7 +259,7 @@ function reemplazarPlantilla(template,c){
 }
 function leerCandidatos(){
   const rows=[...document.querySelectorAll('.candidate-row')];
-  return rows.filter(r=>r.querySelector('.selector-candidato')?.checked).map(r=>({
+  return rows.filter(r=>r.querySelector('.selector-candidato')?.checked && r.querySelector('.selector-candidato')?.disabled !== true).map(r=>({
     contacto_id:Number(r.dataset.contactoId),nombre:r.dataset.nombre,identificacion:r.dataset.identificacion,telefono:r.dataset.telefono,
     radicado:r.dataset.radicado,naturaleza:r.dataset.naturaleza,etapa:r.dataset.etapa,cartera:r.dataset.cartera,
     inmueble_id:r.dataset.inmuebleId?Number(r.dataset.inmuebleId):null,conjunto:r.dataset.conjunto,unidad:r.dataset.unidad,
@@ -268,7 +268,7 @@ function leerCandidatos(){
 }
 function actualizarContador(){ document.getElementById('contadorSeleccion').textContent=document.querySelectorAll('.selector-candidato:checked').length; }
 function actualizarSeleccion(cb){ cb.closest('tr').classList.toggle('selected',cb.checked); actualizarContador(); }
-function seleccionarVisibles(marcar){ document.querySelectorAll('.selector-candidato').forEach(cb=>{cb.checked=marcar; cb.closest('tr')?.classList.toggle('selected',marcar)}); actualizarContador(); }
+function seleccionarVisibles(marcar){ document.querySelectorAll('.selector-candidato:not(:disabled)').forEach(cb=>{cb.checked=marcar; cb.closest('tr')?.classList.toggle('selected',marcar)}); actualizarContador(); }
 function irPaso(n){ pasoActual=n; [1,2,3].forEach(i=>document.getElementById('step'+i).classList.toggle('active',i===n)); [1,2,3].forEach(i=>{const p=document.getElementById('pill'+i);p.className='step-pill '+(i<n?'done':i===n?'active':'todo');}); window.scrollTo({top:0,behavior:'smooth'}); }
 function irPaso2(){
   wizardItems=leerCandidatos();
