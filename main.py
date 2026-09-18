@@ -756,12 +756,13 @@ async def crear_expediente_completo(request: Request):
                     cur.execute(
                         """
                         INSERT INTO obligaciones
-                            (identificacion_deudor,tipo_titulo,capital,fecha_exigibilidad,estado,proceso_id,tipo_proceso_id)
-                        VALUES (%s,%s,%s,NULLIF(%s,''),'En Mora',%s,%s)
+                            (identificacion_deudor,tipo_titulo,numero_documento,capital,fecha_exigibilidad,estado,proceso_id,tipo_proceso_id)
+                        VALUES (%s,%s,%s,%s,NULLIF(%s,''),'En Mora',%s,%s)
                         """,
                         (
                             demandados[0],
                             tipo_proceso["codigo"],
+                            documento_referencia,
                             pretensiones,
                             str(form.get("fecha_exigibilidad") or "").strip(),
                             radicado_interno,
