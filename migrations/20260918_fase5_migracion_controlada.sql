@@ -99,12 +99,13 @@ WHERE NULLIF(BTRIM(SPLIT_PART(COALESCE(p.id_demandado,''),'|',1)),'') IS NOT NUL
         AND pp.rol='DEMANDADO'
   );
 
--- 3. Vinculación financiera inequívoca por expediente cuando existe
--- exactamente una obligación.
+-- 3. Vinculación financiera inequívoca por expediente cuando existe exactamente una obligación.
+-- Acuerdos de pago NO se incluyen aquí porque la tabla histórica no contiene
+-- radicado_interno. Se conservan como excepciones si carecen de obligation_id.
 UPDATE gestiones_crm g
-SET obligacion_id = x.obligacion_id
+SET obligacion_id=x.obligacion_id
 FROM (
-    SELECT g2.id, MIN(po.obligacion_id) AS obligacion_id
+    SELECT g2.id,MIN(po.obligacion_id) AS obligacion_id
     FROM gestiones_crm g2
     JOIN proceso_obligaciones po
       ON po.radicado_interno=g2.radicado_interno
@@ -115,24 +116,10 @@ FROM (
 WHERE g.id=x.id
   AND g.obligacion_id IS NULL;
 
-UPDATE acuerdos_pago a
-SET obligacion_id = x.obligacion_id
-FROM (
-    SELECT a2.id, MIN(po.obligacion_id) AS obligacion_id
-    FROM acuerdos_pago a2
-    JOIN proceso_obligaciones po
-      ON po.radicado_interno=a2.radicado_interno
-    WHERE a2.obligacion_id IS NULL
-    GROUP BY a2.id
-    HAVING COUNT(DISTINCT po.obligacion_id)=1
-) x
-WHERE a.id=x.id
-  AND a.obligacion_id IS NULL;
-
 UPDATE vencimientos v
-SET obligacion_id = x.obligacion_id
+SET obligacion_id=x.obligacion_id
 FROM (
-    SELECT v2.id, MIN(po.obligacion_id) AS obligacion_id
+    SELECT v2.id,MIN(po.obligacion_id) AS obligacion_id
     FROM vencimientos v2
     JOIN proceso_obligaciones po
       ON po.radicado_interno=v2.radicado_interno
