@@ -590,7 +590,7 @@ async def crear_expediente_completo(request: Request):
                 if not tipo_proceso_codigo:
                     tipo_proceso_codigo = "CUOTAS_ADMINISTRACION" if (conjunto_id_raw or conjunto_nombre) else "OTRO"
 
-                tipo_proceso = _obtener_tipo_proceso(cur, tipo_proceso_codigo)
+                tipo_proceso = catalogos_service.obtener_tipo_proceso(cur, tipo_proceso_codigo)
                 if not tipo_proceso:
                     raise ValueError("Tipo de proceso no válido")
 
