@@ -15,6 +15,16 @@
             <i data-lucide="home" class="w-5 h-5 text-blue-600"></i> Buscar Inmueble
         </h3>
         
+        <div class="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+            <div class="text-xs font-bold uppercase text-emerald-700 mb-2">Administrar conjuntos</div>
+            <form method="POST" action="/crm/conjuntos/guardar" class="flex gap-2">
+                <input name="nombre" class="flex-1 border border-slate-300 rounded-md p-2.5 text-sm bg-white"
+                       placeholder="Ej: URBANIZACIÓN SANTA CLARA MANZANA 7 PH" required>
+                <button class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 rounded-md">Crear conjunto</button>
+            </form>
+            <div class="text-[11px] text-slate-500 mt-2">Una vez creado aparecerá automáticamente en Procesos, CRM y SMS.</div>
+        </div>
+
         <form method="GET" action="/crm" class="space-y-5" onsubmit="if(!document.getElementById('hidden_inmueble_id').value){ alert('⚠️ Selecciona un inmueble válido de la lista.'); return false; }">
             <div>
                 <label class="block text-xs font-bold text-slate-500 uppercase mb-2">1. Conjunto Residencial</label>
