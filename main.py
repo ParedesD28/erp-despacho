@@ -571,7 +571,7 @@ async def crear_expediente_completo(request: Request):
     juzgado = f"{form.get('juzgado_numero','')} {form.get('juzgado_tipo','')} - {form.get('juzgado_ciudad','')}".strip()
     apto = str(form.get("apto", "")).strip()
     pretensiones = str(form.get("pretensiones", "0")).strip() or "0"
-    abogado_id = str(form.get("abogado_id", "")).strip() or None
+    abogado_id = str(form.get("abogado_id", "")).strip() or str(getattr(request.state, "user_id", "") or "").strip() or None
     medidas = str(form.get("medidas_cautelares", "")).strip()
 
     def split_values(name, new_id, new_name):
@@ -737,7 +737,8 @@ async def crear_expediente_completo(request: Request):
                     "radicado_rama": radicado_rama,
                     "tipo_cartera": tipo_cartera,
                     "tipo_proceso_id": tipo_proceso["id"],
-                    "naturaleza": naturaleza or "EJECUTIVO SINGULAR",
+                    "naturaleza": naturaleza or "EJECUTIVO",
+                    "etapa_actual": "1. Presentación de la demanda",
                     "juzgado": juzgado if tipo_cartera == "JURIDICO" else "",
                     "estado": "Activo",
                     "id_demandado": " | ".join(demandados),
@@ -754,6 +755,37 @@ async def crear_expediente_completo(request: Request):
                     f"INSERT INTO procesos ({', '.join(usable)}) VALUES ({', '.join(['%s']*len(usable))})",
                     [data[c] for c in usable],
                 )
+
+                # Relación canónica de partes: contactos + proceso_partes.
+                if expedientes_service._table_exists(cur, "proceso_partes"):
+                    for idx, ident in enumerate(demandantes):
+                        cur.execute("SELECT id FROM contactos WHERE identificacion=%s LIMIT 1", (ident,))
+                        contacto = cur.fetchone()
+                        if contacto:
+                            cur.execute(
+                                """
+                                INSERT INTO proceso_partes
+                                    (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
+                                VALUES (%s,%s,'DEMANDANTE',%s,CURRENT_TIMESTAMP)
+                                ON CONFLICT (radicado_interno,contacto_id,rol) DO UPDATE
+                                SET es_principal=EXCLUDED.es_principal
+                                """,
+                                (radicado_interno, contacto["id"], idx == 0),
+                            )
+                    for idx, ident in enumerate(demandados):
+                        cur.execute("SELECT id FROM contactos WHERE identificacion=%s LIMIT 1", (ident,))
+                        contacto = cur.fetchone()
+                        if contacto:
+                            cur.execute(
+                                """
+                                INSERT INTO proceso_partes
+                                    (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
+                                VALUES (%s,%s,'DEMANDADO',%s,CURRENT_TIMESTAMP)
+                                ON CONFLICT (radicado_interno,contacto_id,rol) DO UPDATE
+                                SET es_principal=EXCLUDED.es_principal
+                                """,
+                                (radicado_interno, contacto["id"], idx == 0),
+                            )
 
                 if tipo_proceso["fuente_saldo"] == "OBLIGACION":
                     documento_referencia = str(form.get("documento_referencia") or "").strip()
