@@ -733,7 +733,7 @@ async def crear_expediente_completo(request: Request):
                     "radicado_rama": radicado_rama,
                     "tipo_cartera": tipo_cartera,
                     "tipo_proceso_id": tipo_proceso["id"],
-                    "naturaleza": naturaleza or tipo_proceso["nombre"].upper(),
+                    "naturaleza": naturaleza or "EJECUTIVO SINGULAR",
                     "juzgado": juzgado if tipo_cartera == "JURIDICO" else "",
                     "estado": "Activo",
                     "id_demandado": " | ".join(demandados),
