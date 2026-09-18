@@ -17,20 +17,13 @@
 
         <form method="POST" action="/crear_expediente_completo" class="space-y-6" onsubmit="return validarFormulario()"><input type="hidden" id="pretensiones" name="pretensiones" value="0">
             <section class="bg-slate-50 p-5 rounded-lg border border-slate-200">
-                <h2 class="font-semibold text-slate-800 mb-4">1. Estructura del proceso</h2>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+                <h2 class="font-semibold text-slate-800 mb-4">1. Tipo de proceso</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
                     <div>
-                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Proceso *</label>
-                        <select id="familia_proceso" class="w-full px-4 py-2.5 border rounded-md" disabled>
-                            <option value="EJECUTIVO" selected>Proceso ejecutivo</option>
-                        </select>
-                        <p class="text-xs text-slate-500 mt-1">La radicación parte del proceso ejecutivo; el título se define a continuación.</p>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Título / obligación *</label>
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Tipo de proceso *</label>
                         <select id="tipo_proceso" name="tipo_proceso" required class="w-full px-4 py-2.5 border rounded-md" onchange="configurarTipoProceso()">
                             {% for tipo in tipos_proceso %}
-                            <option value="{{ tipo.codigo }}" data-familia="{{ tipo.familia or 'EJECUTIVO' }}" data-cartera="{{ tipo.tipo_cartera_default }}" data-conjunto="{{ '1' if tipo.requiere_conjunto else '0' }}" data-inmueble="{{ '1' if tipo.requiere_inmueble else '0' }}" data-juzgado="{{ '1' if tipo.requiere_juzgado else '0' }}" data-documento="{{ '1' if tipo.requiere_documento else '0' }}">{{ tipo.nombre }}</option>
+                            <option value="{{ tipo.codigo }}" data-cartera="{{ tipo.tipo_cartera_default }}" data-conjunto="{{ '1' if tipo.requiere_conjunto else '0' }}" data-inmueble="{{ '1' if tipo.requiere_inmueble else '0' }}" data-juzgado="{{ '1' if tipo.requiere_juzgado else '0' }}" data-documento="{{ '1' if tipo.requiere_documento else '0' }}">{{ tipo.nombre }}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -204,18 +197,16 @@ function configurarTipoProceso(){
     const judicial = cartera.value === 'JURIDICO';
     document.getElementById('bloque-juridico').classList.toggle('hidden',!judicial);
     document.getElementById('radicado_rama').disabled = !judicial;
-    // Cuando la cartera es JURÍDICO, el bloque judicial siempre queda habilitado.
-    // Esto permite completar juzgado incluso para títulos que no lo exigían por defecto.
-    document.getElementById('juzgado_numero').disabled = !judicial;
-    document.getElementById('juzgado_tipo').disabled = !judicial;
-    document.getElementById('juzgado_ciudad').disabled = !judicial;
-    document.getElementById('juzgado_numero').required = judicial;
-    document.getElementById('juzgado_tipo').required = judicial;
-    document.getElementById('juzgado_ciudad').required = judicial;
+    document.getElementById('juzgado_numero').disabled = !judicial || !requiereJuzgado;
+    document.getElementById('juzgado_tipo').disabled = !judicial || !requiereJuzgado;
+    document.getElementById('juzgado_ciudad').disabled = !judicial || !requiereJuzgado;
+    document.getElementById('juzgado_numero').required = judicial && requiereJuzgado;
+    document.getElementById('juzgado_tipo').required = judicial && requiereJuzgado;
+    document.getElementById('juzgado_ciudad').required = judicial && requiereJuzgado;
 
     document.getElementById('regla-tipo').innerHTML = codigo === 'CUOTAS_ADMINISTRACION'
-        ? '<strong>Proceso ejecutivo → Cuotas de administración:</strong> conjunto + inmueble + deudor. El demandante sale automáticamente de la persona jurídica del conjunto.'
-        : '<strong>Proceso ejecutivo → '+opt.text+'</strong>: el título se registra y queda vinculado al expediente. Para pagaré, letra o factura se exige su referencia/documento.';
+        ? '<strong>Cuotas de administración:</strong> conjunto + inmueble + deudor. El demandante sale automáticamente de la persona jurídica del conjunto.'
+        : '<strong>'+opt.text+'</strong>: el expediente no requiere conjunto ni inmueble. La obligación se registra como título y queda vinculada al proceso.';
 
     document.getElementById('naturaleza').value = 'EJECUTIVO SINGULAR';
 }
