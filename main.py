@@ -543,7 +543,7 @@ def procesos(request: Request):
             contrapartes = [dict(r) for r in cur.fetchall()]
             cur.execute("SELECT id, nombre FROM abogados ORDER BY nombre")
             abogados = [dict(r) for r in cur.fetchall()]
-            conjuntos = [r["nombre"] for r in _listar_conjuntos(cur)]
+            conjuntos = [r["nombre"] for r in catalogos_service.listar_conjuntos(cur, activos=True)]
         return render_template("procesos.html", {
             "request": request,
             "contactos_clientes": clientes,
