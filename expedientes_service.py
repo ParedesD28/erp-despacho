@@ -478,34 +478,86 @@ def cargar_procesos_general_sin_duplicados():
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 _cols(cur, "procesos")
-                cur.execute("""
-                    SELECT p.radicado_interno, p.radicado_rama, p.tipo_cartera, p.naturaleza,
-                           p.juzgado, p.etapa_actual, p.estado, p.pretensiones, p.medidas_cautelares,
-                           p.id_cliente, c_dem.nombre AS demandante_db, a.nombre AS abogado_asignado,
-                           STRING_AGG(DISTINCT NULLIF(TRIM(c_ddo.nombre), ''), ' | ') AS demandado,
-                           STRING_AGG(DISTINCT NULLIF(TRIM(pl.identificacion_demandado), ''), ' | ') AS id_demandado
+                cur.execute(
+                    """
+                    SELECT
+                        p.radicado_interno,
+                        p.radicado_rama,
+                        p.tipo_cartera,
+                        p.naturaleza,
+                        p.juzgado,
+                        p.etapa_actual,
+                        p.estado,
+                        p.pretensiones,
+                        p.medidas_cautelares,
+                        p.id_cliente,
+                        COALESCE(
+                            NULLIF(TRIM(pdemandante.nombres), ''),
+                            NULLIF(TRIM(p.demandante), ''),
+                            NULLIF(TRIM(p.id_cliente), ''),
+                            'SIN REGISTRO'
+                        ) AS demandante_nombre,
+                        COALESCE(
+                            NULLIF(TRIM(pddo.nombres), ''),
+                            NULLIF(TRIM(plnames.nombres), ''),
+                            NULLIF(TRIM(p.demandado), ''),
+                            NULLIF(TRIM(p.id_demandado), ''),
+                            'SIN REGISTRO'
+                        ) AS demandado_nombre,
+                        a.nombre AS abogado_asignado
                     FROM procesos p
-                    LEFT JOIN contactos c_dem ON p.id_cliente=c_dem.identificacion
-                    LEFT JOIN abogados a ON p.abogado_id=a.id
-                    LEFT JOIN procesos_litisconsorcio pl ON p.radicado_interno=pl.radicado_interno
-                    LEFT JOIN contactos c_ddo ON pl.identificacion_demandado=c_ddo.identificacion
-                    GROUP BY p.radicado_interno,p.radicado_rama,p.tipo_cartera,p.naturaleza,p.juzgado,
-                             p.etapa_actual,p.estado,p.pretensiones,p.medidas_cautelares,p.id_cliente,c_dem.nombre,a.nombre
+                    LEFT JOIN abogados a ON p.abogado_id = a.id
+                    LEFT JOIN LATERAL (
+                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
+                        FROM UNNEST(
+                            string_to_array(
+                                replace(COALESCE(p.id_cliente,''), ' ', ''),
+                                '|'
+                            )
+                        ) AS ids(identificacion)
+                        JOIN contactos c ON c.identificacion = ids.identificacion
+                    ) pdemandante ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
+                        FROM UNNEST(
+                            string_to_array(
+                                replace(COALESCE(p.id_demandado,''), ' ', ''),
+                                '|'
+                            )
+                        ) AS ids(identificacion)
+                        JOIN contactos c ON c.identificacion = ids.identificacion
+                    ) pddo ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
+                        FROM procesos_litisconsorcio pl
+                        JOIN contactos c ON c.identificacion = pl.identificacion_demandado
+                        WHERE pl.radicado_interno = p.radicado_interno
+                    ) plnames ON TRUE
                     ORDER BY p.radicado_interno DESC
-                """)
+                    """
+                )
                 rows = cur.fetchall()
                 lista = []
                 for r in rows:
-                    d = dict(r); d["tipo_cartera"] = str(d.get("tipo_cartera") or "JURIDICO").upper()
-                    for k,v in d.items():
-                        if v is None: d[k] = ""
+                    d = dict(r)
+                    d["tipo_cartera"] = str(d.get("tipo_cartera") or "JURIDICO").upper()
+                    for k, v in d.items():
+                        if v is None:
+                            d[k] = ""
                     lista.append(d)
-                print(f"[{time.strftime('%H:%M:%S')} UTC] 📂 [EXPEDIENTES] {len(lista)} registros cargados exitosamente ({round((time.perf_counter()-t0)*1000,1)}ms)", flush=True)
+                print(
+                    f"[{time.strftime('%H:%M:%S')} UTC] 📂 [EXPEDIENTES] "
+                    f"{len(lista)} registros cargados exitosamente "
+                    f"({round((time.perf_counter()-t0)*1000,1)}ms)",
+                    flush=True,
+                )
                 return lista
     except Exception as exc:
         print(f"[{time.strftime('%H:%M:%S')} UTC] 💥 [EXPEDIENTES ERROR] {exc}", flush=True)
         return []
     finally:
         if conn is not None:
-            if hasattr(conn, "release"): conn.release()
-            else: conn.close()
+            if hasattr(conn, "release"):
+                conn.release()
+            else:
+                conn.close()
