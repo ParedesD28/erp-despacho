@@ -52,91 +52,62 @@ def _table_exists(cur, name: str) -> bool:
 
 
 def ensure_schema() -> None:
-    """Migraciones idempotentes. Nunca elimina tablas ni registros."""
-    main._ensure_crm_and_vencimientos_schema()
+    """Verifica en solo lectura que la estructura de agenda esté desplegada."""
     conn = db.get_connection()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS anulado BOOLEAN NOT NULL DEFAULT FALSE")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS categoria TEXT NOT NULL DEFAULT 'TERMINO'")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS abogado_id TEXT")
-                cur.execute("ALTER TABLE acuerdos_pago ADD COLUMN IF NOT EXISTS abogado_id TEXT")
-                cur.execute("ALTER TABLE acuerdos_pago ADD COLUMN IF NOT EXISTS frecuencia TEXT NOT NULL DEFAULT 'MENSUAL'")
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS acuerdos_pago_cuotas (
-                        id BIGSERIAL PRIMARY KEY,
-                        acuerdo_id BIGINT NOT NULL REFERENCES acuerdos_pago(id) ON DELETE CASCADE,
-                        numero_cuota INTEGER NOT NULL,
-                        fecha_vencimiento DATE NOT NULL,
-                        valor_cuota NUMERIC(14,2) NOT NULL DEFAULT 0,
-                        estado TEXT NOT NULL DEFAULT 'PENDIENTE',
-                        anulado BOOLEAN NOT NULL DEFAULT FALSE,
-                        abogado_id TEXT,
-                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(acuerdo_id, numero_cuota)
-                    )
-                """)
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_cuotas_fecha ON acuerdos_pago_cuotas(fecha_vencimiento, estado, anulado)")
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS agenda_auditoria (
-                        id BIGSERIAL PRIMARY KEY,
-                        fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        abogado_id TEXT,
-                        abogado_nombre TEXT NOT NULL DEFAULT 'Sistema',
-                        accion TEXT NOT NULL,
-                        tipo TEXT NOT NULL,
-                        registro_id BIGINT,
-                        radicado_interno TEXT,
-                        identificacion_deudor TEXT,
-                        nombre_deudor TEXT,
-                        inmueble_id INTEGER,
-                        detalle TEXT
-                    )
-                """)
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_agenda_auditoria_fecha ON agenda_auditoria(fecha DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_agenda_auditoria_abogado ON agenda_auditoria(abogado_id, fecha DESC)")
+        with conn.cursor() as cur:
+            required_tables = {
+                "acuerdos_pago",
+                "acuerdos_pago_cuotas",
+                "agenda_auditoria",
+                "vencimientos",
+                "inmueble_propietarios",
+            }
+            cur.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema='public'
+                  AND table_name = ANY(%s)
+                """,
+                (list(required_tables),),
+            )
+            present = {str(row[0]) for row in cur.fetchall()}
+            missing_tables = sorted(required_tables - present)
+            if missing_tables:
+                raise RuntimeError(
+                    "Faltan tablas de agenda: " + ", ".join(missing_tables)
+                )
 
-                cur.execute("""
-                    INSERT INTO acuerdos_pago_cuotas (acuerdo_id, numero_cuota, fecha_vencimiento, valor_cuota, abogado_id)
-                    SELECT a.id, 1, a.fecha_compromiso, a.valor_acordado, a.abogado_id
-                    FROM acuerdos_pago a
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM acuerdos_pago_cuotas c WHERE c.acuerdo_id = a.id
+            required_columns = {
+                "acuerdos_pago": {"obligacion_id", "frecuencia", "abogado_id"},
+                "acuerdos_pago_cuotas": {
+                    "acuerdo_id", "numero_cuota", "fecha_vencimiento",
+                    "valor_cuota", "estado", "anulado", "abogado_id",
+                },
+                "agenda_auditoria": {
+                    "fecha", "abogado_id", "accion", "tipo",
+                    "registro_id", "radicado_interno",
+                },
+                "vencimientos": {
+                    "obligacion_id", "anulado", "categoria", "abogado_id",
+                },
+            }
+            for table, expected in required_columns.items():
+                cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name=%s
+                    """,
+                    (table,),
+                )
+                actual = {str(row[0]) for row in cur.fetchall()}
+                missing = sorted(expected - actual)
+                if missing:
+                    raise RuntimeError(
+                        f"Faltan columnas en {table}: {', '.join(missing)}"
                     )
-                """)
-
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS inmueble_propietarios (
-                        id BIGSERIAL PRIMARY KEY,
-                        inmueble_id INTEGER NOT NULL,
-                        contacto_id INTEGER NOT NULL,
-                        es_principal BOOLEAN NOT NULL DEFAULT FALSE,
-                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(inmueble_id, contacto_id)
-                    )
-                """)
-                if _table_exists(cur, "inmuebles_ph"):
-                    cur.execute("""
-                        INSERT INTO inmueble_propietarios (inmueble_id, contacto_id, es_principal)
-                        SELECT i.id, i.contacto_id, TRUE
-                        FROM inmuebles_ph i
-                        WHERE i.contacto_id IS NOT NULL
-                        ON CONFLICT (inmueble_id, contacto_id) DO UPDATE
-                        SET es_principal = inmueble_propietarios.es_principal OR EXCLUDED.es_principal
-                    """)
-                if _table_exists(cur, "procesos_litisconsorcio"):
-                    cur.execute("""
-                        INSERT INTO inmueble_propietarios (inmueble_id, contacto_id, es_principal)
-                        SELECT DISTINCT p.inmueble_id, c.id, FALSE
-                        FROM procesos p
-                        JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
-                        JOIN contactos c ON c.identificacion = pl.identificacion_demandado
-                        WHERE p.inmueble_id IS NOT NULL
-                        ON CONFLICT (inmueble_id, contacto_id) DO NOTHING
-                    """)
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_inmueble_propietarios_inmueble ON inmueble_propietarios(inmueble_id)")
     finally:
         conn.release()
 
