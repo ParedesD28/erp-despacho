@@ -4,6 +4,11 @@
 
 BEGIN;
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY,
+    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Preserva la clasificación histórica antes de convertir tipos_proceso a
 -- procedimientos puros. Solo estos expedientes se deben convertir en
 -- obligaciones PH automáticamente.
@@ -424,5 +429,9 @@ UPDATE obligaciones
 SET capital_inicial=COALESCE(capital_inicial,0),
     fuente_saldo=COALESCE(fuente_saldo,'EXPENSAS_PH')
 WHERE tipo_obligacion_id=(SELECT id FROM tipos_obligacion WHERE codigo='CUOTAS_ADMINISTRACION');
+
+INSERT INTO schema_migrations(version)
+VALUES ('20260918_proceso_obligacion_base')
+ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
