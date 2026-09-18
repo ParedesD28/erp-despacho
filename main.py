@@ -1168,6 +1168,52 @@ async def guardar_expediente_estructurado(request: Request):
                         [editable[k] for k in usable] + [radicado],
                     )
 
+                # Fuente canónica de partes: reconstruir proceso_partes según la edición.
+                if expedientes_service._table_exists(cur, "proceso_partes"):
+                    cur.execute(
+                        "DELETE FROM proceso_partes WHERE radicado_interno=%s",
+                        (radicado,),
+                    )
+                    for idx, ident in enumerate(demandante_ids):
+                        cur.execute(
+                            """
+                            SELECT id FROM contactos
+                            WHERE identificacion=%s
+                            LIMIT 1
+                            """,
+                            (ident,),
+                        )
+                        contacto = cur.fetchone()
+                        if contacto:
+                            cur.execute(
+                                """
+                                INSERT INTO proceso_partes
+                                    (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
+                                VALUES (%s,%s,'DEMANDANTE',%s,CURRENT_TIMESTAMP)
+                                """,
+                                (radicado, contacto["id"], idx == 0),
+                            )
+
+                    for idx, ident in enumerate(demandado_ids):
+                        cur.execute(
+                            """
+                            SELECT id FROM contactos
+                            WHERE identificacion=%s
+                            LIMIT 1
+                            """,
+                            (ident,),
+                        )
+                        contacto = cur.fetchone()
+                        if contacto:
+                            cur.execute(
+                                """
+                                INSERT INTO proceso_partes
+                                    (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
+                                VALUES (%s,%s,'DEMANDADO',%s,CURRENT_TIMESTAMP)
+                                """,
+                                (radicado, contacto["id"], idx == 0),
+                            )
+
                 if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
                     lcols = expedientes_service._cols(cur, "procesos_litisconsorcio")
                     if "radicado_interno" in lcols and "identificacion_demandado" in lcols:
