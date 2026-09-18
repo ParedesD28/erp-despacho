@@ -23,6 +23,7 @@ def _install_candidate_query() -> None:
         saldo_minimo: float = 0,
         saldo_maximo: Optional[float] = None,
         ids: Optional[List[int]] = None,
+        conjunto: str = "",
     ):
         """Combina cartera PH y cartera por proceso, una fila por contacto."""
         cartera = (tipo_cartera or "").upper().strip()
@@ -30,7 +31,7 @@ def _install_candidate_query() -> None:
             raise ValueError("Tipo de cartera no válido.")
 
         # 1) Conservamos íntegramente el comportamiento probado de PH.
-        ph_rows = original(cur, cartera, saldo_minimo, saldo_maximo, ids)
+        ph_rows = original(cur, cartera, saldo_minimo, saldo_maximo, ids, conjunto)
 
         # 2) Añadimos demandados de procesos, aunque no tengan inmueble.
         params: List[Any] = [float(saldo_minimo)]
