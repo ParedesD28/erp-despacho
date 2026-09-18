@@ -211,13 +211,12 @@ def servir_pdf_bot(filename: str, expires: int, token: str):
 
 @router.post("/api/bot/acuerdo")
 async def registrar_acuerdo_bot(request: Request):
-    """Permite al agente conversacional registrar compromisos y acuerdos de pago en el ERP."""
+    """Registra un acuerdo vinculado a una obligación financiera."""
     _require_api_key(request)
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=422, detail="El cuerpo debe ser JSON válido")
-
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="Payload inválido")
 
@@ -233,20 +232,22 @@ async def registrar_acuerdo_bot(request: Request):
 
     try:
         valor = float(payload.get("valor_acordado") or payload.get("valor") or 0.0)
+        if valor <= 0:
+            raise ValueError
     except (ValueError, TypeError):
-        valor = 0.0
+        raise HTTPException(status_code=422, detail="valor_acordado debe ser mayor que cero")
 
-    inmueble_id = payload.get("inmueble_id")
     try:
-        inmueble_id = int(inmueble_id) if inmueble_id else None
-    except (ValueError, TypeError):
-        inmueble_id = None
+        obligacion_id = int(payload.get("obligacion_id")) if payload.get("obligacion_id") else None
+        inmueble_id = int(payload.get("inmueble_id")) if payload.get("inmueble_id") else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="obligacion_id/inmueble_id deben ser enteros")
 
     telefono = str(payload.get("telefono") or "").strip()
     nombre_deudor = str(payload.get("nombre_deudor") or payload.get("nombre") or "").strip()
     observaciones = str(payload.get("observaciones") or payload.get("resumen") or "Acuerdo de pago pactado vía WhatsApp con Agente IA").strip()
-    numero_cuotas = int(payload.get("numero_cuotas") or 1)
-    cuota_actual = int(payload.get("cuota_actual") or 1)
+    numero_cuotas = max(1, min(int(payload.get("numero_cuotas") or 1), 120))
+    cuota_actual = max(1, min(int(payload.get("cuota_actual") or 1), numero_cuotas))
 
     import db
     from psycopg2.extras import RealDictCursor
@@ -255,84 +256,150 @@ async def registrar_acuerdo_bot(request: Request):
     try:
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # 1. Si no viene el nombre, buscarlo en contactos o inmueble
+                if obligacion_id:
+                    cur.execute(
+                        """
+                        SELECT o.id,o.inmueble_id,o.deudor_contacto_id
+                        FROM obligaciones o
+                        WHERE o.id=%s
+                        LIMIT 1
+                        """,
+                        (obligacion_id,),
+                    )
+                    ob = cur.fetchone()
+                    if not ob:
+                        raise HTTPException(status_code=404, detail="Obligación no encontrada")
+                    inmueble_id = int(ob["inmueble_id"]) if ob["inmueble_id"] else inmueble_id
+                elif inmueble_id:
+                    cur.execute(
+                        """
+                        SELECT o.id,o.deudor_contacto_id
+                        FROM obligaciones o
+                        WHERE o.inmueble_id=%s
+                          AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+                        ORDER BY o.id DESC
+                        LIMIT 1
+                        """,
+                        (inmueble_id,),
+                    )
+                    ob = cur.fetchone()
+                    if ob:
+                        obligacion_id = int(ob["id"])
+                else:
+                    raise HTTPException(status_code=422, detail="Debe indicar obligacion_id o inmueble_id")
+
+                if not obligacion_id:
+                    raise HTTPException(status_code=404, detail="No existe obligación activa para la cuenta indicada")
+
+                cur.execute(
+                    """
+                    SELECT o.deudor_contacto_id,c.identificacion,c.nombre,c.telefono
+                    FROM obligaciones o
+                    JOIN contactos c ON c.id=o.deudor_contacto_id
+                    WHERE o.id=%s
+                    LIMIT 1
+                    """,
+                    (obligacion_id,),
+                )
+                deudor = cur.fetchone()
+                if not deudor:
+                    raise HTTPException(status_code=409, detail="La obligación no tiene un deudor válido")
+                if str(deudor["identificacion"]).strip() != identificacion:
+                    raise HTTPException(status_code=409, detail="La identificación no corresponde al deudor de la obligación")
                 if not nombre_deudor:
-                    cur.execute("SELECT nombre, telefono FROM contactos WHERE identificacion=%s LIMIT 1", (identificacion,))
-                    c_row = cur.fetchone()
-                    if c_row:
-                        nombre_deudor = c_row.get("nombre") or ""
-                        if not telefono:
-                            telefono = c_row.get("telefono") or ""
+                    nombre_deudor = str(deudor["nombre"] or "")
+                if not telefono:
+                    telefono = str(deudor["telefono"] or "")
 
-                # 2. Insertar en acuerdos_pago
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO acuerdos_pago (
-                        inmueble_id, identificacion_deudor, nombre_deudor, telefono,
-                        valor_acordado, numero_cuotas, cuota_actual, fecha_compromiso,
-                        estado, origen, observaciones
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDIENTE', 'ROBOT_IA', %s)
+                        inmueble_id,obligacion_id,identificacion_deudor,nombre_deudor,telefono,
+                        valor_acordado,numero_cuotas,cuota_actual,fecha_compromiso,
+                        estado,origen,observaciones
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE','ROBOT_IA',%s)
                     RETURNING id
-                """, (
-                    inmueble_id, identificacion, nombre_deudor, telefono,
-                    valor, numero_cuotas, cuota_actual, fecha_compromiso, observaciones
-                ))
-                row_ac = cur.fetchone()
-                acuerdo_id = int(row_ac["id"]) if row_ac and str(row_ac.get("id","0")).isdigit() else 1
+                    """,
+                    (
+                        inmueble_id,obligacion_id,identificacion,nombre_deudor,telefono,
+                        valor,numero_cuotas,cuota_actual,fecha_compromiso,observaciones,
+                    ),
+                )
+                acuerdo_id = int(cur.fetchone()["id"])
 
-                # 3. Asentar anotación en gestiones_crm
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO gestiones_crm (
-                        inmueble_id, identificacion_deudor, tipo_contacto,
-                        resumen, promesa_pago_fecha, usuario, estado
-                    ) VALUES (%s, %s, 'WhatsApp IA - Acuerdo', %s, %s, 'Bot Claude', 'ACTIVO')
-                """, (
-                    inmueble_id, identificacion,
-                    f"🤝 [ACUERDO DE PAGO #{acuerdo_id}] Cuota {cuota_actual}/{numero_cuotas} por ${valor:,.0f} para el {fecha_compromiso}. {observaciones}",
-                    fecha_compromiso
-                ))
+                        radicado_interno,inmueble_id,obligacion_id,identificacion_deudor,
+                        tipo_contacto,resumen,promesa_pago_fecha,usuario,estado
+                    )
+                    VALUES (
+                        (SELECT po.radicado_interno
+                           FROM proceso_obligaciones po
+                          WHERE po.obligacion_id=%s
+                          ORDER BY po.es_principal DESC,po.id
+                          LIMIT 1),
+                        %s,%s,%s,'WhatsApp IA - Acuerdo',%s,%s,'Bot Claude','ACTIVO'
+                    )
+                    """,
+                    (
+                        obligacion_id,inmueble_id,obligacion_id,identificacion,
+                        f"[ACUERDO DE PAGO #{acuerdo_id}] Cuota {cuota_actual}/{numero_cuotas} por ${valor:,.0f} para el {fecha_compromiso}. {observaciones}",
+                        fecha_compromiso,
+                    ),
+                )
 
-                # 4. Insertar en vencimientos para agenda judicial unificada
-                radicado = "ACUERDO-PAGO"
-                if inmueble_id:
-                    cur.execute("SELECT radicado_interno FROM procesos WHERE inmueble_id=%s LIMIT 1", (inmueble_id,))
-                    p_row = cur.fetchone()
-                    if p_row and p_row.get("radicado_interno"):
-                        radicado = p_row["radicado_interno"]
+                cur.execute(
+                    """
+                    SELECT po.radicado_interno
+                    FROM proceso_obligaciones po
+                    WHERE po.obligacion_id=%s
+                    ORDER BY po.es_principal DESC,po.id
+                    LIMIT 1
+                    """,
+                    (obligacion_id,),
+                )
+                p_row = cur.fetchone()
+                radicado = p_row["radicado_interno"] if p_row and p_row["radicado_interno"] else "ACUERDO-PAGO"
 
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO vencimientos (
-                        radicado_interno, titulo, fecha_vencimiento, observaciones,
-                        completado, tipo, valor, inmueble_id
-                    ) VALUES (%s, %s, %s, %s, FALSE, 'ACUERDO_PAGO', %s, %s)
-                """, (
-                    radicado,
-                    f"Cobro Cuota #{cuota_actual} ({nombre_deudor or identificacion}) - ${valor:,.0f}",
-                    fecha_compromiso,
-                    f"Acuerdo #{acuerdo_id}. Tel: {telefono}. Obs: {observaciones}",
-                    valor,
-                    inmueble_id
-                ))
-
-        print(f"[BOT ACUERDO] Registrado acuerdo #{acuerdo_id} para {identificacion} por ${valor:,.0f} al {fecha_compromiso}", flush=True)
+                        radicado_interno,obligacion_id,titulo,fecha_vencimiento,observaciones,
+                        completado,tipo,valor,inmueble_id,anulado,categoria
+                    )
+                    VALUES (%s,%s,%s,%s,%s,FALSE,'ACUERDO_PAGO',%s,%s,FALSE,'OTROS')
+                    """,
+                    (
+                        radicado,obligacion_id,
+                        f"Cobro Cuota #{cuota_actual} ({nombre_deudor or identificacion}) - ${valor:,.0f}",
+                        fecha_compromiso,
+                        f"Acuerdo #{acuerdo_id}. Tel: {telefono}. Obs: {observaciones}",
+                        valor,inmueble_id,
+                    ),
+                )
 
         return JSONResponse({
-            "status": "success",
-            "mensaje": "Acuerdo de pago registrado y sincronizado en ERP",
-            "acuerdo_id": acuerdo_id,
-            "datos": {
-                "identificacion": identificacion,
-                "nombre_deudor": nombre_deudor,
-                "fecha_compromiso": str(fecha_compromiso),
-                "valor_acordado": valor,
-                "estado": "PENDIENTE",
+            "status":"success",
+            "mensaje":"Acuerdo de pago registrado y vinculado a la obligación",
+            "acuerdo_id":acuerdo_id,
+            "obligacion_id":obligacion_id,
+            "datos":{
+                "identificacion":identificacion,
+                "nombre_deudor":nombre_deudor,
+                "fecha_compromiso":str(fecha_compromiso),
+                "valor_acordado":valor,
+                "estado":"PENDIENTE",
             }
         })
+    except HTTPException:
+        raise
     except Exception as exc:
-        print(f"[BOT ACUERDO] Error registrando acuerdo: {exc!r}", flush=True)
-        raise HTTPException(status_code=500, detail="Error interno al registrar acuerdo en ERP")
+        print(f"[BOT ACUERDO] Error registrando acuerdo: {exc!r}",flush=True)
+        raise HTTPException(status_code=500,detail="Error interno al registrar acuerdo en ERP")
     finally:
         conn.release()
-
 
 @router.get("/api/bot/recordatorios/pendientes")
 def consultar_recordatorios_pendientes(request: Request, dias_anticipacion: int = 1):
