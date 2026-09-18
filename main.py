@@ -1018,7 +1018,12 @@ def detalle_expediente(request: Request, radicado: str):
                 obligaciones = obligaciones_service.obtener_obligaciones_proceso(cur, radicado)
                 obligacion_principal = obligaciones[0] if obligaciones else None
                 ids = [x.get("identificacion") for x in demandantes + demandados]
-                acuerdos = expedientes_service._get_crm_agreements(cur, proceso.get("inmueble_id"), ids)
+                acuerdos = expedientes_service._get_crm_agreements(
+                    cur,
+                    proceso.get("inmueble_id"),
+                    ids,
+                    obligacion_principal.get("id") if obligacion_principal else None,
+                )
                 audit = expedientes_service._audit(cur, radicado)
                 return render_template(
                     "detalle_expediente_v4.html",
