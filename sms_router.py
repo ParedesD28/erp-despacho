@@ -31,7 +31,7 @@ from psycopg2.extras import RealDictCursor
 
 import db
 import expedientes_service
-from sms_saldo_service import actualizar_item_cola
+from sms_saldo_service import actualizar_item_cola, enriquecer_candidatos
 
 try:
     from zoneinfo import ZoneInfo
@@ -883,7 +883,7 @@ def generar_cola(
                             saldo_calculado_en,mensaje_template,mensaje_texto,
                             tipo_campana,estado
                         )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
                         ON CONFLICT(inmueble_id,telefono,tipo_campana)
                         WHERE estado IN ('PENDIENTE','EN_PROCESO') DO NOTHING;
                         """,
