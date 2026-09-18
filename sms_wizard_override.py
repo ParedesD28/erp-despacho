@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 from psycopg2.extras import RealDictCursor
 
 import db
-from sms_candidates_override import candidatos_cartera
 from sms_router import normalizar_telefono, validar_horario_ley_2300
 
 
@@ -30,8 +29,15 @@ class WizardConfirmacion(BaseModel):
 
 
 def _mapa_candidatos(cur, data: WizardConfirmacion) -> dict[int, dict[str, Any]]:
+    from sms_router import _candidatos_cartera
     ids = list(dict.fromkeys(int(x.contacto_id) for x in data.mensajes))
-    rows = candidatos_cartera(cur, data.tipo_cartera, data.saldo_minimo, data.saldo_maximo, ids)
+    rows = _candidatos_cartera(
+        cur,
+        data.tipo_cartera,
+        data.saldo_minimo,
+        data.saldo_maximo,
+        ids,
+    )
     return {
         int(row["contacto_id"] if isinstance(row, dict) else row[1]): dict(row)
         for row in rows
@@ -116,6 +122,13 @@ def _confirmar_cola(data: WizardConfirmacion):
                         omitidos.append({"contacto_id": contacto_id, "motivo": "Ya existe un mensaje activo para ese teléfono/campaña."})
                         continue
 
+                    if not candidato.get("saldo_verificado"):
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El saldo no ha sido liquidado y verificado por el motor de liquidación.",
+                        })
+                        continue
+
                     texto = mensaje.mensaje_texto.strip()
                     if not texto:
                         omitidos.append({"contacto_id": contacto_id, "motivo": "El mensaje quedó vacío."})
@@ -126,9 +139,11 @@ def _confirmar_cola(data: WizardConfirmacion):
                         INSERT INTO sms_cola_envios(
                             inmueble_id, contacto_id, identificacion, nombre,
                             conjunto_residencial, torre_apto, telefono,
-                            saldo_calculado, mensaje_texto, tipo_campana, estado
+                            saldo_calculado, saldo_fuente, saldo_verificado,
+                            saldo_calculado_en, mensaje_template, mensaje_texto,
+                            tipo_campana, estado
                         )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
                         RETURNING id;
                         """,
                         (
@@ -139,7 +154,11 @@ def _confirmar_cola(data: WizardConfirmacion):
                             candidato.get("conjunto_residencial"),
                             candidato.get("torre_apto"),
                             telefono,
-                            candidato.get("saldo_total") or 0,
+                            candidato.get("saldo_total"),
+                            candidato.get("saldo_fuente"),
+                            True,
+                            candidato.get("saldo_calculado_en"),
+                            texto,
                             texto,
                             tipo_campana,
                         ),
