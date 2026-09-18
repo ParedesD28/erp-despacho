@@ -113,7 +113,7 @@ async def reportar_abono_agente(request: Request):
                 inmueble_id = int(ob["inmueble_id"]) if ob["inmueble_id"] else inmueble_id
                 fuente = str(ob["fuente_saldo"] or "").upper()
 
-                if UPPER_STATUS := str(ob["estado"] or "ACTIVA").upper() in {"CANCELADA", "ANULADA"}:
+                if str(ob["estado"] or "ACTIVA").upper() in {"CANCELADA", "ANULADA"}:
                     raise HTTPException(status_code=409, detail="La obligación no está activa")
 
                 inm = {
