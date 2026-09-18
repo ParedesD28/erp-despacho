@@ -1112,7 +1112,6 @@ def _ensure_crm_and_vencimientos_schema():
     try:
         with conn:
             with conn.cursor() as cur:
-                _ensure_conjuntos_schema(cur)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS gestiones_crm (
                         id BIGSERIAL PRIMARY KEY,
@@ -1275,7 +1274,7 @@ def crm(request: Request, buscar_inmueble: str | None = None):
                         historial.append({
                             "id": g_id,
                             "tipo": d.get("tipo_contacto") or "WhatsApp IA",
-                            "deudor_nombre": d.get("identificacion_deudor") or cedula,
+                            "deudor_nombre": d.get("identificacion_deudor") or (ids_propietarios[0] if ids_propietarios else ""),
                             "resumen": d.get("resumen", ""),
                             "promesa": d.get("promesa_pago_fecha"),
                             "usuario": d.get("usuario", "Bot Claude"),
@@ -1297,7 +1296,6 @@ def crm_guardar(
     promesa_pago_fecha: date | None = Form(None),
     identificacion_deudor: str | None = Form(None),
 ):
-    _ensure_crm_and_vencimientos_schema()
     conn = db.get_connection()
     try:
         with conn:
