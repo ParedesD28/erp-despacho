@@ -194,7 +194,7 @@ async def reportar_abono_agente(request: Request):
                         INSERT INTO solicitudes_paz_y_salvo (
                             inmueble_id, obligacion_id, identificacion_deudor, nombre_deudor,
                             conjunto_residencial, torre_apto, recaudo_id, estado
-                        ) VALUES (%s, %s, %s, %s, %s, %s, 'PENDIENTE_REVISION');
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'PENDIENTE_REVISION');
                     """, (inmueble_id, inm["identificacion"], inm["nombre"], inm["conjunto_residencial"], inm["torre_apto"], recaudo_id))
             solicitud_creada = True
 
@@ -269,8 +269,8 @@ def aprobar_paz_y_salvo_humano(solicitud_id: int, request: Request, usuario_apro
                 cur.execute("""
                     INSERT INTO gestiones_crm (
                         inmueble_id, identificacion_deudor, tipo_contacto, resumen, usuario, estado
-                    ) VALUES (%s, %s, 'Paz y Salvo Aprobado', %s, %s, 'FINALIZADO');
-                """, (sol["inmueble_id"], sol["identificacion_deudor"], f"Paz y Salvo APROBADO por {usuario_aprobador}. Código verificación: {codigo_verif}", usuario_aprobador))
+                    ) VALUES (%s, %s, %s, 'Paz y Salvo Aprobado', %s, %s, 'FINALIZADO');
+                """, (sol["inmueble_id"], sol["obligacion_id"], sol["identificacion_deudor"], f"Paz y Salvo APROBADO por {usuario_aprobador}. Código verificación: {codigo_verif}", usuario_aprobador))
 
         return JSONResponse({
             "status": "success",
@@ -288,7 +288,7 @@ def listar_solicitudes_pendientes(request: Request):
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT s.id, s.inmueble_id, s.identificacion_deudor, s.nombre_deudor,
+                SELECT s.id, s.inmueble_id, s.obligacion_id, s.identificacion_deudor, s.nombre_deudor,
                        s.conjunto_residencial, s.torre_apto, s.fecha_solicitud,
                        r.valor_total, r.banco_origen, r.referencia_transaccion, r.soporte_url
                 FROM solicitudes_paz_y_salvo s
