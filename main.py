@@ -1327,84 +1327,46 @@ def eliminar_actuacion(actuacion_id: int, radicado_interno: str):
 # CRM (GESTIÓN EXTRAJUDICIAL Y ANULACIÓN AUDITABLE)
 # ==============================================================================
 def _ensure_crm_and_vencimientos_schema():
+    """Compatibilidad histórica: verifica estructura CRM/agenda en solo lectura."""
     conn = db.get_connection()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                if not obligacion_id and radicado_interno:
-                    obligacion = obligaciones_service.obtener_obligacion_principal(cur, radicado_interno.strip())
-                    obligacion_id = int(obligacion["id"]) if obligacion else None
-
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS gestiones_crm (
-                        id BIGSERIAL PRIMARY KEY,
-                        inmueble_id INTEGER,
-                        identificacion_deudor TEXT,
-                        tipo_contacto TEXT,
-                        resumen TEXT NOT NULL,
-                        promesa_pago_fecha DATE,
-                        fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        usuario TEXT NOT NULL DEFAULT 'ERP',
-                        anulado BOOLEAN NOT NULL DEFAULT FALSE,
-                        estado TEXT NOT NULL DEFAULT 'ACTIVO'
+        with conn.cursor() as cur:
+            required = {
+                "gestiones_crm": {
+                    "radicado_interno", "inmueble_id", "obligacion_id",
+                    "identificacion_deudor", "resumen", "fecha", "usuario",
+                    "anulado", "estado",
+                },
+                "vencimientos": {
+                    "radicado_interno", "titulo", "fecha_vencimiento",
+                    "completado", "tipo", "valor", "inmueble_id",
+                    "anulado", "categoria", "abogado_id", "obligacion_id",
+                },
+                "acuerdos_pago": {
+                    "id", "inmueble_id", "obligacion_id",
+                    "identificacion_deudor", "valor_acordado",
+                    "fecha_compromiso", "estado",
+                },
+            }
+            for table, expected in required.items():
+                cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name=%s
+                    """,
+                    (table,),
+                )
+                actual = {str(row[0]) for row in cur.fetchall()}
+                if not actual:
+                    raise RuntimeError(f"Falta tabla requerida: {table}")
+                missing = sorted(expected - actual)
+                if missing:
+                    raise RuntimeError(
+                        f"Faltan columnas en {table}: {', '.join(missing)}"
                     )
-                """)
-                cur.execute("ALTER TABLE gestiones_crm ALTER COLUMN inmueble_id DROP NOT NULL")
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS vencimientos (
-                        id BIGSERIAL PRIMARY KEY,
-                        radicado_interno TEXT NOT NULL,
-                        titulo TEXT NOT NULL,
-                        fecha_vencimiento DATE NOT NULL,
-                        observaciones TEXT,
-                        completado BOOLEAN NOT NULL DEFAULT FALSE,
-                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS completado BOOLEAN NOT NULL DEFAULT FALSE")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'PROCESAL'")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS valor NUMERIC(14,2) DEFAULT 0")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS inmueble_id INTEGER")
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS acuerdos_pago (
-                        id BIGSERIAL PRIMARY KEY,
-                        inmueble_id INTEGER,
-                        identificacion_deudor TEXT NOT NULL,
-                        nombre_deudor TEXT,
-                        telefono TEXT,
-                        valor_acordado NUMERIC(14,2) NOT NULL DEFAULT 0,
-                        numero_cuotas INTEGER NOT NULL DEFAULT 1,
-                        cuota_actual INTEGER NOT NULL DEFAULT 1,
-                        fecha_compromiso DATE NOT NULL,
-                        estado TEXT NOT NULL DEFAULT 'PENDIENTE',
-                        origen TEXT NOT NULL DEFAULT 'ROBOT_IA',
-                        observaciones TEXT,
-                        recordatorio_previo_enviado BOOLEAN NOT NULL DEFAULT FALSE,
-                        recordatorio_dia_enviado BOOLEAN NOT NULL DEFAULT FALSE,
-                        recordatorio_mora_enviado BOOLEAN NOT NULL DEFAULT FALSE,
-                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_vencimientos_fecha ON vencimientos (fecha_vencimiento, completado)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_gestiones_crm_inmueble ON gestiones_crm (inmueble_id, fecha DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_gestiones_crm_identificacion ON gestiones_crm (identificacion_deudor, fecha DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_fecha ON acuerdos_pago (fecha_compromiso, estado)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_deudor ON acuerdos_pago (identificacion_deudor)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_inmueble ON acuerdos_pago (inmueble_id)")
-    except Exception as exc:
-        print(f"[SCHEMA] Error asegurando tablas auxiliares: {exc!r}", flush=True)
     finally:
         conn.release()
-
-
-@app.on_event("startup")
-def startup_schema_init():
-    """Garantiza la creación y actualización de tablas e índices en Neon automáticamente al iniciar."""
-    print("[STARTUP] Verificando y asegurando esquema de base de datos...", flush=True)
-    _ensure_crm_and_vencimientos_schema()
-    print("[STARTUP] Esquema verificado y asegurado correctamente.", flush=True)
 
 
 @app.get("/crm")
