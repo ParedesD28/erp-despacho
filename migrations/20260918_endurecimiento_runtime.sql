@@ -14,8 +14,10 @@ DROP FUNCTION IF EXISTS fn_integridad_proceso_ph();
 DROP FUNCTION IF EXISTS fn_sync_demandante_cuotas_administracion();
 DROP FUNCTION IF EXISTS fn_sync_tipo_cartera_proceso();
 
--- El proceso_partes sigue recibiendo compatibilidad desde procesos durante
--- esta etapa; no retiramos todavía trg_sync_proceso_partes_desde_proceso.
+-- proceso_partes ya es actualizado explícitamente por las rutas canónicas
+-- de alta y edición; el trigger legacy dejaría dos fuentes de escritura.
+DROP TRIGGER IF EXISTS trg_sync_proceso_partes_desde_proceso ON procesos;
+DROP FUNCTION IF EXISTS fn_sync_proceso_partes_desde_proceso();
 
 -- La regla PREJURÍDICO sigue siendo de base de datos, pero un intento ilegal
 -- debe producir un error explícito y no desaparecer silenciosamente.
