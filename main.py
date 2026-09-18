@@ -1365,6 +1365,10 @@ def _ensure_crm_and_vencimientos_schema():
     try:
         with conn:
             with conn.cursor() as cur:
+                if not obligacion_id and radicado_interno:
+                    obligacion = obligaciones_service.obtener_obligacion_principal(cur, radicado_interno.strip())
+                    obligacion_id = int(obligacion["id"]) if obligacion else None
+
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS gestiones_crm (
                         id BIGSERIAL PRIMARY KEY,
@@ -1873,6 +1877,8 @@ def guardar_acuerdo_manual(
     nombre_deudor: str = Form(""),
     telefono: str = Form(""),
     inmueble_id: int | None = Form(None),
+    radicado_interno: str | None = Form(None),
+    obligacion_id: int | None = Form(None),
     observaciones: str = Form(""),
 ):
     conn = db.get_connection()
@@ -1881,12 +1887,12 @@ def guardar_acuerdo_manual(
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO acuerdos_pago (
-                        inmueble_id, identificacion_deudor, nombre_deudor, telefono,
+                        inmueble_id, obligacion_id, identificacion_deudor, nombre_deudor, telefono,
                         valor_acordado, fecha_compromiso, estado, origen, observaciones
-                    ) VALUES (%s, %s, %s, %s, %s, %s, 'PENDIENTE', 'ABOGADO_HUMANO', %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'PENDIENTE', 'ABOGADO_HUMANO', %s)
                     RETURNING id
                 """, (
-                    inmueble_id, identificacion_deudor.strip(), nombre_deudor.strip(), telefono.strip(),
+                    inmueble_id, obligacion_id, identificacion_deudor.strip(), nombre_deudor.strip(), telefono.strip(),
                     valor_acordado, fecha_compromiso, observaciones.strip()
                 ))
                 acuerdo_id = cur.fetchone()[0]
@@ -1894,11 +1900,11 @@ def guardar_acuerdo_manual(
                 # Registrar en gestiones CRM
                 cur.execute("""
                     INSERT INTO gestiones_crm (
-                        inmueble_id, identificacion_deudor, tipo_contacto,
+                        inmueble_id, obligacion_id, radicado_interno, identificacion_deudor, tipo_contacto,
                         resumen, promesa_pago_fecha, usuario, estado
-                    ) VALUES (%s, %s, 'Acuerdo Manual', %s, %s, 'Abogado ERP', 'ACTIVO')
+                    ) VALUES (%s, %s, %s, %s, 'Acuerdo Manual', %s, %s, 'Abogado ERP', 'ACTIVO')
                 """, (
-                    inmueble_id, identificacion_deudor.strip(),
+                    inmueble_id, obligacion_id, radicado_interno.strip() if radicado_interno else None, identificacion_deudor.strip(),
                     f"🤝 [ACUERDO DE PAGO #{acuerdo_id}] Pactado por ${valor_acordado:,.0f} para el {fecha_compromiso}. {observaciones}",
                     fecha_compromiso
                 ))
@@ -1906,10 +1912,12 @@ def guardar_acuerdo_manual(
                 # Registrar en vencimientos
                 cur.execute("""
                     INSERT INTO vencimientos (
-                        radicado_interno, titulo, fecha_vencimiento, observaciones,
+                        radicado_interno, obligacion_id, titulo, fecha_vencimiento, observaciones,
                         completado, tipo, valor, inmueble_id
-                    ) VALUES ('ACUERDO-PAGO', %s, %s, %s, FALSE, 'ACUERDO_PAGO', %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, FALSE, 'ACUERDO_PAGO', %s, %s)
                 """, (
+                    radicado_interno.strip() if radicado_interno else "ACUERDO-PAGO",
+                    obligacion_id,
                     f"Pago acordado ({nombre_deudor or identificacion_deudor}) - ${valor_acordado:,.0f}",
                     fecha_compromiso,
                     f"Acuerdo #{acuerdo_id}. Tel: {telefono}. Obs: {observaciones}",
