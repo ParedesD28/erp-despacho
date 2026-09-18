@@ -5,27 +5,29 @@
     <header>
         <p class="text-xs font-bold uppercase tracking-wider text-blue-600">Gestión de cartera</p>
         <h1 class="text-2xl font-bold text-slate-900">CRM</h1>
-        <p class="text-sm text-slate-500 mt-1">Seleccione únicamente el conjunto residencial. El ERP identifica automáticamente la persona jurídica acreedora y sus cuentas.</p>
+        <p class="text-sm text-slate-500 mt-1">Seleccione un solo conjunto residencial. El ERP identifica automáticamente su persona jurídica y carga sus cuentas.</p>
     </header>
 
     <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
         <aside class="xl:col-span-4 bg-white rounded-xl border border-slate-200 shadow-sm p-6 sticky top-0">
             <h2 class="font-bold text-slate-900 mb-1">1. Seleccionar conjunto</h2>
-            <p class="text-xs text-slate-500 mb-4">La lista proviene del catálogo maestro de conjuntos residenciales.</p>
+            <p class="text-xs text-slate-500 mb-4">Seleccione el conjunto desde el catálogo maestro.</p>
 
-            <form id="formConjunto" method="GET" action="/crm" class="space-y-4">
-                <input type="hidden" name="buscar_acreedor" id="buscarAcreedor" value="">
-                <input type="hidden" name="acreedor_id" id="acreedorId" value="">
-                <label for="conjuntoSelect" class="block text-xs font-bold text-slate-600 uppercase tracking-wide">Conjunto residencial</label>
-                <select id="conjuntoSelect" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-800 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none" required>
-                    <option value="">Cargando conjuntos...</option>
+            <form method="GET" action="/crm" class="space-y-4">
+                <label for="conjunto_id" class="block text-xs font-bold text-slate-600 uppercase tracking-wide">Conjunto residencial</label>
+                <select id="conjunto_id" name="conjunto_id" onchange="this.form.submit()" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-800 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none" required>
+                    <option value="">Seleccione un conjunto...</option>
+                    {% for c in conjuntos %}
+                    <option value="{{ c.id }}" {% if conjunto_id and conjunto_id|int == c.id|int %}selected{% endif %}>
+                        {{ c.nombre }}{% if c.nit %} · NIT {{ c.nit }}{% endif %}
+                    </option>
+                    {% endfor %}
                 </select>
-                <button type="submit" id="btnConjunto" disabled class="w-full rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-bold text-white transition-colors">Cargar cartera</button>
             </form>
 
             {% if acreedor_seleccionado %}
             <div class="mt-5 rounded-lg border border-blue-100 bg-blue-50 p-4">
-                <div class="text-[10px] uppercase tracking-wider font-bold text-blue-600">Conjunto seleccionado</div>
+                <div class="text-[10px] uppercase tracking-wider font-bold text-blue-600">Persona jurídica acreedora</div>
                 <div class="mt-1 font-bold text-slate-900">{{ acreedor_seleccionado.nombre }}</div>
                 <div class="mt-1 text-xs font-mono text-slate-500">{{ acreedor_seleccionado.identificacion }}</div>
             </div>
@@ -36,19 +38,17 @@
             {% if acreedor_seleccionado and cuentas %}
             <section class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
                 <h2 class="font-bold text-slate-900 mb-1">2. Seleccionar cuenta</h2>
-                <p class="text-xs text-slate-500 mb-4">Seleccione el expediente sobre el cual realizará la gestión.</p>
+                <p class="text-xs text-slate-500 mb-4">Seleccione el expediente que desea gestionar.</p>
                 <form method="GET" action="/crm" class="flex flex-col md:flex-row gap-3">
-                    <input type="hidden" name="buscar_acreedor" value="{{ acreedor_seleccionado.identificacion }}">
-                    <input type="hidden" name="acreedor_id" value="{{ acreedor_seleccionado.identificacion }}">
-                    <select name="radicado_interno" class="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-800 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none" required>
+                    <input type="hidden" name="conjunto_id" value="{{ conjunto_id }}">
+                    <select name="radicado_interno" onchange="this.form.submit()" class="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-800 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none" required>
                         <option value="">Seleccione una cuenta...</option>
                         {% for c in cuentas %}
                         <option value="{{ c.radicado_interno }}" {% if cuenta_actual and cuenta_actual.radicado_interno == c.radicado_interno %}selected{% endif %}>
-                            {{ c.radicado_interno }} · {{ c.demandado or 'Sin demandado' }}{% if c.inmueble_id %} · {{ c.conjunto_residencial or '' }} · {{ c.torre_apto or '' }}{% endif %}
+                            {{ c.radicado_interno }} · {{ c.demandado or 'Sin demandado' }}{% if c.inmueble_id %} · {{ c.torre_apto or '' }}{% endif %}
                         </option>
                         {% endfor %}
                     </select>
-                    <button type="submit" class="rounded-lg bg-slate-900 hover:bg-slate-800 px-5 py-2.5 text-sm font-bold text-white">Abrir cuenta</button>
                 </form>
             </section>
             {% elif acreedor_seleccionado %}
@@ -105,6 +105,7 @@
                 <form method="POST" action="/crm/guardar" class="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <input type="hidden" name="radicado_interno" value="{{ cuenta_actual.radicado_interno }}">
                     <input type="hidden" name="inmueble_id" value="{{ cuenta_actual.inmueble_id or '' }}">
+
                     <div>
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Contacto atendido</label>
                         {% if propietarios %}
@@ -113,6 +114,7 @@
                         </select>
                         {% else %}<input type="text" name="identificacion_deudor" placeholder="Cédula / NIT" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">{% endif %}
                     </div>
+
                     <div>
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Tipo de contacto</label>
                         <select name="tipo_contacto" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
@@ -122,15 +124,20 @@
                             <option value="Visita Presencial">Visita Presencial</option>
                         </select>
                     </div>
+
                     <div>
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Promesa de pago</label>
                         <input type="date" name="promesa_pago_fecha" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
                     </div>
+
                     <div class="md:col-span-3">
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Resumen</label>
                         <textarea name="resumen" required rows="4" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800" placeholder="Describa la gestión realizada..."></textarea>
                     </div>
-                    <div class="md:col-span-3 flex justify-end"><button class="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-5 py-2.5 text-sm font-bold text-white">Guardar gestión</button></div>
+
+                    <div class="md:col-span-3 flex justify-end">
+                        <button class="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-5 py-2.5 text-sm font-bold text-white">Guardar gestión</button>
+                    </div>
                 </form>
                 {% else %}
                 <div class="rounded-lg bg-slate-50 border border-slate-200 p-5 text-sm text-slate-500">Seleccione un conjunto y después una cuenta para registrar una gestión.</div>
@@ -159,57 +166,4 @@
         </main>
     </div>
 </div>
-
-<script>
-(function () {
-    const select = document.getElementById('conjuntoSelect');
-    const buscar = document.getElementById('buscarAcreedor');
-    const acreedorId = document.getElementById('acreedorId');
-    const button = document.getElementById('btnConjunto');
-
-    async function cargarConjuntos() {
-        try {
-            const response = await fetch('/conjuntos', { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
-            if (!response.ok) throw new Error('No fue posible cargar el catálogo');
-            const html = await response.text();
-            const doc = new DOMParser().parseFromString(html, 'text/html');
-            const rows = [...doc.querySelectorAll('a[href^="/conjuntos?id="]')];
-            const conjuntos = [];
-
-            for (const link of rows) {
-                const row = link.parentElement?.parentElement;
-                const nameNode = row?.querySelector('.font-bold.text-slate-900');
-                const text = row?.textContent || '';
-                const match = text.match(/NIT:\s*([^·\n]+)/i);
-                const nombre = (nameNode?.textContent || '').trim();
-                const nit = (match?.[1] || '').trim();
-                if (nombre && nit && !conjuntos.some(c => c.nit === nit)) conjuntos.push({ nombre, nit });
-            }
-
-            select.innerHTML = '<option value="">Seleccione un conjunto...</option>';
-            conjuntos.forEach(c => {
-                const option = document.createElement('option');
-                option.value = c.nit;
-                option.textContent = c.nombre + ' · NIT ' + c.nit;
-                select.appendChild(option);
-            });
-
-            const selected = "{{ acreedor_seleccionado.identificacion if acreedor_seleccionado else '' }}";
-            if (selected) select.value = selected;
-            button.disabled = conjuntos.length === 0;
-        } catch (error) {
-            select.innerHTML = '<option value="">No fue posible cargar los conjuntos</option>';
-            button.disabled = true;
-            console.error('[CRM] Error cargando conjuntos:', error);
-        }
-    }
-
-    select.addEventListener('change', function () {
-        buscar.value = this.value;
-        acreedorId.value = this.value;
-    });
-
-    cargarConjuntos();
-})();
-</script>
 {% endblock %}
