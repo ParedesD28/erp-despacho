@@ -203,6 +203,44 @@ WHERE codigo IN (
 AND codigo NOT IN ('EJECUTIVO','VERBAL');
 
 -- ---------------------------------------------------------------------------
+-- Invariantes del proceso.
+-- ---------------------------------------------------------------------------
+ALTER TABLE procesos
+    ALTER COLUMN naturaleza SET NOT NULL,
+    ALTER COLUMN tipo_cartera SET NOT NULL,
+    ALTER COLUMN tipo_proceso_id SET NOT NULL;
+
+ALTER TABLE procesos
+    ADD CONSTRAINT ck_procesos_naturaleza
+    CHECK (UPPER(BTRIM(naturaleza)) IN ('EJECUTIVO','VERBAL'));
+
+ALTER TABLE procesos
+    ADD CONSTRAINT ck_procesos_tipo_cartera
+    CHECK (UPPER(BTRIM(tipo_cartera)) IN ('JURIDICO','PREJURIDICO'));
+
+ALTER TABLE procesos
+    ADD CONSTRAINT ck_procesos_rama_real
+    CHECK (
+        radicado_rama IS NULL
+        OR UPPER(BTRIM(radicado_rama)) NOT IN ('EN REPARTO','PREJURIDICO','PRE-JURIDICO')
+    );
+
+ALTER TABLE procesos
+    ADD CONSTRAINT ck_procesos_prejuridico_sin_judicial
+    CHECK (
+        UPPER(BTRIM(tipo_cartera)) <> 'PREJURIDICO'
+        OR (radicado_rama IS NULL AND juzgado IS NULL)
+    );
+
+ALTER TABLE procesos
+    ADD CONSTRAINT ck_procesos_estado_rama
+    CHECK (estado_rama IN ('NO_APLICA','PENDIENTE_REPARTO','ASIGNADO'));
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_procesos_radicado_rama_real
+    ON procesos(radicado_rama)
+    WHERE radicado_rama IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
 -- 7. Crear una obligación canónica para cada proceso histórico de PH.
 -- No se usa pretensiones como saldo inicial; el saldo se obtendrá de
 -- expensas_ph.
