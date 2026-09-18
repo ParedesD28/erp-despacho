@@ -219,9 +219,11 @@ function configurarTipoProceso(){
     }
     document.getElementById('bloque-juridico').classList.toggle('hidden',!judicial);
     document.getElementById('radicado_rama').disabled = !judicial;
-    document.getElementById('juzgado_numero').disabled = !judicial || !requiereJuzgado;
-    document.getElementById('juzgado_tipo').disabled = !judicial || !requiereJuzgado;
-    document.getElementById('juzgado_ciudad').disabled = !judicial || !requiereJuzgado;
+    // En cartera JURÍDICA la información judicial siempre debe poder editarse.
+    // El tipo de título solo determina si el juzgado es obligatorio, no si los campos están bloqueados.
+    document.getElementById('juzgado_numero').disabled = !judicial;
+    document.getElementById('juzgado_tipo').disabled = !judicial;
+    document.getElementById('juzgado_ciudad').disabled = !judicial;
     document.getElementById('juzgado_numero').required = judicial && requiereJuzgado;
     document.getElementById('juzgado_tipo').required = judicial && requiereJuzgado;
     document.getElementById('juzgado_ciudad').required = judicial && requiereJuzgado;
