@@ -4,6 +4,15 @@
 
 BEGIN;
 
+-- Preserva la clasificación histórica antes de convertir tipos_proceso a
+-- procedimientos puros. Solo estos expedientes se deben convertir en
+-- obligaciones PH automáticamente.
+CREATE TEMP TABLE tmp_procesos_ph_legacy ON COMMIT DROP AS
+SELECT p.radicado_interno
+FROM procesos p
+JOIN tipos_proceso tp ON tp.id=p.tipo_proceso_id
+WHERE tp.codigo='CUOTAS_ADMINISTRACION';
+
 -- ---------------------------------------------------------------------------
 -- 1. Catálogo de obligaciones: independiente del procedimiento.
 -- ---------------------------------------------------------------------------
@@ -214,9 +223,8 @@ SELECT
     0,
     'EXPENSAS_PH'
 FROM procesos p
-JOIN tipos_proceso tp
-  ON tp.id=p.tipo_proceso_id
- AND tp.codigo='EJECUTIVO'
+JOIN tmp_procesos_ph_legacy ph
+  ON ph.radicado_interno=p.radicado_interno
 JOIN tipos_obligacion tob
   ON tob.codigo='CUOTAS_ADMINISTRACION'
 JOIN contactos acre
