@@ -276,6 +276,8 @@ def _crear_router_agenda() -> APIRouter:
                     if frecuencia not in {"MENSUAL", "QUINCENAL", "SEMANAL"}:
                         frecuencia = "MENSUAL"
                     total = round(float(valor_acordado or 0), 2)
+                    if total <= 0:
+                        raise ValueError("El valor del acuerdo debe ser mayor que cero")
                     primera = date.fromisoformat(str(fecha_compromiso))
                     abogado_id = str(getattr(request.state, "user_id", "") or "") or None
                     if radicado_interno and not obligacion_id and _table_exists(cur, "proceso_obligaciones"):
@@ -294,18 +296,35 @@ def _crear_router_agenda() -> APIRouter:
                     if obligacion_id:
                         cur.execute(
                             """
+                            SELECT o.id,o.deudor_contacto_id,c.identificacion
+                            FROM obligaciones o
+                            JOIN contactos c ON c.id=o.deudor_contacto_id
+                            WHERE o.id=%s
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id),),
+                        )
+                        obligacion = cur.fetchone()
+                        if not obligacion:
+                            raise ValueError("La obligación indicada no existe.")
+                        cur.execute(
+                            """
                             SELECT 1
                             FROM proceso_obligaciones
                             WHERE obligacion_id=%s
                               AND (%s IS NULL OR radicado_interno=%s)
                             LIMIT 1
                             """,
-                            (int(obligacion_id), str(radicado_interno).strip() if radicado_interno else None,
-                             str(radicado_interno).strip() if radicado_interno else None),
+                            (
+                                int(obligacion_id),
+                                str(radicado_interno).strip() if radicado_interno else None,
+                                str(radicado_interno).strip() if radicado_interno else None,
+                            ),
                         )
                         if not cur.fetchone():
                             raise ValueError("La obligación no pertenece al expediente indicado.")
-
+                        if str(obligacion["identificacion"]) != ident:
+                            raise ValueError("La persona seleccionada no es el deudor de la obligación.")
 
                     cur.execute("""
                         INSERT INTO acuerdos_pago
@@ -434,6 +453,20 @@ def _crear_router_agenda() -> APIRouter:
                         )
                         principal = cur.fetchone()
                         obligacion_id = int(principal["obligacion_id"]) if principal else None
+
+                    if obligacion_id:
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM proceso_obligaciones
+                            WHERE obligacion_id=%s AND radicado_interno=%s
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id), radicado_interno.strip()),
+                        )
+                        if not cur.fetchone():
+                            raise ValueError("La obligación no pertenece al expediente indicado.")
+
                     cur.execute("""
                         INSERT INTO vencimientos
                             (radicado_interno,obligacion_id,titulo,fecha_vencimiento,observaciones,completado,
