@@ -353,6 +353,26 @@ def _candidatos_cartera(
     return cur.fetchall()
 
 
+def _filtrar_saldos_verificados(candidatos, saldo_minimo: float, saldo_maximo: Optional[float]):
+    """Aplica el filtro monetario sobre el saldo REAL del liquidador, no sobre el saldo preliminar."""
+    salida = []
+    minimo = float(saldo_minimo or 0)
+    maximo = float(saldo_maximo) if saldo_maximo is not None else None
+    for item in candidatos:
+        if not item.get("saldo_verificado"):
+            continue
+        try:
+            saldo = float(item.get("saldo_total") or 0)
+        except (TypeError, ValueError):
+            continue
+        if saldo < minimo:
+            continue
+        if maximo is not None and saldo > maximo:
+            continue
+        salida.append(item)
+    return salida
+
+
 def _columnas_existentes_crm(cur) -> Set[str]:
     cur.execute(
         """
@@ -752,10 +772,14 @@ def vista_sms(
                 ORDER BY nombre
             """)
             conjuntos = [str(r["nombre"]) for r in cur.fetchall()]
-            candidatos = enriquecer_candidatos(
-                _candidatos_cartera(
-                    cur, tipo_cartera, float(saldo_minimo or 0), saldo_max, None, conjunto
-                )
+            candidatos = _filtrar_saldos_verificados(
+                enriquecer_candidatos(
+                    _candidatos_cartera(
+                        cur, tipo_cartera, float(saldo_minimo or 0), saldo_max, None, conjunto
+                    )
+                ),
+                float(saldo_minimo or 0),
+                saldo_max,
             )
 
         return templates.TemplateResponse(
@@ -815,15 +839,19 @@ def generar_cola(
                     else "{nombre}, mora en {conjunto} {unidad}. WhatsApp: {telefono_wa}"
                 )
 
-                deudores = enriquecer_candidatos(
-                    _candidatos_cartera(
-                        cur,
-                        tipo_cartera,
-                        saldo_minimo,
-                        saldo_max,
-                        seleccionados or None,
-                        conjunto,
-                    )
+                deudores = _filtrar_saldos_verificados(
+                    enriquecer_candidatos(
+                        _candidatos_cartera(
+                            cur,
+                            tipo_cartera,
+                            saldo_minimo,
+                            saldo_max,
+                            seleccionados or None,
+                            conjunto,
+                        )
+                    ),
+                    saldo_minimo,
+                    saldo_max,
                 )
                 insertados = 0
                 for d in deudores:
