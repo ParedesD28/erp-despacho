@@ -128,6 +128,33 @@ def crear_obligacion(
     return int(row[0])
 
 
+def vincular_partes_obligacion(
+    cur,
+    *,
+    obligacion_id: int,
+    contactos_deudores: list[dict],
+) -> None:
+    """Registra todas las personas obligadas sin perder la multiplicidad."""
+    if not contactos_deudores:
+        raise ValueError("La obligación requiere al menos un deudor")
+
+    for index, contacto in enumerate(contactos_deudores):
+        contacto_id = contacto.get("id")
+        if not contacto_id:
+            raise ValueError("Todos los deudores deben existir en Contactos")
+
+        cur.execute(
+            """
+            INSERT INTO obligacion_partes
+                (obligacion_id,contacto_id,rol,es_principal)
+            VALUES (%s,%s,'DEUDOR',%s)
+            ON CONFLICT (obligacion_id,contacto_id,rol)
+            DO UPDATE SET es_principal=EXCLUDED.es_principal
+            """,
+            (int(obligacion_id), int(contacto_id), index == 0),
+        )
+
+
 def vincular_obligacion_a_proceso(
     cur,
     *,
