@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<div class="p-6 md:p-8 space-y-6 h-full overflow-y-auto bg-slate-50/50">
+    <header class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+            <p class="text-xs font-bold uppercase tracking-wider text-teal-600">Configuración de cartera</p>
+            <h1 class="text-2xl font-bold text-slate-900">Conjuntos residenciales</h1>
+            <p class="text-sm text-slate-500 mt-1">Cada conjunto representa la persona jurídica que podrá quedar automáticamente como demandante en cuotas de administración.</p>
+        </div>
+        <a href="/procesos" class="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 font-semibold text-sm">Volver a procesos</a>
+    </header>
+
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <div class="xl:col-span-1 bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h2 class="font-bold text-slate-900 mb-1">{{ "Editar conjunto" if conjunto_actual else "Nuevo conjunto" }}</h2>
+            <p class="text-xs text-slate-500 mb-4">El ERP crea o actualiza el contacto de la persona jurídica. No se registra administrador.</p>
+            <form method="POST" action="/conjuntos/guardar" class="space-y-3">
+                <input type="hidden" name="id" value="{{ conjunto_actual.id if conjunto_actual else '' }}">
+                <div>
+                    <label class="text-xs font-bold text-slate-600">Nombre del conjunto *</label>
+                    <input name="nombre" required value="{{ conjunto_actual.nombre if conjunto_actual else '' }}" class="w-full mt-1 px-3 py-2 border rounded-lg">
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-600">NIT / identificación *</label>
+                    <input name="nit" required value="{{ conjunto_actual.nit if conjunto_actual else '' }}" class="w-full mt-1 px-3 py-2 border rounded-lg">
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-600">Teléfono</label>
+                    <input name="telefono" value="{{ conjunto_actual.telefono if conjunto_actual else '' }}" class="w-full mt-1 px-3 py-2 border rounded-lg">
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-600">Correo</label>
+                    <input type="email" name="email" value="{{ conjunto_actual.email if conjunto_actual else '' }}" class="w-full mt-1 px-3 py-2 border rounded-lg">
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-600">Dirección</label>
+                    <input name="direccion" value="{{ conjunto_actual.direccion if conjunto_actual else '' }}" class="w-full mt-1 px-3 py-2 border rounded-lg">
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-600">Ciudad</label>
+                    <input name="ciudad" value="{{ conjunto_actual.ciudad if conjunto_actual else 'PEREIRA' }}" class="w-full mt-1 px-3 py-2 border rounded-lg uppercase">
+                </div>
+                <div class="flex gap-2 pt-2">
+                    <button class="flex-1 px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold">Guardar</button>
+                    {% if conjunto_actual %}<a href="/conjuntos" class="px-4 py-2 rounded-lg border bg-white text-slate-700 font-semibold">Cancelar</a>{% endif %}
+                </div>
+            </form>
+        </div>
+
+        <div class="xl:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div class="p-5 border-b border-slate-200 flex items-center justify-between">
+                <div>
+                    <h2 class="font-bold text-slate-900">Conjuntos configurados</h2>
+                    <p class="text-xs text-slate-500">{{ conjuntos|length }} conjunto(s) activo(s)</p>
+                </div>
+            </div>
+            <div class="divide-y divide-slate-100">
+                {% for c in conjuntos %}
+                <div class="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                        <div class="font-bold text-slate-900">{{ c.nombre }}</div>
+                        <div class="text-xs text-slate-500 mt-1">NIT: {{ c.nit or 'Pendiente' }} · {{ c.ciudad or 'Sin ciudad' }}</div>
+                        <div class="text-xs mt-1 {% if c.contacto_id %}text-emerald-600{% else %}text-amber-600{% endif %}">
+                            {% if c.contacto_id %}Persona jurídica configurada automáticamente como contacto del conjunto.{% else %}Falta configurar la persona jurídica para automatizar el demandante.{% endif %}
+                        </div>
+                    </div>
+                    <a href="/conjuntos?id={{ c.id }}" class="px-3 py-2 rounded-lg border border-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50">Editar</a>
+                </div>
+                {% else %}
+                <div class="p-8 text-center text-slate-500">No hay conjuntos configurados.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-900">
+        <strong>Automatización:</strong> al crear un proceso de <strong>Cuotas de administración</strong>, el usuario seleccionará el conjunto y el sistema utilizará automáticamente la persona jurídica asociada como demandante. El administrador de la propiedad horizontal no forma parte de este modelo.
+    </div>
+</div>
+{% endblock %}
