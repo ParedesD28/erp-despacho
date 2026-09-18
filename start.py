@@ -23,8 +23,28 @@ import proceso_partes_runtime
 import proceso_partes_service
 import security
 import sms_cartera_runtime
+import sms_saldo_service
+import sms_router
 import tasas
 from observability import log_msg
+
+def _verificar_dependencias_sms() -> None:
+    """Verificación de contrato SMS antes de aceptar tráfico."""
+    required = {
+        "sms_router.router": getattr(sms_router, "router", None),
+        "sms_router._candidatos_cartera": getattr(sms_router, "_candidatos_cartera", None),
+        "sms_router._reclamar_lote": getattr(sms_router, "_reclamar_lote", None),
+        "sms_saldo_service.calcular_saldo_ph": getattr(sms_saldo_service, "calcular_saldo_ph", None),
+        "sms_saldo_service.enriquecer_candidatos": getattr(sms_saldo_service, "enriquecer_candidatos", None),
+        "sms_saldo_service.actualizar_item_cola": getattr(sms_saldo_service, "actualizar_item_cola", None),
+        "sms_cartera_runtime.install": getattr(sms_cartera_runtime, "install", None),
+    }
+    faltantes = [nombre for nombre, obj in required.items() if obj is None]
+    if faltantes:
+        raise RuntimeError(
+            "[SMS PREFLIGHT] Dependencias SMS ausentes: " + ", ".join(faltantes)
+        )
+
 
 
 def _ejecutar_mantenimiento_segundo_plano() -> None:
