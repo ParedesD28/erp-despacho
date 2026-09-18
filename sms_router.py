@@ -233,6 +233,7 @@ def _candidatos_cartera(
     saldo_minimo: float = 0,
     saldo_maximo: Optional[float] = None,
     ids: Optional[List[int]] = None,
+    conjunto: str = "",
 ):
     """Devuelve candidatos por contacto y excluye reenvíos realizados en las últimas 24 h."""
     cartera = (tipo_cartera or "").upper().strip()
@@ -258,6 +259,9 @@ def _candidatos_cartera(
     if ids:
         where.append("c.id = ANY(%s)")
         params.append(ids)
+    if conjunto:
+        where.append("COALESCE(i.conjunto_residencial, '') = %s")
+        params.append(conjunto.strip())
 
     cur.execute("SELECT to_regclass('public.inmueble_propietarios') AS tabla;")
     fila_tabla = cur.fetchone()
