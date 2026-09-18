@@ -62,7 +62,7 @@ def _table_columns(cur, table: str) -> set[str]:
 
 
 def verify(required_versions: tuple[str, ...] = (
-    "20260918_runtime_schema_base",
+    "20260918_00_runtime_schema_base",
     "20260918_proceso_obligacion_base",
 )) -> None:
     conn = db.get_connection()
