@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Optional
+
+from psycopg2.extras import RealDictCursor
 from zoneinfo import ZoneInfo
 
 import db
@@ -108,14 +110,24 @@ def _saldo_ph(obligacion: dict, fecha_corte: Optional[date]) -> dict:
             "saldo_calculado_en": ahora_colombia(),
         }
 
-    resultados, resumen, _ = liquidador.motor_calculo_judicial(
-        int(inmueble_id),
-        TIPO_TASA_PH,
-        TASA_FIJA_PH,
-        HONORARIOS_PCT_PH,
-        GASTOS_PH,
-        fecha_corte or ahora_colombia().date(),
-    )
+    try:
+        resultados, resumen, _ = liquidador.motor_calculo_judicial(
+            int(inmueble_id),
+            TIPO_TASA_PH,
+            TASA_FIJA_PH,
+            HONORARIOS_PCT_PH,
+            GASTOS_PH,
+            fecha_corte or ahora_colombia().date(),
+            autocausar=False,
+        )
+    except Exception as exc:
+        return {
+            "saldo_total": None,
+            "saldo_verificado": False,
+            "saldo_fuente": "LIQUIDADOR_PH_ERROR",
+            "saldo_calculado_en": ahora_colombia(),
+            "saldo_error": str(exc)[:250],
+        }
     if not resultados or not resumen:
         return {
             "saldo_total": None,
@@ -152,7 +164,7 @@ def calcular_saldo_obligacion(
         conn = db.get_connection()
 
     try:
-        with conn.cursor(cursor_factory=None) as cur:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
                 SELECT
