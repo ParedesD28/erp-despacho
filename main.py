@@ -175,13 +175,15 @@ def _generar_radicado_interno(cur) -> str:
         SELECT COALESCE(
             MAX(CAST(SUBSTRING(radicado_interno FROM 5) AS BIGINT)),
             0
-        )
+        ) AS max
         FROM procesos
         WHERE radicado_interno ~ '^EXP-[0-9]+$'
         """
     )
     row = cur.fetchone()
-    ultimo = int(row[0] or 0) if row else 0
+    # crear_expediente_completo usa RealDictCursor, por lo que la fila
+    # debe leerse por nombre de columna, no por índice numérico.
+    ultimo = int(row["max"] or 0) if row else 0
     return f"EXP-{ultimo + 1:04d}"
 
 def cargar_inmuebles_ph(conn=None) -> list[dict]:
