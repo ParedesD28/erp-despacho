@@ -91,7 +91,7 @@ def actualizar_item_cola(cur, item: Dict[str, Any]) -> Dict[str, Any]:
     """Recalcula y actualiza el SMS justo antes de entregarlo al worker."""
     cur.execute(
         """
-        SELECT id, inmueble_id, contacto_id, identificacion, nombre,
+        SELECT id, inmueble_id, contacto_id, obligacion_id, identificacion, nombre,
                conjunto_residencial, torre_apto, telefono,
                mensaje_texto, tipo_campana
         FROM sms_cola_envios
@@ -105,13 +105,15 @@ def actualizar_item_cola(cur, item: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError(f"No existe sms_cola_envios.id={item['id']}")
 
     data = dict(row) if isinstance(row, dict) else {
-        "id": row[0], "inmueble_id": row[1], "contacto_id": row[2],
-        "identificacion": row[3], "nombre": row[4],
-        "conjunto_residencial": row[5], "torre_apto": row[6],
-        "telefono": row[7], "mensaje_texto": row[8], "tipo_campana": row[9],
+        "id": row[0], "inmueble_id": row[1], "contacto_id": row[2], "obligacion_id": row[3],
+        "identificacion": row[4], "nombre": row[5],
+        "conjunto_residencial": row[6], "torre_apto": row[7],
+        "telefono": row[8], "mensaje_texto": row[9], "tipo_campana": row[10],
     }
 
-    saldo = calcular_saldo_ph(data.get("inmueble_id"))
+    saldo = calcular_saldo_obligacion(
+        int(data["obligacion_id"]) if data.get("obligacion_id") else None
+    )
 
     if not saldo.get("saldo_verificado"):
         cur.execute(
