@@ -176,6 +176,12 @@ SET radicado_rama = NULL,
     estado_rama = 'NO_APLICA'
 WHERE UPPER(COALESCE(tipo_cartera,''))='PREJURIDICO';
 
+UPDATE procesos
+SET radicado_rama = NULL,
+    estado_rama = 'PENDIENTE_REPARTO'
+WHERE UPPER(COALESCE(tipo_cartera,''))='JURIDICO'
+  AND UPPER(BTRIM(COALESCE(radicado_rama,'')))='EN REPARTO';
+
 -- ---------------------------------------------------------------------------
 -- 6. Reasignar el catálogo de procedimiento de los procesos históricos.
 -- ---------------------------------------------------------------------------
@@ -352,6 +358,22 @@ SET obligacion_id=po.obligacion_id
 FROM proceso_obligaciones po
 WHERE g.obligacion_id IS NULL
   AND g.radicado_interno=po.radicado_interno;
+
+UPDATE gestiones_crm g
+SET obligacion_id=o.id
+FROM obligaciones o
+JOIN tipos_obligacion tob ON tob.id=o.tipo_obligacion_id
+WHERE g.obligacion_id IS NULL
+  AND g.inmueble_id=o.inmueble_id
+  AND tob.codigo='CUOTAS_ADMINISTRACION'
+  AND (
+      SELECT COUNT(*)
+      FROM obligaciones o2
+      JOIN tipos_obligacion tob2 ON tob2.id=o2.tipo_obligacion_id
+      WHERE o2.inmueble_id=g.inmueble_id
+        AND tob2.codigo='CUOTAS_ADMINISTRACION'
+        AND COALESCE(o2.estado,'ACTIVA') NOT IN ('CANCELADA','ANULADA')
+  )=1;
 
 UPDATE recaudos_contabilidad r
 SET obligacion_id=o.id
