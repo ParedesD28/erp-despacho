@@ -233,20 +233,21 @@ function configurarTipoProceso(){
             : '<strong>Ejecutivo → '+opt.text+'</strong>: la tipificación identifica el título/obligación del proceso.');
 }
 
+document.getElementById('naturaleza').addEventListener('change', configurarTipoProceso);
 document.getElementById('tipo_cartera').addEventListener('change',()=>{
     document.getElementById('tipo_cartera').dataset.manual='1';
-    document.getElementById('naturaleza').value = 'EJECUTIVO';
-configurarTipoProceso();
+    configurarTipoProceso();
 });
 
 function validarFormulario(){
+    const naturaleza=document.getElementById('naturaleza').value;
     const codigo=document.getElementById('tipo_proceso').value;
     const cartera=document.getElementById('tipo_cartera').value;
     if(cartera==='JURIDICO' && !document.getElementById('radicado_rama').value.trim()){
         alert('Debes indicar el radicado Rama Judicial o EN REPARTO.');
         return false;
     }
-    if(codigo==='CUOTAS_ADMINISTRACION' && !document.getElementById('conjunto_id').value){
+    if(naturaleza==='EJECUTIVO' && codigo==='CUOTAS_ADMINISTRACION' && !document.getElementById('conjunto_id').value){
         alert('Selecciona el conjunto residencial.');
         return false;
     }
