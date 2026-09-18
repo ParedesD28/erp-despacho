@@ -63,132 +63,39 @@ def _get_api_token() -> str:
 
 
 def _ensure_sms_schema() -> None:
-    """Crea/migra el esquema SMS sin borrar información existente."""
+    """Verifica el contrato SMS en solo lectura; las migraciones hacen los cambios estructurales."""
+    required = {
+        "sms_cola_envios": {
+            "id", "inmueble_id", "contacto_id", "identificacion", "telefono",
+            "saldo_calculado", "saldo_fuente", "saldo_verificado",
+            "saldo_calculado_en", "mensaje_template", "mensaje_texto",
+            "tipo_campana", "estado", "fecha_creacion", "fecha_envio",
+            "processing_token", "crm_auditado", "crm_auditoria_fecha",
+            "obligacion_id",
+        },
+        "sms_plantillas": {"id", "tipo", "cuerpo_template"},
+    }
+    import db
     conn = db.get_connection()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                expedientes_service._cols(cur, "procesos")
+        with conn.cursor() as cur:
+            for table, expected in required.items():
                 cur.execute(
                     """
-                    CREATE TABLE IF NOT EXISTS sms_cola_envios (
-                        id BIGSERIAL PRIMARY KEY,
-                        inmueble_id INT REFERENCES inmuebles_ph(id) ON DELETE SET NULL,
-                        contacto_id INT REFERENCES contactos(id) ON DELETE SET NULL,
-                        identificacion VARCHAR(50) NOT NULL,
-                        nombre VARCHAR(255),
-                        conjunto_residencial VARCHAR(255),
-                        torre_apto VARCHAR(100),
-                        telefono VARCHAR(20) NOT NULL,
-                        saldo_calculado NUMERIC(14,2) DEFAULT 0.0,
-                        saldo_fuente VARCHAR(80),
-                        saldo_verificado BOOLEAN NOT NULL DEFAULT FALSE,
-                        saldo_calculado_en TIMESTAMP,
-                        mensaje_template TEXT,
-                        mensaje_texto TEXT NOT NULL,
-                        tipo_campana VARCHAR(50) DEFAULT 'PREJUDICIAL',
-                        estado VARCHAR(30) DEFAULT 'PENDIENTE',
-                        fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        fecha_proceso TIMESTAMP,
-                        fecha_envio TIMESTAMP,
-                        error_detalle TEXT,
-                        processing_token VARCHAR(128),
-                        crm_auditado BOOLEAN NOT NULL DEFAULT FALSE,
-                        crm_auditoria_fecha TIMESTAMP
-                    );
-                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name=%s
+                    """,
+                    (table,),
                 )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS contacto_id INT REFERENCES contactos(id) ON DELETE SET NULL;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS fecha_proceso TIMESTAMP;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS processing_token VARCHAR(128);"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS crm_auditado BOOLEAN NOT NULL DEFAULT FALSE;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS crm_auditoria_fecha TIMESTAMP;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS saldo_fuente VARCHAR(80);"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS saldo_verificado BOOLEAN NOT NULL DEFAULT FALSE;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS saldo_calculado_en TIMESTAMP;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS mensaje_template TEXT;"
-                )
-                cur.execute(
-                    """
-                    UPDATE sms_cola_envios s
-                    SET contacto_id = i.contacto_id
-                    FROM inmuebles_ph i
-                    WHERE s.inmueble_id = i.id
-                      AND s.contacto_id IS NULL;
-                    """
-                )
-                cur.execute(
-                    """
-                    UPDATE sms_cola_envios
-                    SET estado = 'PENDIENTE', fecha_proceso = NULL, processing_token = NULL
-                    WHERE estado = 'EN_PROCESO' AND processing_token IS NULL;
-                    """
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_sms_cola_estado ON sms_cola_envios(estado);"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_sms_cola_proceso ON sms_cola_envios(estado, fecha_proceso);"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_sms_cola_telefono ON sms_cola_envios(telefono);"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_sms_cola_contacto_fecha ON sms_cola_envios(contacto_id, fecha_envio);"
-                )
-                cur.execute(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS uq_sms_cola_inm_tel_campana_activo
-                    ON sms_cola_envios(inmueble_id, telefono, tipo_campana)
-                    WHERE estado IN ('PENDIENTE','EN_PROCESO');
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS sms_plantillas (
-                        id SERIAL PRIMARY KEY,
-                        nombre VARCHAR(100) NOT NULL,
-                        tipo VARCHAR(50) NOT NULL UNIQUE,
-                        cuerpo_template TEXT NOT NULL,
-                        es_predeterminada BOOLEAN DEFAULT FALSE,
-                        actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );
-                    """
-                )
-                cur.execute(
-                    """
-                    INSERT INTO sms_plantillas(nombre,tipo,cuerpo_template,es_predeterminada)
-                    VALUES
-                    ('Acuerdo Prejudicial Amistoso','PREJUDICIAL',
-                     'Prejuridico: {nombre}, registra mora de ${saldo} en {conjunto} {unidad}. Evite cobro judicial y acuerde su pago al WhatsApp {telefono_wa}.',TRUE),
-                    ('Aviso de Inicio de Cobro Jurídico','COBRO_JURIDICO',
-                     'Aviso Juridico: {nombre}, inicio de proceso ejecutivo por mora de ${saldo} en {conjunto} {unidad}. Evite embargo y concilie al WhatsApp {telefono_wa}.',FALSE),
-                    ('Alerta de Mandamiento de Pago','MANDAMIENTO',
-                     'Urgente: {nombre}, mandamiento de pago en tramite para {conjunto} {unidad} (${saldo}). Comuniquese al WhatsApp {telefono_wa} antes de medidas cautelares.',FALSE)
-                    ON CONFLICT(tipo) DO NOTHING;
-                    """
-                )
-    except Exception as exc:
-        raise RuntimeError(
-            f"[SMS SCHEMA ERROR] Falló la migración del esquema SMS en Neon: {exc}"
-        ) from exc
+                actual = {str(row[0]) for row in cur.fetchall()}
+                if not actual:
+                    raise RuntimeError(f"[SMS PREFLIGHT] Falta tabla: {table}")
+                missing = sorted(expected - actual)
+                if missing:
+                    raise RuntimeError(
+                        f"[SMS PREFLIGHT] Faltan columnas en {table}: {', '.join(missing)}"
+                    )
     finally:
         conn.release()
 
