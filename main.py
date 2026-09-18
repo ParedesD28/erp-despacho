@@ -52,6 +52,7 @@ import tasas
 import liquidador
 import exportaciones
 import expedientes_service
+import catalogos_service
 import bot_api
 import agent_supervision
 
@@ -429,6 +430,108 @@ def guardar_contacto(
 # ==============================================================================
 # RADICACIÓN Y PROCESOS
 # ==============================================================================
+
+@app.get("/conjuntos")
+def conjuntos(request: Request, id: int | None = None):
+    conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            conjuntos = catalogos_service.listar_conjuntos(cur, activos=True)
+            conjunto_actual = catalogos_service.obtener_conjunto(cur, id) if id else None
+        return render_template(
+            "conjuntos.html",
+            {"request": request, "conjuntos": conjuntos, "conjunto_actual": conjunto_actual},
+        )
+    finally:
+        conn.release()
+
+
+@app.post("/conjuntos/guardar")
+def guardar_conjunto(
+    request: Request,
+    nombre: str = Form(...),
+    nit: str = Form(...),
+    telefono: str = Form(""),
+    email: str = Form(""),
+    direccion: str = Form(""),
+    ciudad: str = Form("PEREIRA"),
+    id: str | None = Form(None),
+):
+    nombre = nombre.strip()
+    nit = nit.strip()
+    if not nombre or not nit:
+        return _redirect("/conjuntos", error="Nombre+y+NIT+son+obligatorios")
+
+    conn = db.get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                if id:
+                    cur.execute(
+                        "SELECT contacto_id FROM conjuntos_residenciales WHERE id=%s FOR UPDATE",
+                        (int(id),),
+                    )
+                    actual = cur.fetchone()
+                    if not actual:
+                        raise ValueError("El conjunto no existe")
+                    contacto_id = actual[0]
+                else:
+                    contacto_id = None
+
+                cur.execute(
+                    """
+                    INSERT INTO contactos
+                        (identificacion,nombre,tipo,telefono,email,direccion,ciudad)
+                    VALUES (%s,%s,'Cliente',%s,%s,%s,%s)
+                    ON CONFLICT (identificacion)
+                    DO UPDATE SET
+                        nombre=EXCLUDED.nombre,
+                        tipo='Cliente',
+                        telefono=EXCLUDED.telefono,
+                        email=EXCLUDED.email,
+                        direccion=EXCLUDED.direccion,
+                        ciudad=EXCLUDED.ciudad
+                    RETURNING id
+                    """,
+                    (
+                        nit,
+                        nombre,
+                        telefono.strip(),
+                        email.strip(),
+                        direccion.strip(),
+                        ciudad.strip().upper() or "PEREIRA",
+                    ),
+                )
+                contacto_id = cur.fetchone()[0]
+
+                if id:
+                    cur.execute(
+                        """
+                        UPDATE conjuntos_residenciales
+                        SET nombre=%s, contacto_id=%s, activo=TRUE
+                        WHERE id=%s
+                        """,
+                        (nombre, contacto_id, int(id)),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO conjuntos_residenciales (nombre,contacto_id,activo)
+                        VALUES (%s,%s,TRUE)
+                        ON CONFLICT (nombre)
+                        DO UPDATE SET contacto_id=EXCLUDED.contacto_id,activo=TRUE
+                        """,
+                        (nombre, contacto_id),
+                    )
+
+        return _redirect("/conjuntos", mensaje="Conjunto+guardado")
+    except Exception as exc:
+        print(f"[CONJUNTOS] Error guardando conjunto: {exc!r}", flush=True)
+        return _redirect("/conjuntos", error="No+fue+posible+guardar+el+conjunto")
+    finally:
+        conn.release()
+
+
 @app.get("/procesos")
 def procesos(request: Request):
     conn = db.get_connection()
@@ -455,14 +558,14 @@ def procesos(request: Request):
 @app.post("/crear_expediente_completo")
 async def crear_expediente_completo(request: Request):
     form = await request.form()
-    tipo_cartera = str(form.get("tipo_cartera") or "JURIDICO").strip().upper()
+    tipo_proceso_codigo = str(form.get("tipo_proceso") or "").strip().upper()
+    conjunto_id_raw = str(form.get("conjunto_id") or "").strip()
+    conjunto_nombre = str(form.get("conjunto_residencial") or "").strip()
+    tipo_cartera_form = str(form.get("tipo_cartera") or "").strip().upper()
     radicado_rama = str(form.get("radicado_rama") or "").strip()
     naturaleza = str(form.get("naturaleza", "")).strip()
     juzgado = f"{form.get('juzgado_numero','')} {form.get('juzgado_tipo','')} - {form.get('juzgado_ciudad','')}".strip()
     apto = str(form.get("apto", "")).strip()
-    conjunto_residencial = str(form.get("conjunto_residencial") or "").strip()
-    if not conjunto_residencial:
-        return _redirect("/procesos", error="Debes+seleccionar+el+conjunto+residencial")
     pretensiones = str(form.get("pretensiones", "0")).strip() or "0"
     abogado_id = str(form.get("abogado_id", "")).strip() or None
     medidas = str(form.get("medidas_cautelares", "")).strip()
@@ -475,35 +578,97 @@ async def crear_expediente_completo(request: Request):
 
     demandantes, nuevos_dem = split_values("demandantes_existentes", "nuevo_dem_id", "nuevo_dem_nombre")
     demandados, nuevos_ddo = split_values("demandados_existentes", "nuevo_ddo_id", "nuevo_ddo_nombre")
-    demandantes += [x[0] for x in nuevos_dem]
-    demandados += [x[0] for x in nuevos_ddo]
-
-    if not demandantes or not demandados:
-        return _redirect("/procesos", error="Debe+seleccionar+al+menos+un+demandante+y+un+demandado")
-
-    if tipo_cartera == "JURIDICO":
-        radicado_rama = radicado_rama or "EN REPARTO"
 
     conn = db.get_connection()
     try:
         with conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Si el usuario no indica tipo, mantenemos compatibilidad con el flujo
+                # anterior: un expediente con conjunto es PH; sin conjunto queda como OTRO.
+                if not tipo_proceso_codigo:
+                    tipo_proceso_codigo = "CUOTAS_ADMINISTRACION" if (conjunto_id_raw or conjunto_nombre) else "OTRO"
+
+                tipo_proceso = _obtener_tipo_proceso(cur, tipo_proceso_codigo)
+                if not tipo_proceso:
+                    raise ValueError("Tipo de proceso no válido")
+
+                tipo_cartera = tipo_cartera_form or str(tipo_proceso["tipo_cartera_default"]).upper()
+                if tipo_cartera not in {"JURIDICO", "PREJURIDICO"}:
+                    raise ValueError("Tipo de cartera no válido")
+
+                conjunto = None
+                if tipo_proceso["requiere_conjunto"]:
+                    if conjunto_id_raw:
+                        conjunto = catalogos_service.obtener_conjunto(cur, int(conjunto_id_raw))
+                    elif conjunto_nombre:
+                        cur.execute(
+                            """
+                            SELECT id
+                            FROM conjuntos_residenciales
+                            WHERE activo=TRUE AND UPPER(BTRIM(nombre))=UPPER(BTRIM(%s))
+                            LIMIT 1
+                            """,
+                            (conjunto_nombre,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            conjunto = catalogos_service.obtener_conjunto(cur, int(row["id"]))
+                    if not conjunto:
+                        raise ValueError("Debes seleccionar un conjunto residencial válido")
+                    if not conjunto.get("contacto_id"):
+                        raise ValueError("El conjunto debe tener configurada su persona jurídica antes de radicar cuotas de administración")
+
+                    # Para cuotas de administración el demandante no se digita:
+                    # sale automáticamente de la persona jurídica del conjunto.
+                    cur.execute(
+                        "SELECT identificacion FROM contactos WHERE id=%s",
+                        (conjunto["contacto_id"],),
+                    )
+                    row = cur.fetchone()
+                    if not row or not row["identificacion"]:
+                        raise ValueError("La persona jurídica del conjunto no tiene identificación configurada")
+                    demandantes = [str(row["identificacion"])]
+
+                if tipo_proceso["requiere_inmueble"] and not apto:
+                    raise ValueError("Debes indicar la torre/apartamento del inmueble")
+
+                if tipo_proceso["requiere_juzgado"] and tipo_cartera == "JURIDICO":
+                    if not juzgado or juzgado.startswith("-"):
+                        raise ValueError("El juzgado es obligatorio para este tipo de proceso jurídico")
+
+                if tipo_proceso["requiere_documento"] and not str(form.get("documento_referencia") or "").strip():
+                    raise ValueError("Debes indicar el número o referencia del documento título")
+
                 for ident, nombre in nuevos_dem:
                     cur.execute(
-                        "INSERT INTO contactos (identificacion, nombre, tipo, ciudad) VALUES (%s,%s,'Cliente','PEREIRA') "
-                        "ON CONFLICT (identificacion) DO UPDATE SET nombre=EXCLUDED.nombre",
+                        """
+                        INSERT INTO contactos (identificacion,nombre,tipo,ciudad)
+                        VALUES (%s,%s,'Cliente','PEREIRA')
+                        ON CONFLICT (identificacion) DO UPDATE SET nombre=EXCLUDED.nombre
+                        """,
                         (ident, nombre),
                     )
                 for ident, nombre in nuevos_ddo:
                     cur.execute(
-                        "INSERT INTO contactos (identificacion, nombre, tipo, ciudad) VALUES (%s,%s,'Contraparte','PEREIRA') "
-                        "ON CONFLICT (identificacion) DO UPDATE SET nombre=EXCLUDED.nombre",
+                        """
+                        INSERT INTO contactos (identificacion,nombre,tipo,ciudad)
+                        VALUES (%s,%s,'Contraparte','PEREIRA')
+                        ON CONFLICT (identificacion) DO UPDATE SET nombre=EXCLUDED.nombre
+                        """,
                         (ident, nombre),
                     )
 
+                demandantes += [x[0] for x in nuevos_dem]
+                demandados += [x[0] for x in nuevos_ddo]
+                if not demandantes or not demandados:
+                    raise ValueError("Debe existir al menos un demandante y un demandado")
+
+                if tipo_cartera == "JURIDICO":
+                    radicado_rama = radicado_rama or "EN REPARTO"
+                elif not radicado_rama or radicado_rama.upper() == "EN REPARTO":
+                    radicado_rama = "PREJURIDICO"
+
                 radicado_interno = _generar_radicado_interno(cur)
-                if tipo_cartera == "PREJURIDICO" and (not radicado_rama or radicado_rama.upper() == "EN REPARTO"):
-                    radicado_rama = f"PREJ-{radicado_interno}"
 
                 if tipo_cartera == "JURIDICO" and radicado_rama.upper() != "EN REPARTO":
                     cur.execute(
@@ -516,34 +681,60 @@ async def crear_expediente_completo(request: Request):
                 all_ids = list(dict.fromkeys(demandantes + demandados))
                 placeholders = ",".join(["%s"] * len(all_ids))
                 cur.execute(
-                    f"SELECT identificacion, nombre FROM contactos WHERE identificacion IN ({placeholders})",
+                    f"SELECT identificacion,nombre FROM contactos WHERE identificacion IN ({placeholders})",
                     all_ids,
                 )
-                nombres = {str(r[0]): str(r[1] or "") for r in cur.fetchall()}
+                nombres = {str(r["identificacion"]): str(r["nombre"] or "") for r in cur.fetchall()}
                 faltantes = [ident for ident in all_ids if ident not in nombres]
                 if faltantes:
                     raise RuntimeError("Hay partes seleccionadas que no existen en Contactos")
 
-                conjunto = conjunto_residencial
-
-                cur.execute("SELECT id FROM contactos WHERE identificacion=%s", (demandados[0],))
-                ddo = cur.fetchone()
-                if not ddo:
-                    raise RuntimeError("Demandado no existe")
-
-                cur.execute(
-                    "INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto) VALUES (%s,%s,%s) RETURNING id",
-                    (ddo[0], conjunto, apto),
-                )
-                inmueble_id = cur.fetchone()[0]
+                inmueble_id = None
+                if tipo_proceso["requiere_inmueble"]:
+                    conjunto_id = int(conjunto["id"])
+                    cur.execute(
+                        """
+                        SELECT id, contacto_id
+                        FROM inmuebles_ph
+                        WHERE conjunto_id=%s AND torre_apto=%s
+                        LIMIT 1
+                        """,
+                        (conjunto_id, apto),
+                    )
+                    inmueble = cur.fetchone()
+                    if inmueble:
+                        inmueble_id = inmueble["id"]
+                    else:
+                        cur.execute(
+                            """
+                            SELECT id FROM contactos
+                            WHERE identificacion=%s
+                            LIMIT 1
+                            """,
+                            (demandados[0],),
+                        )
+                        ddo = cur.fetchone()
+                        if not ddo:
+                            raise RuntimeError("Demandado no existe")
+                        cur.execute(
+                            """
+                            INSERT INTO inmuebles_ph
+                                (contacto_id,conjunto_residencial,conjunto_id,torre_apto)
+                            VALUES (%s,%s,%s,%s)
+                            RETURNING id
+                            """,
+                            (ddo["id"], conjunto["nombre"], conjunto_id, apto),
+                        )
+                        inmueble_id = cur.fetchone()["id"]
 
                 cols = expedientes_service._cols(cur, "procesos")
                 data = {
                     "radicado_interno": radicado_interno,
                     "radicado_rama": radicado_rama,
                     "tipo_cartera": tipo_cartera,
-                    "naturaleza": naturaleza,
-                    "juzgado": juzgado,
+                    "tipo_proceso_id": tipo_proceso["id"],
+                    "naturaleza": naturaleza or tipo_proceso["nombre"].upper(),
+                    "juzgado": juzgado if tipo_cartera == "JURIDICO" else "",
                     "estado": "Activo",
                     "id_demandado": " | ".join(demandados),
                     "demandado": " | ".join(nombres.get(x, x) for x in demandados),
@@ -560,6 +751,24 @@ async def crear_expediente_completo(request: Request):
                     [data[c] for c in usable],
                 )
 
+                if tipo_proceso["fuente_saldo"] == "OBLIGACION":
+                    documento_referencia = str(form.get("documento_referencia") or "").strip()
+                    cur.execute(
+                        """
+                        INSERT INTO obligaciones
+                            (identificacion_deudor,tipo_titulo,capital,fecha_exigibilidad,estado,proceso_id,tipo_proceso_id)
+                        VALUES (%s,%s,%s,NULLIF(%s,''),'En Mora',%s,%s)
+                        """,
+                        (
+                            demandados[0],
+                            tipo_proceso["codigo"],
+                            pretensiones,
+                            str(form.get("fecha_exigibilidad") or "").strip(),
+                            radicado_interno,
+                            tipo_proceso["id"],
+                        ),
+                    )
+
                 if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
                     lit_cols = expedientes_service._cols(cur, "procesos_litisconsorcio")
                     for ident in demandados:
@@ -570,7 +779,7 @@ async def crear_expediente_completo(request: Request):
                             [payload[c] for c in use],
                         )
 
-                if expedientes_service._table_exists(cur, "actuaciones"):
+                if expedientes_service._table_exists(cur, "actuaciones") and tipo_cartera == "JURIDICO":
                     act_cols = expedientes_service._cols(cur, "actuaciones")
                     payload = {
                         "radicado_interno": radicado_interno,
@@ -588,13 +797,15 @@ async def crear_expediente_completo(request: Request):
 
                 print(
                     f"[RADICACION] ID interno={radicado_interno} | "
-                    f"radicado_rama={radicado_rama} | tipo={tipo_cartera}",
+                    f"tipo_proceso={tipo_proceso['codigo']} | "
+                    f"radicado_rama={radicado_rama} | tipo_cartera={tipo_cartera}",
                     flush=True,
                 )
+
         return _redirect("/expedientes", mensaje="Proceso+creado+exitosamente")
     except Exception as exc:
         print(f"[PROCESOS] Error creando expediente: {exc!r}", flush=True)
-        return _redirect("/procesos", error="No+fue+posible+crear+el+expediente")
+        return _redirect("/procesos", error=str(exc).replace(" ", "+"))
     finally:
         conn.release()
 
