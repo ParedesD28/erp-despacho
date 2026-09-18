@@ -63,7 +63,7 @@ def verify() -> None:
     try:
         with conn.cursor() as cur:
             missing_tables = []
-            missing_columns: dict[str, list[str]] = []
+            missing_columns: list[str] = []
 
             for table, expected in REQUIRED_COLUMNS.items():
                 actual = _columns(cur, table)
