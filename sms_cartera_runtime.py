@@ -1,11 +1,8 @@
-"""Capa de transición para candidatos SMS multicanal/multiproceso.
+"""Capa de transición para candidatos SMS por obligación.
 
-Mantiene la ruta SMS existente, pero cambia la fuente de candidatos para que
-no dependa exclusivamente de inmueble_propietarios/expensas_ph. Prioriza una
-deuda activa de proceso para los demandados de proceso_partes y mantiene el
-flujo PH como respaldo cuando no existe proceso con pretensión pendiente.
-
-No cambia el worker Android ni el contrato HTTP de la cola.
+El candidato financiero siempre debe identificar una obligación. Se conserva
+la consulta PH anterior como fuente de candidatos, pero el saldo se resuelve
+posteriormente mediante obligacion_saldo_service.
 """
 from __future__ import annotations
 
@@ -27,15 +24,42 @@ def _install_candidate_query() -> None:
         ids: Optional[List[int]] = None,
         conjunto: str = "",
     ):
-        """Combina cartera PH y cartera por proceso, una fila por contacto."""
         cartera = (tipo_cartera or "").upper().strip()
         if cartera and cartera not in sms_router.CARTERAS_VALIDAS:
             raise ValueError("Tipo de cartera no válido.")
 
-        # 1) Conservamos íntegramente el comportamiento probado de PH.
+        # 1. Fuente PH histórica. La enlazamos explícitamente a su obligación.
         ph_rows = original(cur, cartera, 0, None, ids, conjunto)
+        ph_inmuebles = []
+        for row in ph_rows:
+            data = dict(row) if isinstance(row, dict) else {}
+            if data.get("inmueble_id"):
+                ph_inmuebles.append(int(data["inmueble_id"]))
 
-        # 2) Añadimos demandados de procesos, aunque no tengan inmueble.
+        obligation_by_inmueble: dict[int, int] = {}
+        if ph_inmuebles:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (o.inmueble_id)
+                    o.inmueble_id,
+                    o.id AS obligacion_id
+                FROM obligaciones o
+                JOIN tipos_obligacion tob ON tob.id=o.tipo_obligacion_id
+                WHERE o.inmueble_id = ANY(%s)
+                  AND tob.codigo='CUOTAS_ADMINISTRACION'
+                  AND COALESCE(o.estado,'ACTIVA') NOT IN ('CANCELADA','ANULADA')
+                ORDER BY o.inmueble_id, o.id DESC
+                """,
+                (list(dict.fromkeys(ph_inmuebles)),),
+            )
+            rows = cur.fetchall()
+            for row in rows:
+                data = dict(row) if isinstance(row, dict) else {
+                    "inmueble_id": row[0],
+                    "obligacion_id": row[1],
+                }
+                obligation_by_inmueble[int(data["inmueble_id"])] = int(data["obligacion_id"])
+
         params: List[Any] = []
         where = [
             "pp.rol = 'DEMANDADO'",
@@ -72,7 +96,8 @@ def _install_candidate_query() -> None:
                 p.inmueble_id,
                 p.radicado_rama,
                 p.naturaleza,
-                p.pretensiones AS saldo_total,
+                ob.obligacion_id,
+                ob.tipo_obligacion,
                 COALESCE(p.tipo_cartera,'PREJURIDICO') AS tipo_cartera,
                 c.identificacion,
                 c.nombre,
@@ -86,6 +111,20 @@ def _install_candidate_query() -> None:
               ON c.id = pp.contacto_id
             LEFT JOIN inmuebles_ph i
               ON i.id = p.inmueble_id
+            JOIN LATERAL (
+                SELECT
+                    o.id AS obligacion_id,
+                    tob.codigo AS tipo_obligacion
+                FROM proceso_obligaciones po
+                JOIN obligaciones o
+                  ON o.id=po.obligacion_id
+                JOIN tipos_obligacion tob
+                  ON tob.id=o.tipo_obligacion_id
+                WHERE po.radicado_interno=p.radicado_interno
+                  AND COALESCE(o.estado,'ACTIVA') NOT IN ('CANCELADA','ANULADA')
+                ORDER BY po.es_principal DESC, po.id
+                LIMIT 1
+            ) ob ON TRUE
             WHERE {' AND '.join(where)}
             ORDER BY pp.contacto_id, p.radicado_interno DESC;
             """,
@@ -96,10 +135,25 @@ def _install_candidate_query() -> None:
         candidatos = {}
 
         for row in ph_rows:
-            key = row["contacto_id"] if isinstance(row, dict) else row[1]
-            candidatos[key] = dict(row)
-            candidatos[key]["fuente_cobro"] = "PH"
-            candidatos[key]["radicado_interno"] = None
+            data = dict(row) if isinstance(row, dict) else {
+                "inmueble_id": row[0],
+                "contacto_id": row[1],
+                "conjunto_residencial": row[2],
+                "torre_apto": row[3],
+                "identificacion": row[4],
+                "nombre": row[5],
+                "telefono": row[6],
+                "saldo_total": None,
+                "tipo_cartera": row[7] if len(row) > 7 else "PREJURIDICO",
+            }
+            data["obligacion_id"] = obligation_by_inmueble.get(
+                int(data["inmueble_id"])
+            ) if data.get("inmueble_id") else None
+            data["saldo_total"] = None
+            key = data["contacto_id"]
+            data["fuente_cobro"] = "PH"
+            data["radicado_interno"] = None
+            candidatos[key] = data
 
         for row in proceso_rows:
             data = dict(row) if isinstance(row, dict) else {
@@ -108,39 +162,39 @@ def _install_candidate_query() -> None:
                 "inmueble_id": row[2],
                 "radicado_rama": row[3],
                 "naturaleza": row[4],
-                "saldo_total": row[5],
-                "tipo_cartera": row[6],
-                "identificacion": row[7],
-                "nombre": row[8],
-                "telefono": row[9],
-                "conjunto_residencial": row[10],
-                "torre_apto": row[11],
+                "obligacion_id": row[5],
+                "tipo_obligacion": row[6],
+                "tipo_cartera": row[7],
+                "identificacion": row[8],
+                "nombre": row[9],
+                "telefono": row[10],
+                "conjunto_residencial": row[11],
+                "torre_apto": row[12],
             }
-            key = data["contacto_id"]
             candidato = {
                 "inmueble_id": data["inmueble_id"],
+                "obligacion_id": data["obligacion_id"],
                 "contacto_id": data["contacto_id"],
                 "conjunto_residencial": data["conjunto_residencial"] or f"PROCESO {data['radicado_interno']}",
                 "torre_apto": data["torre_apto"] or (data["naturaleza"] or "Cobranza"),
                 "identificacion": data["identificacion"],
                 "nombre": data["nombre"],
                 "telefono": data["telefono"],
-                "saldo_total": float(data["saldo_total"] or 0),
+                "saldo_total": None,
                 "tipo_cartera": data["tipo_cartera"],
                 "fuente_cobro": "PROCESO",
                 "radicado_interno": data["radicado_interno"],
                 "radicado_rama": data["radicado_rama"],
                 "naturaleza": data["naturaleza"],
+                "tipo_obligacion": data["tipo_obligacion"],
             }
+            key = data["contacto_id"]
             actual = candidatos.get(key)
-            # Una deuda procesal activa tiene prioridad sobre la vista PH si
-            # ambas fuentes apuntan al mismo contacto.
             if actual is None or candidato["fuente_cobro"] == "PROCESO":
                 candidatos[key] = candidato
 
         resultado = enriquecer_candidatos(list(candidatos.values()))
 
-        # Los límites se aplican al saldo liquidado, no a pretensiones/capital.
         salida = []
         for item in resultado:
             if not item.get("saldo_verificado"):
@@ -150,6 +204,8 @@ def _install_candidate_query() -> None:
 
             saldo = float(item.get("saldo_total") or 0)
             if saldo < float(saldo_minimo or 0):
+                continue
+            if saldo_maximo is not None and saldo > maximo if False else False:
                 continue
             if saldo_maximo is not None and saldo > float(saldo_maximo):
                 continue
