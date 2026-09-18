@@ -829,6 +829,7 @@ async def crear_proceso_cascada(
     conjunto_residencial: str = Form(...),
     nomenclatura_apto: str = Form(...),
 ):
+    """Ruta heredada: conserva la firma, pero alimenta las relaciones canónicas."""
     radicado_interno = radicado_interno.strip()
     cedulas_list = [c.strip() for c in demandado_cedulas.split("|") if c.strip()]
     nombres_list = [n.strip() for n in demandado_nombres.split("|") if n.strip()]
@@ -841,50 +842,145 @@ async def crear_proceso_cascada(
     conn = db.get_connection()
     try:
         with conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT 1 FROM procesos WHERE radicado_interno=%s LIMIT 1", (radicado_interno,))
                 if cur.fetchone():
                     return RedirectResponse(url="/expedientes?error=El+radicado+ya+existe", status_code=303)
 
-                deudor_principal_cedula = cedulas_list[0]
-                deudor_principal_nombre = nombres_list[0]
-                cur.execute("""
-                    INSERT INTO contactos (identificacion, nombre, tipo, ciudad)
-                    VALUES (%s, %s, 'Cliente', 'PEREIRA')
-                    ON CONFLICT (identificacion) DO NOTHING;
-                """, (demandante_cedula.strip(), demandante_nombre.strip()))
-                cur.execute("""
-                    INSERT INTO contactos (identificacion, nombre, tipo, ciudad)
-                    VALUES (%s, %s, 'Contraparte', 'PEREIRA')
-                    ON CONFLICT (identificacion) DO UPDATE SET nombre = EXCLUDED.nombre
-                    RETURNING id;
-                """, (deudor_principal_cedula, deudor_principal_nombre))
-                res_contacto = cur.fetchone()
-                if res_contacto:
-                    contacto_id = res_contacto[0]
+                cur.execute(
+                    """
+                    SELECT id, contacto_id, nombre
+                    FROM conjuntos_residenciales
+                    WHERE lower(trim(nombre))=lower(trim(%s))
+                    LIMIT 1
+                    """,
+                    (conjunto_residencial,),
+                )
+                conjunto = cur.fetchone()
+                if not conjunto:
+                    raise ValueError("El conjunto residencial no existe en el catálogo")
+
+                conjunto_id = conjunto["id"]
+
+                # Demandante.
+                cur.execute(
+                    """
+                    INSERT INTO contactos (identificacion,nombre,tipo,ciudad)
+                    VALUES (%s,%s,'Cliente','PEREIRA')
+                    ON CONFLICT (identificacion)
+                    DO UPDATE SET nombre=EXCLUDED.nombre
+                    RETURNING id
+                    """,
+                    (demandante_cedula.strip(), demandante_nombre.strip()),
+                )
+                demandante_contacto_id = cur.fetchone()["id"]
+
+                # Demandados.
+                demandado_contactos = []
+                for cedula, nombre in zip(cedulas_list, nombres_list):
+                    cur.execute(
+                        """
+                        INSERT INTO contactos (identificacion,nombre,tipo,ciudad)
+                        VALUES (%s,%s,'Contraparte','PEREIRA')
+                        ON CONFLICT (identificacion)
+                        DO UPDATE SET nombre=EXCLUDED.nombre
+                        RETURNING id
+                        """,
+                        (cedula, nombre),
+                    )
+                    demandado_contactos.append(cur.fetchone()["id"])
+
+                # Inmueble con conjunto_id obligatorio.
+                cur.execute(
+                    """
+                    SELECT id, contacto_id
+                    FROM inmuebles_ph
+                    WHERE conjunto_id=%s AND torre_apto=%s
+                    LIMIT 1
+                    """,
+                    (conjunto_id, nomenclatura_apto.strip()),
+                )
+                inmueble = cur.fetchone()
+                if inmueble:
+                    inmueble_id = inmueble["id"]
                 else:
-                    cur.execute("SELECT id FROM contactos WHERE identificacion = %s", (deudor_principal_cedula,))
-                    contacto_id = cur.fetchone()[0]
+                    cur.execute(
+                        """
+                        INSERT INTO inmuebles_ph
+                            (contacto_id,conjunto_residencial,conjunto_id,torre_apto)
+                        VALUES (%s,%s,%s,%s)
+                        RETURNING id
+                        """,
+                        (demandado_contactos[0], conjunto["nombre"], conjunto_id, nomenclatura_apto.strip()),
+                    )
+                    inmueble_id = cur.fetchone()["id"]
 
-                cur.execute("""
-                    INSERT INTO inmuebles_ph (contacto_id, conjunto_residencial, torre_apto)
-                    VALUES (%s, %s, %s)
-                    RETURNING id;
-                """, (contacto_id, conjunto_residencial.strip(), nomenclatura_apto.strip()))
-                inmueble_id = cur.fetchone()[0]
+                naturaleza_norm = "VERBAL" if "VERBAL" in naturaleza.upper() else "EJECUTIVO"
+                tipo_cartera = "PREJURIDICO" if "PREJURIDICO" in naturaleza.upper() else "JURIDICO"
 
-                cur.execute("""
-                    INSERT INTO procesos (radicado_interno, radicado_rama, naturaleza, juzgado,
-                                          estado, id_demandado, demandado, inmueble_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (radicado_interno, radicado_rama.strip(), naturaleza.strip(), juzgado.strip(),
-                      'Activo', demandado_cedulas.strip(), demandado_nombres.strip(), inmueble_id))
+                cur.execute(
+                    """
+                    INSERT INTO procesos
+                        (radicado_interno,radicado_rama,naturaleza,juzgado,estado,
+                         id_demandado,demandado,inmueble_id,id_cliente,tipo_cartera)
+                    VALUES (%s,%s,%s,%s,'Activo',%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        radicado_interno,
+                        radicado_rama.strip() or ("EN REPARTO" if tipo_cartera=="JURIDICO" else "PREJURIDICO"),
+                        naturaleza_norm,
+                        juzgado.strip(),
+                        " | ".join(cedulas_list),
+                        " | ".join(nombres_list),
+                        inmueble_id,
+                        demandante_cedula.strip(),
+                        tipo_cartera,
+                    ),
+                )
 
-                if expedientes_service._table_exists(cur, "actuaciones"):
-                    cur.execute("""
-                        INSERT INTO actuaciones (radicado_interno, fecha, etapa, descripcion, usuario, tipificacion_sugerida)
-                        VALUES (%s, CURRENT_DATE, 'Inicio', 'Presentación inicial de la demanda', 'Sistema', 'Radicación')
-                    """, (radicado_interno,))
+                # Fuente canónica de partes.
+                cur.execute(
+                    """
+                    INSERT INTO proceso_partes
+                        (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
+                    VALUES (%s,%s,'DEMANDANTE',TRUE,CURRENT_TIMESTAMP)
+                    ON CONFLICT (radicado_interno,contacto_id,rol) DO NOTHING
+                    """,
+                    (radicado_interno, demandante_contacto_id),
+                )
+                for idx, contacto_id in enumerate(demandado_contactos):
+                    cur.execute(
+                        """
+                        INSERT INTO proceso_partes
+                            (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
+                        VALUES (%s,%s,'DEMANDADO',%s,CURRENT_TIMESTAMP)
+                        ON CONFLICT (radicado_interno,contacto_id,rol) DO NOTHING
+                        """,
+                        (radicado_interno, contacto_id, idx == 0),
+                    )
+
+                if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
+                    for idx, ident in enumerate(cedulas_list):
+                        cur.execute(
+                            """
+                            INSERT INTO procesos_litisconsorcio
+                                (radicado_interno,identificacion_demandado,es_principal,fecha_vinculacion)
+                            VALUES (%s,%s,%s,CURRENT_TIMESTAMP)
+                            ON CONFLICT (radicado_interno,identificacion_demandado) DO NOTHING
+                            """,
+                            (radicado_interno, ident, idx == 0),
+                        )
+
+                if expedientes_service._table_exists(cur, "actuaciones") and tipo_cartera == "JURIDICO":
+                    cur.execute(
+                        """
+                        INSERT INTO actuaciones
+                            (radicado_interno,fecha,etapa,descripcion,usuario,tipificacion_sugerida)
+                        VALUES (%s,CURRENT_DATE,'Inicio','Presentación inicial de la demanda','Sistema','Radicación')
+                        """,
+                        (radicado_interno,),
+                    )
+
         return RedirectResponse(url="/expedientes?mensaje=Proceso+creado+exitosamente", status_code=303)
     except Exception as e:
         print(f"[CASCADA] Error en la creación: {e}", flush=True)
@@ -1191,13 +1287,20 @@ def startup_schema_init():
 @app.get("/crm")
 def crm(
     request: Request,
+    conjunto_id: int | None = None,
     buscar_acreedor: str | None = None,
     acreedor_id: str | None = None,
     radicado_interno: str | None = None,
 ):
+    """CRM PH: el punto de entrada visible es el conjunto residencial.
+
+    El conjunto se resuelve a su persona jurídica (contacto Cliente) y desde
+    esa relación se cargan las cuentas/procesos. No se pide al usuario buscar
+    manualmente el acreedor.
+    """
     conn = db.get_connection()
     try:
-        acreedores = []
+        conjuntos = []
         cuentas = []
         acreedor_seleccionado = None
         cuenta_actual = None
@@ -1205,22 +1308,27 @@ def crm(
         historial = []
 
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            termino = str(buscar_acreedor or "").strip()
-            if termino:
-                cur.execute(
-                    """
-                    SELECT identificacion, nombre, telefono, email
-                    FROM contactos
-                    WHERE tipo='Cliente'
-                      AND (identificacion ILIKE %s OR nombre ILIKE %s)
-                    ORDER BY nombre ASC
-                    LIMIT 100
-                    """,
-                    (f"%{termino}%", f"%{termino}%"),
-                )
-                acreedores = [dict(r) for r in cur.fetchall()]
+            conjuntos = catalogos_service.listar_conjuntos(cur, activos=True)
 
-            if acreedor_id:
+            # Resolver conjunto -> persona jurídica acreedora.
+            if conjunto_id:
+                conjunto = catalogos_service.obtener_conjunto(cur, int(conjunto_id))
+                if conjunto and conjunto.get("contacto_id"):
+                    cur.execute(
+                        """
+                        SELECT identificacion, nombre, telefono, email
+                        FROM contactos
+                        WHERE id=%s AND tipo='Cliente'
+                        LIMIT 1
+                        """,
+                        (conjunto["contacto_id"],),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        acreedor_seleccionado = dict(row)
+
+            # Compatibilidad con enlaces existentes que todavía envían acreedor_id.
+            if not acreedor_seleccionado and acreedor_id:
                 cur.execute(
                     """
                     SELECT identificacion, nombre, telefono, email
@@ -1252,10 +1360,7 @@ def crm(
                     FROM procesos p
                     LEFT JOIN inmuebles_ph i ON i.id=p.inmueble_id
                     WHERE %s = ANY(
-                        string_to_array(
-                            replace(COALESCE(p.id_cliente,''), ' ', ''),
-                            '|'
-                        )
+                        string_to_array(replace(COALESCE(p.id_cliente,''), ' ', ''), '|')
                     )
                     ORDER BY p.radicado_interno DESC
                     """,
@@ -1306,11 +1411,7 @@ def crm(
                         """,
                         params,
                     )
-                    historial = []
-                    for r in cur.fetchall():
-                        d = dict(r)
-                        d["tabla_origen"] = "gestiones_crm"
-                        historial.append(d)
+                    historial = [dict(r) | {"tabla_origen": "gestiones_crm"} for r in cur.fetchall()]
 
                 if expedientes_service._table_exists(cur, "gestiones_cartera"):
                     ids_deudores = [
@@ -1362,8 +1463,8 @@ def crm(
             "crm.html",
             {
                 "request": request,
-                "buscar_acreedor": buscar_acreedor or "",
-                "acreedores": acreedores,
+                "conjuntos": conjuntos,
+                "conjunto_id": conjunto_id,
                 "acreedor_seleccionado": acreedor_seleccionado,
                 "cuentas": cuentas,
                 "cuenta_actual": cuenta_actual,
