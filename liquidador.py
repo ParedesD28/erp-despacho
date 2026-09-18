@@ -45,6 +45,8 @@ def motor_calculo_judicial(
     honorarios_pct,
     gastos_globales,
     fecha_corte,
+    *,
+    autocausar: bool = False,
 ):
     """Calcula la liquidación de crédito de expensas comunes conforme al régimen legal colombiano."""
     inmueble_id = int(inmueble_id)
@@ -54,61 +56,61 @@ def motor_calculo_judicial(
         else fecha_corte
     )
 
-    # Auto-causación: si existe última cuota ordinaria, genera las cuotas faltantes hasta fecha_corte
-    conn = db.get_connection()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT periodo_anio, periodo_mes, valor_capital
-                    FROM expensas_ph
-                    WHERE inmueble_id = %s AND concepto = 'Expensa Ordinaria'
-                    ORDER BY periodo_anio DESC, periodo_mes DESC
-                    LIMIT 1
-                """, (inmueble_id,))
-                ultima = cur.fetchone()
-                if ultima:
-                    u_anio = ultima["periodo_anio"] if isinstance(ultima, dict) else ultima[0]
-                    u_mes = ultima["periodo_mes"] if isinstance(ultima, dict) else ultima[1]
-                    u_valor = ultima["valor_capital"] if isinstance(ultima, dict) else ultima[2]
+    # La liquidación es de solo lectura por defecto. La auto-causación
+    # debe solicitarse explícitamente por una operación de liquidación.
+    if autocausar:
+        conn = db.get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT periodo_anio, periodo_mes, valor_capital
+                        FROM expensas_ph
+                        WHERE inmueble_id = %s AND concepto = 'Expensa Ordinaria'
+                        ORDER BY periodo_anio DESC, periodo_mes DESC
+                        LIMIT 1
+                    """, (inmueble_id,))
+                    ultima = cur.fetchone()
+                    if ultima:
+                        u_anio = ultima["periodo_anio"] if isinstance(ultima, dict) else ultima[0]
+                        u_mes = ultima["periodo_mes"] if isinstance(ultima, dict) else ultima[1]
+                        u_valor = ultima["valor_capital"] if isinstance(ultima, dict) else ultima[2]
 
-                    if u_mes == 12:
-                        sig_anio, sig_mes = u_anio + 1, 1
-                    else:
-                        sig_anio, sig_mes = u_anio, u_mes + 1
-                    fecha_siguiente = date(sig_anio, sig_mes, 1)
-                    corte_mes = date(fecha_corte.year, fecha_corte.month, 1)
-
-                    while fecha_siguiente <= corte_mes:
-                        cur.execute("""
-                            SELECT 1
-                            FROM expensas_ph
-                            WHERE inmueble_id=%s AND concepto='Expensa Ordinaria'
-                              AND periodo_anio=%s AND periodo_mes=%s
-                            LIMIT 1
-                        """, (inmueble_id, sig_anio, sig_mes))
-                        if not cur.fetchone():
-                            cur.execute("""
-                                INSERT INTO expensas_ph
-                                    (inmueble_id, concepto, periodo_mes, periodo_anio,
-                                     valor_capital, fecha_vencimiento, estado)
-                                VALUES (%s, 'Expensa Ordinaria', %s, %s, %s, %s, 'En Mora')
-                            """, (
-                                inmueble_id,
-                                sig_mes,
-                                sig_anio,
-                                u_valor,
-                                fecha_siguiente.strftime("%Y-%m-%d"),
-                            ))
-                        if sig_mes == 12:
-                            sig_anio, sig_mes = sig_anio + 1, 1
+                        if u_mes == 12:
+                            sig_anio, sig_mes = u_anio + 1, 1
                         else:
-                            sig_mes += 1
+                            sig_anio, sig_mes = u_anio, u_mes + 1
                         fecha_siguiente = date(sig_anio, sig_mes, 1)
-    except Exception as exc:
-        print(f"[LIQUIDADOR][ALERTA] Error en auto-causacion: {exc!r}", flush=True)
-    finally:
-        conn.release()
+                        corte_mes = date(fecha_corte.year, fecha_corte.month, 1)
+
+                        while fecha_siguiente <= corte_mes:
+                            cur.execute("""
+                                SELECT 1
+                                FROM expensas_ph
+                                WHERE inmueble_id=%s AND concepto='Expensa Ordinaria'
+                                  AND periodo_anio=%s AND periodo_mes=%s
+                                LIMIT 1
+                            """, (inmueble_id, sig_anio, sig_mes))
+                            if not cur.fetchone():
+                                cur.execute("""
+                                    INSERT INTO expensas_ph
+                                        (inmueble_id, concepto, periodo_mes, periodo_anio,
+                                         valor_capital, fecha_vencimiento, estado)
+                                    VALUES (%s, 'Expensa Ordinaria', %s, %s, %s, %s, 'En Mora')
+                                """, (
+                                    inmueble_id,
+                                    sig_mes,
+                                    sig_anio,
+                                    u_valor,
+                                    fecha_siguiente,
+                                ))
+                            if sig_mes == 12:
+                                sig_anio, sig_mes = sig_anio + 1, 1
+                            else:
+                                sig_mes += 1
+                            fecha_siguiente = date(sig_anio, sig_mes, 1)
+        finally:
+            conn.release()
 
     conn = db.get_connection()
     try:
@@ -201,8 +203,15 @@ def motor_calculo_judicial(
             try:
                 tasa_ea_periodo = float(tasas.obtener_tasa_bd_o_api(y, m))
             except Exception as exc:
-                print(f"[LIQUIDADOR][ALERTA] Fallback tasa {y}-{m:02d}: {exc!r}", flush=True)
-                tasa_ea_periodo = 0.25
+                print(
+                    f"[LIQUIDADOR][ERROR] No fue posible validar la tasa oficial "
+                    f"{y}-{m:02d}: {exc!r}",
+                    flush=True,
+                )
+                raise RuntimeError(
+                    f"No existe una tasa SFC validada para {y}-{m:02d}; "
+                    "se bloquea la liquidación para evitar un cálculo inventado."
+                ) from exc
             tasa_mensual = ((1.0 + tasa_ea_periodo) ** (1.0 / 12.0)) - 1.0
 
         str_tasa_ea = f"{tasa_ea_periodo * 100:.2f}%"
