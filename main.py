@@ -440,7 +440,21 @@ def procesos(request: Request):
             contrapartes = [dict(r) for r in cur.fetchall()]
             cur.execute("SELECT id, nombre FROM abogados ORDER BY nombre")
             abogados = [dict(r) for r in cur.fetchall()]
-        return render_template("procesos.html", {"request": request, "contactos_clientes": clientes, "contactos_contrapartes": contrapartes, "abogados": abogados})
+            cur.execute("""
+                SELECT DISTINCT conjunto_residencial
+                FROM inmuebles_ph
+                WHERE NULLIF(TRIM(conjunto_residencial), '') IS NOT NULL
+                  AND UPPER(TRIM(conjunto_residencial)) <> 'SIN CONJUNTO'
+                ORDER BY conjunto_residencial
+            """)
+            conjuntos = [str(r["conjunto_residencial"]) for r in cur.fetchall()]
+        return render_template("procesos.html", {
+            "request": request,
+            "contactos_clientes": clientes,
+            "contactos_contrapartes": contrapartes,
+            "abogados": abogados,
+            "conjuntos": conjuntos,
+        })
     finally:
         conn.release()
 
@@ -453,6 +467,9 @@ async def crear_expediente_completo(request: Request):
     naturaleza = str(form.get("naturaleza", "")).strip()
     juzgado = f"{form.get('juzgado_numero','')} {form.get('juzgado_tipo','')} - {form.get('juzgado_ciudad','')}".strip()
     apto = str(form.get("apto", "")).strip()
+    conjunto_residencial = str(form.get("conjunto_residencial") or "").strip()
+    if not conjunto_residencial:
+        return _redirect("/procesos", error="Debes+seleccionar+el+conjunto+residencial")
     pretensiones = str(form.get("pretensiones", "0")).strip() or "0"
     abogado_id = str(form.get("abogado_id", "")).strip() or None
     medidas = str(form.get("medidas_cautelares", "")).strip()
@@ -973,7 +990,13 @@ def crm(request: Request, buscar_inmueble: str | None = None):
     conn = db.get_connection()
     try:
         inmuebles = cargar_inmuebles_ph(conn)
-        conjuntos = sorted({x.get("conjunto_residencial") for x in inmuebles if x.get("conjunto_residencial")})
+        conjuntos = sorted({
+        str(x.get("conjunto_residencial")).strip()
+        for x in inmuebles
+        if x.get("conjunto_residencial")
+        and str(x.get("conjunto_residencial")).strip()
+        and str(x.get("conjunto_residencial")).strip().upper() != "SIN CONJUNTO"
+    })
         filtro = {}
         for item in inmuebles:
             filtro.setdefault(item.get("conjunto_residencial") or "SIN CONJUNTO", []).append({
