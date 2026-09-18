@@ -44,6 +44,8 @@ REQUIRED_COLUMNS = {
     },
     "schema_migrations": {"version", "applied_at"},
     "expediente_ediciones": {"id", "radicado_interno", "usuario", "accion", "antes", "despues"},
+    "obligacion_partes": {"id", "obligacion_id", "contacto_id", "rol", "es_principal"},
+    "data_migration_exceptions": {"id", "migration_version", "entity_type", "entity_key", "reason", "status"},
 }
 
 
@@ -122,6 +124,20 @@ def verify() -> None:
                 LIMIT 1
                 """
             )
+            cur.execute(
+                """
+                SELECT 1
+                FROM schema_migrations
+                WHERE version='20260918_fase5_migracion_controlada'
+                LIMIT 1
+                """
+            )
+            if not cur.fetchone():
+                raise RuntimeError(
+                    "[SCHEMA PREFLIGHT] No está registrada la migración "
+                    "20260918_fase5_migracion_controlada"
+                )
+
             if not cur.fetchone():
                 raise RuntimeError(
                     "[SCHEMA PREFLIGHT] No está registrada la migración "
