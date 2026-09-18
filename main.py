@@ -628,7 +628,7 @@ async def crear_expediente_completo(request: Request):
     )
 
     try:
-        resultado = radicacion_service.radicacion_proceso(
+        resultado = radicacion_service.radicar_proceso(
             naturaleza=naturaleza,
             tipo_obligacion_codigo=tipo_obligacion_codigo,
             tipo_cartera=tipo_cartera,
