@@ -285,6 +285,7 @@ def _crear_router_agenda() -> APIRouter:
         numero_cuotas: int = Form(1),
         frecuencia: str = Form("MENSUAL"),
         radicado_interno: str | None = Form(None),
+        obligacion_id: int | None = Form(None),
     ):
         ensure_schema()
         conn = db.get_connection()
@@ -320,15 +321,43 @@ def _crear_router_agenda() -> APIRouter:
                     total = round(float(valor_acordado or 0), 2)
                     primera = date.fromisoformat(str(fecha_compromiso))
                     abogado_id = str(getattr(request.state, "user_id", "") or "") or None
+                    if radicado_interno and not obligacion_id and _table_exists(cur, "proceso_obligaciones"):
+                        cur.execute(
+                            """
+                            SELECT po.obligacion_id
+                            FROM proceso_obligaciones po
+                            WHERE po.radicado_interno=%s
+                            ORDER BY po.es_principal DESC, po.id
+                            LIMIT 1
+                            """,
+                            (str(radicado_interno).strip(),),
+                        )
+                        principal = cur.fetchone()
+                        obligacion_id = int(principal["obligacion_id"]) if principal else None
+                    if obligacion_id:
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM proceso_obligaciones
+                            WHERE obligacion_id=%s
+                              AND (%s IS NULL OR radicado_interno=%s)
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id), str(radicado_interno).strip() if radicado_interno else None,
+                             str(radicado_interno).strip() if radicado_interno else None),
+                        )
+                        if not cur.fetchone():
+                            raise ValueError("La obligación no pertenece al expediente indicado.")
+
 
                     cur.execute("""
                         INSERT INTO acuerdos_pago
-                            (inmueble_id,identificacion_deudor,nombre_deudor,telefono,
+                            (inmueble_id,obligacion_id,identificacion_deudor,nombre_deudor,telefono,
                              valor_acordado,numero_cuotas,cuota_actual,fecha_compromiso,
                              estado,origen,observaciones,abogado_id,frecuencia)
-                        VALUES (%s,%s,%s,%s,%s,%s,1,%s,'PENDIENTE','ABOGADO_HUMANO',%s,%s,%s)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s,'PENDIENTE','ABOGADO_HUMANO',%s,%s,%s)
                         RETURNING id
-                    """, (inmueble_id,ident,nombre_real,telefono_real,total,n,primera,
+                    """, (inmueble_id,obligacion_id,ident,nombre_real,telefono_real,total,n,primera,
                           observaciones.strip(),abogado_id,frecuencia))
                     acuerdo_id = int(cur.fetchone()["id"])
 
@@ -353,9 +382,9 @@ def _crear_router_agenda() -> APIRouter:
                     if main.expedientes_service._table_exists(cur, "gestiones_crm"):
                         cur.execute("""
                             INSERT INTO gestiones_crm
-                                (inmueble_id,identificacion_deudor,tipo_contacto,resumen,promesa_pago_fecha,usuario,estado)
-                            VALUES (%s,%s,'Acuerdo Manual',%s,%s,'Abogado ERP','ACTIVO')
-                        """, (inmueble_id,ident,
+                                (radicado_interno,inmueble_id,obligacion_id,identificacion_deudor,tipo_contacto,resumen,promesa_pago_fecha,usuario,estado)
+                            VALUES (%s,%s,%s,%s,'Acuerdo Manual',%s,%s,'Abogado ERP','ACTIVO')
+                        """, (radicado_interno,inmueble_id,obligacion_id,ident,
                               f"[ACUERDO DE PAGO #{acuerdo_id}] {n} cuota(s) {frecuencia} por ${total:,.0f}.",
                               primera))
                     _audit(cur, request, "CREAR_ACUERDO", "ACUERDO_PAGO", acuerdo_id,
@@ -425,7 +454,7 @@ def _crear_router_agenda() -> APIRouter:
             conn.release()
 
     @router.post("/vencimientos/guardar", name="agenda_guardar_vencimiento")
-    def agenda_guardar_vencimiento(request: Request, radicado_interno: str = Form(...), titulo: str = Form(...), fecha_vencimiento: date = Form(...), observaciones: str = Form(""), categoria: str = Form("TERMINO"), inmueble_id: int | None = Form(None)):
+    def agenda_guardar_vencimiento(request: Request, radicado_interno: str = Form(...), titulo: str = Form(...), fecha_vencimiento: date = Form(...), observaciones: str = Form(""), categoria: str = Form("TERMINO"), inmueble_id: int | None = Form(None), obligacion_id: int | None = Form(None)):
         ensure_schema()
         categoria = str(categoria or "TERMINO").upper()
         if categoria not in {"TERMINO","OTROS"}:
@@ -435,12 +464,25 @@ def _crear_router_agenda() -> APIRouter:
             with conn:
                 with conn.cursor() as cur:
                     abogado_id = str(getattr(request.state,"user_id","") or "") or None
+                    if not obligacion_id and _table_exists(cur, "proceso_obligaciones"):
+                        cur.execute(
+                            """
+                            SELECT po.obligacion_id
+                            FROM proceso_obligaciones po
+                            WHERE po.radicado_interno=%s
+                            ORDER BY po.es_principal DESC, po.id
+                            LIMIT 1
+                            """,
+                            (radicado_interno.strip(),),
+                        )
+                        principal = cur.fetchone()
+                        obligacion_id = int(principal["obligacion_id"]) if principal else None
                     cur.execute("""
                         INSERT INTO vencimientos
-                            (radicado_interno,titulo,fecha_vencimiento,observaciones,completado,
+                            (radicado_interno,obligacion_id,titulo,fecha_vencimiento,observaciones,completado,
                              tipo,valor,inmueble_id,anulado,categoria,abogado_id)
-                        VALUES (%s,%s,%s,%s,FALSE,%s,0,%s,FALSE,%s,%s) RETURNING id
-                    """, (radicado_interno.strip(),titulo.strip(),fecha_vencimiento,observaciones.strip(),categoria,inmueble_id,categoria,abogado_id))
+                        VALUES (%s,%s,%s,%s,%s,FALSE,%s,0,%s,FALSE,%s,%s) RETURNING id
+                    """, (radicado_interno.strip(),obligacion_id,titulo.strip(),fecha_vencimiento,observaciones.strip(),categoria,inmueble_id,categoria,abogado_id))
                     registro_id = cur.fetchone()[0]
                     _audit(cur,request,"CREAR_VENCIMIENTO",categoria,registro_id,radicado_interno,None,None,inmueble_id,titulo.strip())
             return main._redirect("/vencimientos", mensaje="Vencimiento+registrado")
