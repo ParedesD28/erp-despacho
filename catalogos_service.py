@@ -1,4 +1,4 @@
-"""Catálogos maestros del ERP: tipos de proceso y conjuntos residenciales."""
+"""Catálogos maestros del ERP: procedimientos, obligaciones y conjuntos residenciales."""
 
 from __future__ import annotations
 
@@ -6,9 +6,43 @@ from __future__ import annotations
 def listar_tipos_proceso(cur, activos: bool = True) -> list[dict]:
     sql = """
         SELECT id, codigo, nombre, tipo_cartera_default,
-               requiere_conjunto, requiere_inmueble, requiere_juzgado,
-               requiere_documento, fuente_saldo
+               requiere_conjunto, requiere_inmueble,
+               requiere_juzgado, requiere_documento, fuente_saldo
         FROM tipos_proceso
+        WHERE codigo IN ('EJECUTIVO','VERBAL')
+    """
+    if activos:
+        sql += " AND activo=TRUE"
+    sql += " ORDER BY CASE codigo WHEN 'EJECUTIVO' THEN 1 WHEN 'VERBAL' THEN 2 ELSE 99 END"
+    cur.execute(sql)
+    return [dict(r) for r in cur.fetchall()]
+
+
+def obtener_tipo_proceso(cur, codigo: str) -> dict | None:
+    codigo = str(codigo or "").strip().upper()
+    if codigo not in {"EJECUTIVO", "VERBAL"}:
+        return None
+    cur.execute(
+        """
+        SELECT id, codigo, nombre, tipo_cartera_default,
+               requiere_conjunto, requiere_inmueble,
+               requiere_juzgado, requiere_documento, fuente_saldo
+        FROM tipos_proceso
+        WHERE codigo=%s AND activo=TRUE
+        LIMIT 1
+        """,
+        (codigo,),
+    )
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def listar_tipos_obligacion(cur, activos: bool = True) -> list[dict]:
+    sql = """
+        SELECT id, codigo, nombre, activo,
+               requiere_documento, requiere_conjunto,
+               requiere_inmueble, fuente_saldo
+        FROM tipos_obligacion
     """
     if activos:
         sql += " WHERE activo=TRUE"
@@ -17,13 +51,16 @@ def listar_tipos_proceso(cur, activos: bool = True) -> list[dict]:
     return [dict(r) for r in cur.fetchall()]
 
 
-def obtener_tipo_proceso(cur, codigo: str) -> dict | None:
+def obtener_tipo_obligacion(cur, codigo: str) -> dict | None:
+    codigo = str(codigo or "").strip().upper()
+    if not codigo:
+        return None
     cur.execute(
         """
-        SELECT id, codigo, nombre, tipo_cartera_default,
-               requiere_conjunto, requiere_inmueble, requiere_juzgado,
-               requiere_documento, fuente_saldo
-        FROM tipos_proceso
+        SELECT id, codigo, nombre, activo,
+               requiere_documento, requiere_conjunto,
+               requiere_inmueble, fuente_saldo
+        FROM tipos_obligacion
         WHERE codigo=%s AND activo=TRUE
         LIMIT 1
         """,
