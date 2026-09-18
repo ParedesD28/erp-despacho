@@ -143,7 +143,31 @@ CREATE INDEX IF NOT EXISTS idx_obligaciones_inmueble
     ON obligaciones(inmueble_id);
 
 -- ---------------------------------------------------------------------------
--- 5. Estado del radicado Rama: evita usar "PREJURIDICO" o "EN REPARTO"
+-- 5. Movimientos financieros genéricos para obligaciones no-PH.
+-- La apertura vive en obligaciones.capital_inicial; los ajustes y abonos
+-- quedan auditados aquí. PH continúa utilizando expensas_ph como detalle.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS obligacion_movimientos (
+    id BIGSERIAL PRIMARY KEY,
+    obligacion_id INTEGER NOT NULL,
+    tipo TEXT NOT NULL,
+    concepto TEXT NOT NULL,
+    valor NUMERIC(14,2) NOT NULL CHECK (valor > 0),
+    fecha DATE NOT NULL DEFAULT CURRENT_DATE,
+    observaciones TEXT NULL,
+    recaudo_id INTEGER NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_movimiento_obligacion
+        FOREIGN KEY (obligacion_id) REFERENCES obligaciones(id) ON DELETE CASCADE,
+    CONSTRAINT ck_movimiento_tipo
+        CHECK (tipo IN ('CARGO','ABONO','AJUSTE_CARGO','AJUSTE_ABONO'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_obligacion_movimientos_obligacion_fecha
+    ON obligacion_movimientos(obligacion_id,fecha,id);
+
+-- ---------------------------------------------------------------------------
+-- 6. Estado del radicado Rama: evita usar "PREJURIDICO" o "EN REPARTO"
 -- como si fueran radicados judiciales.
 -- ---------------------------------------------------------------------------
 ALTER TABLE procesos
