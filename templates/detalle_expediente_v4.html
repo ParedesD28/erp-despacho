@@ -52,7 +52,7 @@
   {% if es_juridico %}
   <section class="grid grid-cols-1 md:grid-cols-4 gap-3">
     <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-[9px] uppercase text-slate-400 font-bold">Despacho</div><div class="font-black mt-1 text-sm">{{ proceso.juzgado or 'Sin asignar' }}</div><div class="text-[10px] text-purple-600 uppercase mt-1">{{ proceso.naturaleza or 'Proceso' }}</div></div>
-    <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-[9px] uppercase text-slate-400 font-bold">Radicado Rama</div><div class="font-black font-mono mt-1 text-xs break-all">{{ proceso.radicado_rama or 'EN REPARTO' }}</div></div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-[9px] uppercase text-slate-400 font-bold">Radicado Rama</div><div class="font-black font-mono mt-1 text-xs break-all">{% if proceso.radicado_rama %}{{ proceso.radicado_rama }}{% elif proceso.estado_rama == 'PENDIENTE_REPARTO' %}PENDIENTE DE REPARTO{% else %}NO APLICA{% endif %}</div></div>
     <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-[9px] uppercase text-slate-400 font-bold">Pretensiones</div><div class="text-lg font-black text-emerald-700 mt-1">${{ proceso.pretensiones or 0 }}</div></div>
     <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-[9px] uppercase text-slate-400 font-bold">Abogado</div><div class="font-black mt-1 text-sm">{{ proceso.abogado_asignado or 'Sin asignar' }}</div></div>
   </section>
