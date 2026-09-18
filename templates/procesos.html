@@ -9,31 +9,42 @@
         <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-6">
             <div>
                 <p class="text-xs font-bold uppercase tracking-wider text-teal-600">Radicación inteligente</p>
-                <h1 class="text-2xl font-bold text-slate-900">Ingreso de cuentas y procesos</h1>
-                <p class="text-sm text-slate-500 mt-1">El tipo de proceso determina automáticamente qué información necesita el expediente.</p>
+                <h1 class="text-2xl font-bold text-slate-900">Radicar proceso</h1>
+                <p class="text-sm text-slate-500 mt-1">
+                    El proceso, la cartera y la obligación se registran juntos cuando corresponde.
+                    Las pretensiones procesales no son el saldo de la deuda.
+                </p>
             </div>
             <a href="/conjuntos" class="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 font-semibold text-sm">Gestionar conjuntos</a>
         </div>
 
-        <form method="POST" action="/crear_expediente_completo" class="space-y-6" onsubmit="return validarFormulario()"><input type="hidden" id="pretensiones" name="pretensiones" value="0">
+        <form method="POST" action="/crear_expediente_completo" class="space-y-6" onsubmit="return validarFormulario()">
             <section class="bg-slate-50 p-5 rounded-lg border border-slate-200">
-                <h2 class="font-semibold text-slate-800 mb-4">1. Naturaleza y tipificación</h2>
+                <h2 class="font-semibold text-slate-800 mb-4">1. Procedimiento y cartera</h2>
+
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
                     <div>
-                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Naturaleza *</label>
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Procedimiento *</label>
                         <select id="naturaleza" name="naturaleza" required class="w-full px-4 py-2.5 border rounded-md">
                             <option value="EJECUTIVO">Ejecutivo</option>
                             <option value="VERBAL">Verbal</option>
                         </select>
                     </div>
-                    <div id="bloque-tipo-ejecutivo">
-                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Título / obligación</label>
-                        <select id="tipo_proceso" name="tipo_proceso" required class="w-full px-4 py-2.5 border rounded-md">
-                            {% for tipo in tipos_proceso %}
-                            <option value="{{ tipo.codigo }}" data-cartera="{{ tipo.tipo_cartera_default }}" data-conjunto="{{ '1' if tipo.requiere_conjunto else '0' }}" data-inmueble="{{ '1' if tipo.requiere_inmueble else '0' }}" data-juzgado="{{ '1' if tipo.requiere_juzgado else '0' }}" data-documento="{{ '1' if tipo.requiere_documento else '0' }}">{{ tipo.nombre }}</option>
+
+                    <div id="bloque-tipo-obligacion">
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Tipo de obligación *</label>
+                        <select id="tipo_obligacion" name="tipo_obligacion" required class="w-full px-4 py-2.5 border rounded-md">
+                            {% for tipo in tipos_obligacion %}
+                            <option
+                                value="{{ tipo.codigo }}"
+                                data-documento="{{ '1' if tipo.requiere_documento else '0' }}"
+                                data-conjunto="{{ '1' if tipo.requiere_conjunto else '0' }}"
+                                data-inmueble="{{ '1' if tipo.requiere_inmueble else '0' }}"
+                            >{{ tipo.nombre }}</option>
                             {% endfor %}
                         </select>
                     </div>
+
                     <div>
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Tipo de cartera *</label>
                         <select id="tipo_cartera" name="tipo_cartera" required class="w-full px-4 py-2.5 border rounded-md">
@@ -42,6 +53,7 @@
                         </select>
                     </div>
                 </div>
+
                 <div id="regla-tipo" class="mt-4 text-sm bg-white border rounded-lg p-3 text-slate-600"></div>
             </section>
 
@@ -50,9 +62,14 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
                     <div>
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Radicado Rama Judicial</label>
-                        <input type="text" id="radicado_rama" name="radicado_rama" value="EN REPARTO" class="w-full px-4 py-2 border rounded-md uppercase font-mono">
+                        <input type="text" id="radicado_rama" name="radicado_rama" value="" placeholder="Solo si ya existe" class="w-full px-4 py-2 border rounded-md uppercase font-mono">
+                        <p class="text-[11px] text-slate-500 mt-1">Si aún no existe, el proceso queda en estado PENDIENTE_REPARTO.</p>
                     </div>
-                    <div></div>
+                    <div id="estado-rama-aviso" class="flex items-end">
+                        <div class="w-full bg-white border rounded-lg p-3 text-sm text-slate-600">
+                            <strong>Prejurídico:</strong> no tendrá juzgado, radicado Rama ni actuaciones judiciales.
+                        </div>
+                    </div>
                 </div>
 
                 <div id="bloque-juzgado" class="bg-white p-3 rounded border border-slate-200 mt-4">
@@ -72,22 +89,29 @@
 
             <section class="bg-blue-50/50 p-5 rounded-lg border border-blue-100">
                 <h2 class="font-semibold text-blue-800 mb-4">3. Partes</h2>
+
                 <div id="aviso-demandante-automatico" class="hidden mb-4 bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
-                    <strong>Demandante automático:</strong> para cuotas de administración el sistema utilizará la persona jurídica configurada en el conjunto. No debes seleccionar un demandante manualmente.
+                    <strong>Acreedor automático:</strong> para cuotas de administración se utilizará la persona jurídica configurada en el conjunto.
                 </div>
+
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div id="bloque-demandante">
-                        <label class="block text-sm font-bold text-gray-700 mb-2">Demandante(s) / acreedor(es)</label>
+                        <label class="block text-sm font-bold text-gray-700 mb-2">Demandante(s) / acreedor(es) *</label>
                         <select id="select-demandantes" name="demandantes_existentes" multiple placeholder="Buscar por nombre o identificación...">
-                            {% for cliente in contactos_clientes %}<option value="{{ cliente.identificacion or 'S/N' }}">{{ cliente.identificacion or 'S/N' }} - {{ cliente.nombre }}</option>{% endfor %}
+                            {% for cliente in contactos_clientes %}
+                            <option value="{{ cliente.identificacion or 'S/N' }}">{{ cliente.identificacion or 'S/N' }} - {{ cliente.nombre }}</option>
+                            {% endfor %}
                         </select>
                         <div id="contenedor-nuevos-demandantes" class="space-y-2 mt-3"></div>
                         <button type="button" onclick="agregarFila('demandantes')" class="mt-2 text-sm text-blue-600 font-semibold hover:underline">➕ Crear demandante</button>
                     </div>
+
                     <div>
                         <label class="block text-sm font-bold text-gray-700 mb-2">Demandado(s) / deudor(es) *</label>
                         <select id="select-demandados" name="demandados_existentes" multiple placeholder="Buscar por nombre o identificación...">
-                            {% for contraparte in contactos_contrapartes %}<option value="{{ contraparte.identificacion or 'S/N' }}">{{ contraparte.identificacion or 'S/N' }} - {{ contraparte.nombre }}</option>{% endfor %}
+                            {% for contraparte in contactos_contrapartes %}
+                            <option value="{{ contraparte.identificacion or 'S/N' }}">{{ contraparte.identificacion or 'S/N' }} - {{ contraparte.nombre }}</option>
+                            {% endfor %}
                         </select>
                         <div id="contenedor-nuevos-demandados" class="space-y-2 mt-3"></div>
                         <button type="button" onclick="agregarFila('demandados')" class="mt-2 text-sm text-blue-600 font-semibold hover:underline">➕ Crear demandado</button>
@@ -95,7 +119,7 @@
                 </div>
             </section>
 
-            <section id="bloque-propiedad" class="bg-green-50/50 p-5 rounded-lg border border-green-100">
+            <section id="bloque-propiedad" class="hidden bg-green-50/50 p-5 rounded-lg border border-green-100">
                 <h2 class="font-semibold text-green-800 mb-4">4. Propiedad horizontal</h2>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
                     <div>
@@ -115,48 +139,51 @@
             </section>
 
             <section id="bloque-obligacion" class="hidden bg-amber-50/50 p-5 rounded-lg border border-amber-100">
-                <h2 class="font-semibold text-amber-800 mb-4">4. Título / obligación</h2>
+                <h2 class="font-semibold text-amber-800 mb-4">5. Datos de la obligación</h2>
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
-                    <div>
-                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">N.º / referencia del documento *</label>
+                    <div id="bloque-documento">
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">N.º / referencia del documento</label>
                         <input id="documento_referencia" name="documento_referencia" class="w-full px-3 py-2 border rounded-md" placeholder="Ej. PAG-2026-001">
                     </div>
                     <div>
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Fecha de exigibilidad</label>
                         <input type="date" name="fecha_exigibilidad" class="w-full px-3 py-2 border rounded-md">
                     </div>
-                    <div>
-                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Capital / cuantía *</label>
-                        <input id="capital_titulo" type="number" step="0.01" name="capital_titulo" required value="0" class="w-full px-3 py-2 border rounded-md font-mono">
+                    <div id="bloque-capital-titulo">
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Capital inicial *</label>
+                        <input id="capital_titulo" type="number" min="0" step="0.01" name="capital_titulo" value="0" class="w-full px-3 py-2 border rounded-md font-mono">
                     </div>
                 </div>
-                <p class="text-xs text-amber-700 mt-3">El título se registra en <code>obligaciones</code> y queda vinculado al expediente. El documento físico se podrá incorporar en la siguiente etapa.</p>
+                <p id="ayuda-obligacion" class="text-xs text-amber-700 mt-3"></p>
             </section>
 
             <section class="bg-purple-50/50 p-5 rounded-lg border border-purple-100">
-                <h2 class="font-semibold text-purple-800 mb-4">5. Cuenta, cuantía y asignación</h2>
+                <h2 class="font-semibold text-purple-800 mb-4">6. Información procesal y asignación</h2>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    <div id="bloque-pretensiones-general">
-                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Pretensiones / cuantía ($)</label>
-                        <input id="pretensiones_general" type="number" step="0.01" name="pretensiones_general" value="0" class="w-full px-3 py-2 border rounded-md font-mono">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Pretensiones / cuantía procesal ($)</label>
+                        <input id="pretensiones_general" type="number" min="0" step="0.01" name="pretensiones_general" value="0" class="w-full px-3 py-2 border rounded-md font-mono">
+                        <p class="text-[11px] text-slate-500 mt-1">Este valor pertenece al proceso. No es el saldo financiero.</p>
                     </div>
                     <div>
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Abogado responsable</label>
                         <select name="abogado_id" class="w-full px-4 py-2 border rounded-md">
                             <option value="">Sin asignar</option>
-                            {% for abogado in abogados %}<option value="{{ abogado.id }}">{{ abogado.nombre }}</option>{% endfor %}
+                            {% for abogado in abogados %}
+                            <option value="{{ abogado.id }}">{{ abogado.nombre }}</option>
+                            {% endfor %}
                         </select>
                     </div>
                     <div class="md:col-span-2">
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Medidas cautelares solicitadas</label>
-                        <textarea name="medidas_cautelares" rows="2" placeholder="Ej. CUENTAS BANCARIAS | ESTABLECIMIENTO DE COMERCIO..." class="w-full px-3 py-2 border rounded-md uppercase"></textarea>
+                        <textarea name="medidas_cautelares" rows="2" placeholder="Ej. CUENTAS BANCARIAS | ESTABLECIMIENTO DE COMERCIO..." class="w-full px-4 py-2 border rounded-md uppercase"></textarea>
                     </div>
                 </div>
             </section>
 
             <div class="flex justify-end pt-2">
                 <button type="submit" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-8 rounded-lg shadow-md flex items-center gap-2">
-                    <i data-lucide="check-circle" class="w-5 h-5"></i> Crear cuenta / proceso
+                    <i data-lucide="check-circle" class="w-5 h-5"></i> Radicar proceso
                 </button>
             </div>
         </form>
@@ -167,100 +194,102 @@
 const selectDemandantes = new TomSelect("#select-demandantes",{plugins:['remove_button'],create:false,sortField:{field:"text",direction:"asc"}});
 const selectDemandados = new TomSelect("#select-demandados",{plugins:['remove_button'],create:false,sortField:{field:"text",direction:"asc"}});
 
-function configurarTipoProceso(){
-    const tipo = document.getElementById('tipo_proceso');
-    const opt = tipo.options[tipo.selectedIndex];
-    const codigo = tipo.value;
+function configurarRadicacion(){
     const naturaleza = document.getElementById('naturaleza').value;
-    const bloqueTipo = document.getElementById('bloque-tipo-ejecutivo');
-    const cartera = document.getElementById('tipo_cartera');
-    const requiereConjunto = opt.dataset.conjunto === '1';
-    const requiereInmueble = opt.dataset.inmueble === '1';
-    const requiereJuzgado = opt.dataset.juzgado === '1';
-    const requiereDocumento = opt.dataset.documento === '1';
+    const tipoObligacion = document.getElementById('tipo_obligacion');
+    const opt = tipoObligacion.options[tipoObligacion.selectedIndex];
+    const codigo = tipoObligacion.value;
+    const cartera = document.getElementById('tipo_cartera').value;
 
-    if (naturaleza === 'VERBAL') {
-        // Los procesos verbales no dependen de la tipificación ejecutiva.
-        cartera.value = 'JURIDICO';
-        bloqueTipo.classList.add('hidden');
-        tipo.disabled = true;
-        tipo.required = false;
-    } else {
-        bloqueTipo.classList.remove('hidden');
-        tipo.disabled = false;
-        tipo.required = true;
-        if (!cartera.dataset.manual) cartera.value = opt.dataset.cartera || 'JURIDICO';
-    }
+    const esEjecutivo = naturaleza === 'EJECUTIVO';
+    const esJuridico = cartera === 'JURIDICO';
+    const esPH = esEjecutivo && codigo === 'CUOTAS_ADMINISTRACION';
+    const requiereDocumento = esEjecutivo && opt?.dataset.documento === '1';
 
-    document.getElementById('bloque-propiedad').classList.toggle('hidden',!requiereConjunto);
-    document.getElementById('conjunto_id').disabled = !requiereConjunto;
-    document.getElementById('conjunto_id').required = requiereConjunto;
-    document.getElementById('apto').disabled = !requiereInmueble;
-    document.getElementById('apto').required = requiereInmueble;
+    document.getElementById('bloque-tipo-obligacion').classList.toggle('hidden',!esEjecutivo);
+    tipoObligacion.disabled = !esEjecutivo;
+    tipoObligacion.required = esEjecutivo;
 
-    const automatico = codigo === 'CUOTAS_ADMINISTRACION';
-    document.getElementById('bloque-demandante').classList.toggle('hidden',automatico);
-    document.getElementById('aviso-demandante-automatico').classList.toggle('hidden',!automatico);
+    document.getElementById('bloque-juridico').classList.toggle('hidden',!esJuridico);
+    ['radicado_rama','juzgado_numero','juzgado_tipo','juzgado_ciudad'].forEach(id=>{
+        const el=document.getElementById(id);
+        if(el) el.disabled=!esJuridico;
+    });
 
-    document.getElementById('bloque-obligacion').classList.toggle('hidden',!requiereDocumento);
-    document.getElementById('documento_referencia').disabled = !requiereDocumento;
-    document.getElementById('documento_referencia').required = requiereDocumento;
+    document.getElementById('bloque-demandante').classList.toggle('hidden',esPH);
+    document.getElementById('aviso-demandante-automatico').classList.toggle('hidden',!esPH);
 
-    const judicial = cartera.value === 'JURIDICO';
-    if (naturaleza === 'VERBAL') {
-        document.getElementById('bloque-obligacion').classList.add('hidden');
-        document.getElementById('documento_referencia').disabled = true;
-        document.getElementById('documento_referencia').required = false;
-        document.getElementById('bloque-propiedad').classList.add('hidden');
-        document.getElementById('conjunto_id').disabled = true;
-        document.getElementById('conjunto_id').required = false;
-        document.getElementById('apto').disabled = true;
-        document.getElementById('apto').required = false;
-    }
-    document.getElementById('bloque-juridico').classList.toggle('hidden',!judicial);
-    document.getElementById('radicado_rama').disabled = !judicial;
-    // En cartera JURÍDICA la información judicial siempre debe poder editarse.
-    // El tipo de título solo determina si el juzgado es obligatorio, no si los campos están bloqueados.
-    document.getElementById('juzgado_numero').disabled = !judicial;
-    document.getElementById('juzgado_tipo').disabled = !judicial;
-    document.getElementById('juzgado_ciudad').disabled = !judicial;
-    document.getElementById('juzgado_numero').required = judicial && requiereJuzgado;
-    document.getElementById('juzgado_tipo').required = judicial && requiereJuzgado;
-    document.getElementById('juzgado_ciudad').required = judicial && requiereJuzgado;
+    document.getElementById('bloque-propiedad').classList.toggle('hidden',!esPH);
+    document.getElementById('conjunto_id').disabled=!esPH;
+    document.getElementById('conjunto_id').required=esPH;
+    document.getElementById('apto').disabled=!esPH;
+    document.getElementById('apto').required=esPH;
 
-    document.getElementById('regla-tipo').innerHTML = naturaleza === 'VERBAL'
-        ? '<strong>Proceso verbal:</strong> la naturaleza queda registrada como VERBAL. No se requiere tipificación de título ejecutivo.'
-        : (codigo === 'CUOTAS_ADMINISTRACION'
-            ? '<strong>Ejecutivo → Cuotas de administración:</strong> conjunto + inmueble + deudor. El demandante sale automáticamente de la persona jurídica del conjunto.'
-            : '<strong>Ejecutivo → '+opt.text+'</strong>: la tipificación identifica el título/obligación del proceso.');
+    document.getElementById('bloque-obligacion').classList.toggle('hidden',!esEjecutivo);
+    document.getElementById('documento_referencia').disabled=!requiereDocumento;
+    document.getElementById('documento_referencia').required=requiereDocumento;
+    document.getElementById('capital_titulo').disabled=!esEjecutivo || esPH;
+    document.getElementById('capital_titulo').required=esEjecutivo && !esPH;
+
+    document.getElementById('ayuda-obligacion').textContent =
+        esPH
+        ? 'La obligación PH se crea como cabecera. Los períodos, cuotas y abonos se gestionarán posteriormente en el liquidador.'
+        : (esEjecutivo
+            ? 'La obligación se crea ahora y queda vinculada al proceso. El saldo futuro se calculará desde la entidad financiera, no desde las pretensiones.'
+            : 'Los procesos verbales no crean una obligación automáticamente.');
+
+    document.getElementById('regla-tipo').innerHTML =
+        naturaleza === 'VERBAL'
+        ? '<strong>Proceso verbal:</strong> procedimiento judicial sin obligación automática.'
+        : (esPH
+            ? '<strong>Ejecutivo → Cuotas de administración:</strong> se crea obligación + vínculo al inmueble + acreedor automático del conjunto.'
+            : '<strong>Ejecutivo → '+(opt?.text || 'obligación')+'</strong>: se crea una obligación financiera vinculada al expediente.');
 }
 
-document.getElementById('naturaleza').addEventListener('change', configurarTipoProceso);
-document.getElementById('tipo_proceso').addEventListener('change', configurarTipoProceso);
-document.getElementById('tipo_cartera').addEventListener('change',()=>{
-    document.getElementById('tipo_cartera').dataset.manual='1';
-    configurarTipoProceso();
-});
+document.getElementById('naturaleza').addEventListener('change', configurarRadicacion);
+document.getElementById('tipo_obligacion').addEventListener('change', configurarRadicacion);
+document.getElementById('tipo_cartera').addEventListener('change', configurarRadicacion);
 
 function validarFormulario(){
     const naturaleza=document.getElementById('naturaleza').value;
-    const codigo=document.getElementById('tipo_proceso').value;
+    const tipoObligacion=document.getElementById('tipo_obligacion').value;
     const cartera=document.getElementById('tipo_cartera').value;
-    if(cartera==='JURIDICO' && !document.getElementById('radicado_rama').value.trim()){
-        alert('Debes indicar el radicado Rama Judicial o EN REPARTO.');
-        return false;
-    }
-    if(naturaleza==='EJECUTIVO' && codigo==='CUOTAS_ADMINISTRACION' && !document.getElementById('conjunto_id').value){
-        alert('Selecciona el conjunto residencial.');
-        return false;
-    }
-    const documentoActivo=document.getElementById('bloque-obligacion').classList.contains('hidden')===false;
-    const monto=documentoActivo?document.getElementById('capital_titulo').value:document.getElementById('pretensiones_general').value;
-    document.getElementById('pretensiones').value=monto || '0';
-    if(!selectDemandados.getValue().length && !document.querySelector('[name="nuevo_ddo_id"]')){
+    const demandados=selectDemandados.getValue();
+
+    if(!demandados.length && !document.querySelector('[name="nuevo_ddo_id"]')){
         alert('Debes seleccionar o crear al menos un demandado.');
         return false;
     }
+
+    if(naturaleza==='EJECUTIVO' && !tipoObligacion){
+        alert('Debes seleccionar el tipo de obligación.');
+        return false;
+    }
+
+    if(naturaleza==='EJECUTIVO' && cartera==='JURIDICO'){
+        const rama=document.getElementById('radicado_rama').value.trim();
+        const n=document.getElementById('juzgado_numero').value.trim();
+        if(rama && !n){
+            alert('Si ya tienes radicado Rama, indica el juzgado de conocimiento.');
+            return false;
+        }
+    }
+
+    if(naturaleza==='EJECUTIVO' && tipoObligacion!=='CUOTAS_ADMINISTRACION'){
+        const capital=Number(document.getElementById('capital_titulo').value||0);
+        if(capital<=0){
+            alert('Indica el capital inicial de la obligación.');
+            return false;
+        }
+    }
+
+    if(naturaleza==='EJECUTIVO' && tipoObligacion==='CUOTAS_ADMINISTRACION'){
+        if(!document.getElementById('conjunto_id').value || !document.getElementById('apto').value.trim()){
+            alert('Selecciona el conjunto y la torre/apartamento.');
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -270,6 +299,6 @@ function agregarFila(tipo){
     contenedor.insertAdjacentHTML('beforeend',`<div class="flex gap-2 items-center bg-white p-2 border rounded shadow-sm mt-2"><input type="text" name="${prefijo}_id" placeholder="Cédula/NIT" class="w-1/3 px-2 py-1.5 border rounded text-sm" required><input type="text" name="${prefijo}_nombre" placeholder="Nombre completo" class="w-2/3 px-2 py-1.5 border rounded text-sm uppercase" required><button type="button" onclick="this.parentElement.remove()" class="text-red-500 font-bold px-3 py-1">X</button></div>`);
 }
 
-configurarTipoProceso();
+configurarRadicacion();
 </script>
 {% endblock %}
