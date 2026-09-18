@@ -625,6 +625,7 @@ def vista_sms(
     tipo_cartera: str = "",
     saldo_minimo: float = 0,
     saldo_maximo: str = "",
+    conjunto: str = "",
 ):
     _ensure_sms_schema()
     es_habil, motivo_horario = validar_horario_ley_2300()
@@ -674,7 +675,17 @@ def vista_sms(
             )
             cand = cur.fetchone()
             total_mora = cand["total_mora"] if cand else 0
-            candidatos = _candidatos_cartera(cur, tipo_cartera, float(saldo_minimo or 0), saldo_max)
+            cur.execute("""
+                SELECT DISTINCT conjunto_residencial
+                FROM inmuebles_ph
+                WHERE NULLIF(TRIM(conjunto_residencial), '') IS NOT NULL
+                  AND UPPER(TRIM(conjunto_residencial)) <> 'SIN CONJUNTO'
+                ORDER BY conjunto_residencial
+            """)
+            conjuntos = [str(r["conjunto_residencial"]) for r in cur.fetchall()]
+            candidatos = _candidatos_cartera(
+                cur, tipo_cartera, float(saldo_minimo or 0), saldo_max, None, conjunto
+            )
 
         return templates.TemplateResponse(
             request,
@@ -687,6 +698,8 @@ def vista_sms(
                 "total_mora": total_mora,
                 "candidatos": candidatos,
                 "tipo_cartera": (tipo_cartera or "").upper(),
+                "conjunto": conjunto,
+                "conjuntos": conjuntos,
                 "saldo_minimo": saldo_minimo,
                 "saldo_maximo": saldo_maximo,
                 "es_habil": es_habil,
@@ -707,6 +720,7 @@ def generar_cola(
     saldo_minimo: float = Form(50000.0),
     saldo_maximo: str = Form(""),
     tipo_cartera: str = Form(""),
+    conjunto: str = Form(""),
     seleccionados: List[int] = Form([]),
 ):
     _ensure_sms_schema()
@@ -736,6 +750,7 @@ def generar_cola(
                     saldo_minimo,
                     saldo_max,
                     seleccionados or None,
+                    conjunto,
                 )
                 insertados = 0
                 for d in deudores:
