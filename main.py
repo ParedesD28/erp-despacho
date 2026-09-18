@@ -1168,10 +1168,29 @@ def detalle_expediente(request: Request, radicado: str):
                 actuaciones = expedientes_service._get_actuaciones(cur, radicado)
                 contactos_opts = expedientes_service._contact_options(cur)
                 abogados_opts = expedientes_service._get_abogados(cur)
+                obligaciones = obligaciones_service.obtener_obligaciones_proceso(cur, radicado)
+                obligacion_principal = obligaciones[0] if obligaciones else None
                 ids = [x.get("identificacion") for x in demandantes + demandados]
                 acuerdos = expedientes_service._get_crm_agreements(cur, proceso.get("inmueble_id"), ids)
                 audit = expedientes_service._audit(cur, radicado)
-                return render_template("detalle_expediente_v4.html", {"request": request, "proceso": proceso, "demandantes": demandantes, "demandados": demandados, "contactos": contactos_opts, "abogados": abogados_opts, "actuaciones": actuaciones, "acuerdos_crm": acuerdos, "audit_ediciones": audit, "demandante_ids": {str(x.get("identificacion")) for x in demandantes if x.get("identificacion")}, "demandado_ids": {str(x.get("identificacion")) for x in demandados if x.get("identificacion")}})
+                return render_template(
+                    "detalle_expediente_v4.html",
+                    {
+                        "request": request,
+                        "proceso": proceso,
+                        "demandantes": demandantes,
+                        "demandados": demandados,
+                        "obligaciones": obligaciones,
+                        "obligacion_principal": obligacion_principal,
+                        "contactos": contactos_opts,
+                        "abogados": abogados_opts,
+                        "actuaciones": actuaciones,
+                        "acuerdos_crm": acuerdos,
+                        "audit_ediciones": audit,
+                        "demandante_ids": {str(x.get("identificacion")) for x in demandantes if x.get("identificacion")},
+                        "demandado_ids": {str(x.get("identificacion")) for x in demandados if x.get("identificacion")},
+                    },
+                )
     finally:
         conn.release()
 
