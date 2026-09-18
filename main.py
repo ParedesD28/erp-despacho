@@ -1374,6 +1374,15 @@ async def nueva_actuacion(request: Request):
             with conn.cursor() as cur:
                 if not expedientes_service._table_exists(cur, "actuaciones"):
                     raise RuntimeError("No existe la tabla actuaciones")
+                cur.execute(
+                    "SELECT UPPER(COALESCE(tipo_cartera,'')) AS tipo_cartera FROM procesos WHERE radicado_interno=%s LIMIT 1",
+                    (radicado,),
+                )
+                proceso_row = cur.fetchone()
+                if not proceso_row:
+                    raise ValueError("Expediente no encontrado")
+                if str(proceso_row["tipo_cartera"] or "").upper() != "JURIDICO":
+                    raise ValueError("Las actuaciones judiciales solo pueden registrarse en cartera JURÍDICA")
                 cols = expedientes_service._cols(cur, "actuaciones")
                 payload = {
                     "radicado_interno": radicado,
@@ -1403,6 +1412,20 @@ def eliminar_actuacion(actuacion_id: int, radicado_interno: str):
     try:
         with conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT UPPER(COALESCE(tipo_cartera,'')) AS tipo_cartera
+                    FROM procesos
+                    WHERE radicado_interno=%s
+                    LIMIT 1
+                    """,
+                    (radicado_interno,),
+                )
+                proceso_row = cur.fetchone()
+                if not proceso_row:
+                    raise ValueError("Expediente no encontrado")
+                if str(proceso_row["tipo_cartera"] or "").upper() != "JURIDICO":
+                    raise ValueError("Las actuaciones judiciales solo pueden eliminarse en cartera JURÍDICA")
                 cur.execute("DELETE FROM actuaciones WHERE id=%s AND radicado_interno=%s", (actuacion_id, radicado_interno))
                 if cur.rowcount == 0:
                     raise ValueError("Actuación no encontrada")
