@@ -884,18 +884,19 @@ def generar_cola(
                     cur.execute(
                         """
                         INSERT INTO sms_cola_envios(
-                            inmueble_id,contacto_id,identificacion,nombre,
+                            inmueble_id,obligacion_id,contacto_id,identificacion,nombre,
                             conjunto_residencial,torre_apto,telefono,
                             saldo_calculado,saldo_fuente,saldo_verificado,
                             saldo_calculado_en,mensaje_template,mensaje_texto,
                             tipo_campana,estado
                         )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
                         ON CONFLICT(inmueble_id,telefono,tipo_campana)
                         WHERE estado IN ('PENDIENTE','EN_PROCESO') DO NOTHING;
                         """,
                         (
-                            d["inmueble_id"],
+                            d.get("inmueble_id"),
+                            d.get("obligacion_id"),
                             d.get("contacto_id"),
                             d["identificacion"],
                             nombre_corto,
