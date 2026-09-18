@@ -204,12 +204,14 @@ function configurarTipoProceso(){
     const judicial = cartera.value === 'JURIDICO';
     document.getElementById('bloque-juridico').classList.toggle('hidden',!judicial);
     document.getElementById('radicado_rama').disabled = !judicial;
-    document.getElementById('juzgado_numero').disabled = !judicial || !requiereJuzgado;
-    document.getElementById('juzgado_tipo').disabled = !judicial || !requiereJuzgado;
-    document.getElementById('juzgado_ciudad').disabled = !judicial || !requiereJuzgado;
-    document.getElementById('juzgado_numero').required = judicial && requiereJuzgado;
-    document.getElementById('juzgado_tipo').required = judicial && requiereJuzgado;
-    document.getElementById('juzgado_ciudad').required = judicial && requiereJuzgado;
+    // Cuando la cartera es JURÍDICO, el bloque judicial siempre queda habilitado.
+    // Esto permite completar juzgado incluso para títulos que no lo exigían por defecto.
+    document.getElementById('juzgado_numero').disabled = !judicial;
+    document.getElementById('juzgado_tipo').disabled = !judicial;
+    document.getElementById('juzgado_ciudad').disabled = !judicial;
+    document.getElementById('juzgado_numero').required = judicial;
+    document.getElementById('juzgado_tipo').required = judicial;
+    document.getElementById('juzgado_ciudad').required = judicial;
 
     document.getElementById('regla-tipo').innerHTML = codigo === 'CUOTAS_ADMINISTRACION'
         ? '<strong>Proceso ejecutivo → Cuotas de administración:</strong> conjunto + inmueble + deudor. El demandante sale automáticamente de la persona jurídica del conjunto.'
