@@ -124,6 +124,12 @@ def verify() -> None:
                 LIMIT 1
                 """
             )
+            if not cur.fetchone():
+                raise RuntimeError(
+                    "[SCHEMA PREFLIGHT] No está registrada la migración "
+                    "20260918_fase3_4_endurecimiento"
+                )
+
             cur.execute(
                 """
                 SELECT 1
@@ -138,11 +144,6 @@ def verify() -> None:
                     "20260918_fase5_migracion_controlada"
                 )
 
-            if not cur.fetchone():
-                raise RuntimeError(
-                    "[SCHEMA PREFLIGHT] No está registrada la migración "
-                    "20260918_fase3_4_endurecimiento"
-                )
 
             cur.execute(
                 """
