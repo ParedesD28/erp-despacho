@@ -21,14 +21,14 @@
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
                     <div>
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Naturaleza *</label>
-                        <select id="naturaleza" name="naturaleza" required class="w-full px-4 py-2.5 border rounded-md" onchange="configurarTipoProceso()">
+                        <select id="naturaleza" name="naturaleza" required class="w-full px-4 py-2.5 border rounded-md">
                             <option value="EJECUTIVO">Ejecutivo</option>
                             <option value="VERBAL">Verbal</option>
                         </select>
                     </div>
                     <div id="bloque-tipo-ejecutivo">
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Título / obligación</label>
-                        <select id="tipo_proceso" name="tipo_proceso" required class="w-full px-4 py-2.5 border rounded-md" onchange="configurarTipoProceso()">
+                        <select id="tipo_proceso" name="tipo_proceso" required class="w-full px-4 py-2.5 border rounded-md">
                             {% for tipo in tipos_proceso %}
                             <option value="{{ tipo.codigo }}" data-cartera="{{ tipo.tipo_cartera_default }}" data-conjunto="{{ '1' if tipo.requiere_conjunto else '0' }}" data-inmueble="{{ '1' if tipo.requiere_inmueble else '0' }}" data-juzgado="{{ '1' if tipo.requiere_juzgado else '0' }}" data-documento="{{ '1' if tipo.requiere_documento else '0' }}">{{ tipo.nombre }}</option>
                             {% endfor %}
@@ -36,7 +36,7 @@
                     </div>
                     <div>
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Tipo de cartera *</label>
-                        <select id="tipo_cartera" name="tipo_cartera" required class="w-full px-4 py-2.5 border rounded-md" onchange="configurarTipoProceso()">
+                        <select id="tipo_cartera" name="tipo_cartera" required class="w-full px-4 py-2.5 border rounded-md">
                             <option value="PREJURIDICO">PREJURÍDICO</option>
                             <option value="JURIDICO">JURÍDICO</option>
                         </select>
@@ -236,6 +236,7 @@ function configurarTipoProceso(){
 }
 
 document.getElementById('naturaleza').addEventListener('change', configurarTipoProceso);
+document.getElementById('tipo_proceso').addEventListener('change', configurarTipoProceso);
 document.getElementById('tipo_cartera').addEventListener('change',()=>{
     document.getElementById('tipo_cartera').dataset.manual='1';
     configurarTipoProceso();
