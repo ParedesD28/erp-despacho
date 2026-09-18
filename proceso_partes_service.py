@@ -268,39 +268,59 @@ def _backfill_legacy_processes(cur) -> int:
 
 
 def ensure_schema() -> None:
-    """Instala la capa de compatibilidad normalizada de forma idempotente."""
-    conn = None
+    """Verifica la estructura normalizada en solo lectura.
+
+    Las migraciones son responsables de crear índices y triggers. Este método
+    existe como contrato de compatibilidad para módulos heredados.
+    """
+    conn = db.get_connection()
     try:
-        conn = db.get_connection()
         with conn.cursor() as cur:
-            required = ("procesos", "contactos", "proceso_partes")
-            missing = [table for table in required if not _table_exists(cur, table)]
+            required_tables = {"procesos", "contactos", "proceso_partes"}
+            cur.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema='public'
+                  AND table_name = ANY(%s)
+                """,
+                (list(required_tables),),
+            )
+            present = {str(row[0]) for row in cur.fetchall()}
+            missing = sorted(required_tables - present)
             if missing:
                 raise RuntimeError(
-                    "Faltan tablas requeridas para normalizar partes: " + ", ".join(missing)
+                    "Faltan tablas de partes normalizadas: " + ", ".join(missing)
                 )
 
-            for column in ("id_cliente", "demandante", "id_demandado", "demandado"):
-                if not _column_exists(cur, "procesos", column):
-                    raise RuntimeError(f"Falta columna procesos.{column}")
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='proceso_partes'
+                """
+            )
+            actual = {str(row[0]) for row in cur.fetchall()}
+            expected = {"radicado_interno", "contacto_id", "rol", "es_principal"}
+            faltan_columnas = sorted(expected - actual)
+            if faltan_columnas:
+                raise RuntimeError(
+                    "Faltan columnas en proceso_partes: "
+                    + ", ".join(faltan_columnas)
+                )
 
-            _ensure_contactos_identificacion_unique(cur)
-            _create_partes_indexes(cur)
-            _create_triggers(cur)
-            backfilled = _backfill_legacy_processes(cur)
-            conn.commit()
-
-        log_msg(
-            "✅ [PROCESO_PARTES]",
-            f"Compatibilidad normalizada activa | procesos iniciales migrados: {backfilled}",
-        )
-    except Exception as exc:
-        if conn is not None:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-        log_msg("⚠️ [PROCESO_PARTES]", f"No se pudo activar la sincronización: {exc}")
+            cur.execute(
+                """
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname='public'
+                  AND indexname='uq_contactos_identificacion_idx'
+                LIMIT 1
+                """
+            )
+            if not cur.fetchone():
+                raise RuntimeError(
+                    "Falta índice UNIQUE para contactos.identificacion"
+                )
     finally:
-        if conn is not None:
-            conn.release()
+        conn.release()

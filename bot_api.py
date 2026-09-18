@@ -88,6 +88,7 @@ def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[lis
         23.8,
         0.0,
         fecha_corte,
+        autocausar=True,
     )
     if not inm_info:
         raise HTTPException(status_code=404, detail="No existe información del inmueble")
@@ -242,6 +243,11 @@ async def registrar_acuerdo_bot(request: Request):
     except (ValueError, TypeError):
         inmueble_id = None
 
+    obligacion_id = payload.get("obligacion_id")
+    try:
+        obligacion_id = int(obligacion_id) if obligacion_id else None
+    except (ValueError, TypeError):
+        obligacion_id = None
     telefono = str(payload.get("telefono") or "").strip()
     nombre_deudor = str(payload.get("nombre_deudor") or payload.get("nombre") or "").strip()
     observaciones = str(payload.get("observaciones") or payload.get("resumen") or "Acuerdo de pago pactado vía WhatsApp con Agente IA").strip()
@@ -264,16 +270,35 @@ async def registrar_acuerdo_bot(request: Request):
                         if not telefono:
                             telefono = c_row.get("telefono") or ""
 
-                # 2. Insertar en acuerdos_pago
+                # 2. Resolver obligación financiera principal cuando el agente no la envía.
+                if not obligacion_id:
+                    if inmueble_id:
+                        cur.execute(
+                            """
+                            SELECT o.id
+                            FROM obligaciones o
+                            JOIN tipos_obligacion tob ON tob.id=o.tipo_obligacion_id
+                            WHERE o.inmueble_id=%s
+                              AND tob.codigo='CUOTAS_ADMINISTRACION'
+                              AND COALESCE(o.estado,'ACTIVA') NOT IN ('CANCELADA','ANULADA')
+                            ORDER BY o.id DESC
+                            LIMIT 1
+                            """,
+                            (inmueble_id,),
+                        )
+                        row_ob = cur.fetchone()
+                        obligacion_id = int(row_ob["id"]) if row_ob else None
+
+                # 3. Insertar en acuerdos_pago
                 cur.execute("""
                     INSERT INTO acuerdos_pago (
-                        inmueble_id, identificacion_deudor, nombre_deudor, telefono,
+                        inmueble_id, obligacion_id, identificacion_deudor, nombre_deudor, telefono,
                         valor_acordado, numero_cuotas, cuota_actual, fecha_compromiso,
                         estado, origen, observaciones
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDIENTE', 'ROBOT_IA', %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDIENTE', 'ROBOT_IA', %s)
                     RETURNING id
                 """, (
-                    inmueble_id, identificacion, nombre_deudor, telefono,
+                    inmueble_id, obligacion_id, identificacion, nombre_deudor, telefono,
                     valor, numero_cuotas, cuota_actual, fecha_compromiso, observaciones
                 ))
                 row_ac = cur.fetchone()
@@ -282,11 +307,11 @@ async def registrar_acuerdo_bot(request: Request):
                 # 3. Asentar anotación en gestiones_crm
                 cur.execute("""
                     INSERT INTO gestiones_crm (
-                        inmueble_id, identificacion_deudor, tipo_contacto,
+                        inmueble_id, obligacion_id, identificacion_deudor, tipo_contacto,
                         resumen, promesa_pago_fecha, usuario, estado
-                    ) VALUES (%s, %s, 'WhatsApp IA - Acuerdo', %s, %s, 'Bot Claude', 'ACTIVO')
+                    ) VALUES (%s, %s, %s, 'WhatsApp IA - Acuerdo', %s, %s, 'Bot Claude', 'ACTIVO')
                 """, (
-                    inmueble_id, identificacion,
+                    inmueble_id, obligacion_id, identificacion,
                     f"🤝 [ACUERDO DE PAGO #{acuerdo_id}] Cuota {cuota_actual}/{numero_cuotas} por ${valor:,.0f} para el {fecha_compromiso}. {observaciones}",
                     fecha_compromiso
                 ))
@@ -301,11 +326,12 @@ async def registrar_acuerdo_bot(request: Request):
 
                 cur.execute("""
                     INSERT INTO vencimientos (
-                        radicado_interno, titulo, fecha_vencimiento, observaciones,
+                        radicado_interno, obligacion_id, titulo, fecha_vencimiento, observaciones,
                         completado, tipo, valor, inmueble_id
-                    ) VALUES (%s, %s, %s, %s, FALSE, 'ACUERDO_PAGO', %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, FALSE, 'ACUERDO_PAGO', %s, %s)
                 """, (
                     radicado,
+                    obligacion_id,
                     f"Cobro Cuota #{cuota_actual} ({nombre_deudor or identificacion}) - ${valor:,.0f}",
                     fecha_compromiso,
                     f"Acuerdo #{acuerdo_id}. Tel: {telefono}. Obs: {observaciones}",
@@ -319,6 +345,7 @@ async def registrar_acuerdo_bot(request: Request):
             "status": "success",
             "mensaje": "Acuerdo de pago registrado y sincronizado en ERP",
             "acuerdo_id": acuerdo_id,
+            "obligacion_id": obligacion_id,
             "datos": {
                 "identificacion": identificacion,
                 "nombre_deudor": nombre_deudor,

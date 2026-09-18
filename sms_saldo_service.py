@@ -1,28 +1,27 @@
-"""Fuente única de saldo para SMS.
-
-Para propiedad horizontal la cifra comunicable se obtiene del mismo motor
-que utiliza la vista /liquidador: liquidador.motor_calculo_judicial().
-"""
+"""Compatibilidad SMS sobre el motor único de saldo por obligación."""
 from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
-import liquidador
+from obligacion_saldo_service import (
+    calcular_saldo_obligacion,
+    enriquecer_candidatos as enriquecer_candidatos_obligaciones,
+)
 
 TZ_COLOMBIA = ZoneInfo("America/Bogota")
-TIPO_TASA_SMS = "Máxima Legal"
-TASA_FIJA_SMS = 2.5
-HONORARIOS_PCT_SMS = 23.8
-GASTOS_SMS = 0.0
 
 
 def ahora_colombia() -> datetime:
     return datetime.now(TZ_COLOMBIA)
 
 
-def calcular_saldo_ph(inmueble_id: Optional[int], fecha_corte: Optional[date] = None) -> Dict[str, Any]:
+def calcular_saldo_ph(
+    inmueble_id: Optional[int],
+    fecha_corte: Optional[date] = None,
+) -> Dict[str, Any]:
+    """Compatibilidad temporal: resuelve la obligación PH por inmueble."""
     if not inmueble_id:
         return {
             "saldo_total": None,
@@ -31,55 +30,54 @@ def calcular_saldo_ph(inmueble_id: Optional[int], fecha_corte: Optional[date] = 
             "saldo_calculado_en": ahora_colombia(),
         }
 
-    resultados, resumen, _ = liquidador.motor_calculo_judicial(
-        int(inmueble_id),
-        TIPO_TASA_SMS,
-        TASA_FIJA_SMS,
-        HONORARIOS_PCT_SMS,
-        GASTOS_SMS,
-        fecha_corte or ahora_colombia().date(),
-    )
+    conn = None
+    try:
+        import db
 
-    if not resultados or not resumen:
+        conn = db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT o.id
+                FROM obligaciones o
+                JOIN tipos_obligacion tob ON tob.id=o.tipo_obligacion_id
+                WHERE o.inmueble_id=%s
+                  AND tob.codigo='CUOTAS_ADMINISTRACION'
+                  AND COALESCE(o.estado,'ACTIVA') NOT IN ('CANCELADA','ANULADA')
+                ORDER BY o.id DESC
+                LIMIT 1
+                """,
+                (int(inmueble_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {
+                    "saldo_total": None,
+                    "saldo_verificado": False,
+                    "saldo_fuente": "SIN_OBLIGACION_PH",
+                    "saldo_calculado_en": ahora_colombia(),
+                }
+            oid = row[0] if not isinstance(row, dict) else row["id"]
+
+        return calcular_saldo_obligacion(
+            int(oid),
+            fecha_corte=fecha_corte,
+        )
+    except Exception as exc:
         return {
             "saldo_total": None,
             "saldo_verificado": False,
-            "saldo_fuente": "LIQUIDADOR_PH_SIN_DEUDA",
+            "saldo_fuente": "ERROR_SALDO",
             "saldo_calculado_en": ahora_colombia(),
+            "saldo_error": str(exc)[:200],
         }
-
-    total = round(float(resumen.get("gran_total") or 0.0), 2)
-    return {
-        "saldo_total": total,
-        "saldo_verificado": True,
-        "saldo_fuente": "LIQUIDADOR_PH",
-        "saldo_calculado_en": ahora_colombia(),
-        "detalle_liquidacion": resumen,
-    }
+    finally:
+        if conn is not None:
+            conn.release()
 
 
 def enriquecer_candidatos(candidatos):
-    cache: Dict[int, Dict[str, Any]] = {}
-    salida = []
-
-    for candidato in candidatos:
-        item = dict(candidato)
-        inmueble_id = item.get("inmueble_id")
-
-        if inmueble_id:
-            inmueble_id = int(inmueble_id)
-            if inmueble_id not in cache:
-                cache[inmueble_id] = calcular_saldo_ph(inmueble_id)
-            item.update(cache[inmueble_id])
-        else:
-            item["saldo_total"] = None
-            item["saldo_verificado"] = False
-            item["saldo_fuente"] = item.get("saldo_fuente") or "SIN_LIQUIDADOR"
-            item["saldo_calculado_en"] = ahora_colombia()
-
-        salida.append(item)
-
-    return salida
+    return enriquecer_candidatos_obligaciones(candidatos)
 
 
 def _normalizar_nombre(nombre: Any) -> str:
@@ -87,12 +85,21 @@ def _normalizar_nombre(nombre: Any) -> str:
 
 
 def actualizar_item_cola(cur, item: Dict[str, Any]) -> Dict[str, Any]:
-    """Recalcula y actualiza el SMS justo antes de entregarlo al worker."""
+    """Recalcula el saldo de la obligación justo antes de entregar el SMS."""
     cur.execute(
         """
-        SELECT id, inmueble_id, contacto_id, identificacion, nombre,
-               conjunto_residencial, torre_apto, telefono,
-               mensaje_texto, tipo_campana
+        SELECT
+            id,
+            inmueble_id,
+            obligacion_id,
+            contacto_id,
+            identificacion,
+            nombre,
+            conjunto_residencial,
+            torre_apto,
+            telefono,
+            mensaje_texto,
+            tipo_campana
         FROM sms_cola_envios
         WHERE id=%s
         FOR UPDATE
@@ -103,14 +110,26 @@ def actualizar_item_cola(cur, item: Dict[str, Any]) -> Dict[str, Any]:
     if not row:
         raise RuntimeError(f"No existe sms_cola_envios.id={item['id']}")
 
-    data = dict(row) if isinstance(row, dict) else {
-        "id": row[0], "inmueble_id": row[1], "contacto_id": row[2],
-        "identificacion": row[3], "nombre": row[4],
-        "conjunto_residencial": row[5], "torre_apto": row[6],
-        "telefono": row[7], "mensaje_texto": row[8], "tipo_campana": row[9],
-    }
+    if isinstance(row, dict):
+        data = dict(row)
+    else:
+        data = {
+            "id": row[0],
+            "inmueble_id": row[1],
+            "obligacion_id": row[2],
+            "contacto_id": row[3],
+            "identificacion": row[4],
+            "nombre": row[5],
+            "conjunto_residencial": row[6],
+            "torre_apto": row[7],
+            "telefono": row[8],
+            "mensaje_texto": row[9],
+            "tipo_campana": row[10],
+        }
 
-    saldo = calcular_saldo_ph(data.get("inmueble_id"))
+    saldo = calcular_saldo_obligacion(
+        int(data["obligacion_id"]) if data.get("obligacion_id") else None
+    )
 
     if not saldo.get("saldo_verificado"):
         cur.execute(
@@ -123,8 +142,8 @@ def actualizar_item_cola(cur, item: Dict[str, Any]) -> Dict[str, Any]:
             WHERE id=%s
             """,
             (
-                saldo.get("saldo_fuente") or "SIN_LIQUIDADOR",
-                "Envío bloqueado: no existe liquidación verificable para esta cuenta.",
+                saldo.get("saldo_fuente") or "SIN_OBLIGACION",
+                "Envío bloqueado: no existe saldo verificable para la obligación.",
                 data["id"],
             ),
         )
