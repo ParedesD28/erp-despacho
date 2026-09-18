@@ -41,7 +41,7 @@ def _install_candidate_query() -> None:
             "pp.rol = 'DEMANDADO'",
             "c.telefono IS NOT NULL",
             "TRIM(c.telefono) <> ''",
-            "LOWER(COALESCE(p.estado,'')) NOT IN ('cancelado','inactivo','archivado','terminado')",
+            "LOWER(TRIM(COALESCE(p.estado,'Activo'))) NOT IN ('cancelado','inactivo','archivado','terminado','suspendido','cerrado','finalizado','anulado')",
             "NOT EXISTS ("
             " SELECT 1 FROM sms_cola_envios prev"
             " WHERE prev.contacto_id = c.id"
@@ -60,6 +60,9 @@ def _install_candidate_query() -> None:
         if ids:
             where.append("c.id = ANY(%s)")
             params.append(ids)
+        if conjunto:
+            where.append("COALESCE(i.conjunto_residencial, '') = %s")
+            params.append(conjunto.strip())
 
         cur.execute(
             f"""
