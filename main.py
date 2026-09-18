@@ -1190,7 +1190,7 @@ def crm(request: Request, buscar_inmueble: str | None = None):
     try:
         inmuebles = cargar_inmuebles_ph(conn)
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            conjuntos = [r["nombre"] for r in _listar_conjuntos(cur)]
+            conjuntos = [r["nombre"] for r in catalogos_service.listar_conjuntos(cur, activos=True)]
         filtro = {}
         for item in inmuebles:
             filtro.setdefault(item.get("conjunto_residencial") or "SIN CONJUNTO", []).append({
