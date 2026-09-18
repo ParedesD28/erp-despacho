@@ -9,7 +9,9 @@ No cambia el worker Android ni el contrato HTTP de la cola.
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
+
+from sms_saldo_service import enriquecer_candidatos
 
 
 def _install_candidate_query() -> None:
@@ -31,16 +33,15 @@ def _install_candidate_query() -> None:
             raise ValueError("Tipo de cartera no válido.")
 
         # 1) Conservamos íntegramente el comportamiento probado de PH.
-        ph_rows = original(cur, cartera, saldo_minimo, saldo_maximo, ids, conjunto)
+        ph_rows = original(cur, cartera, 0, None, ids, conjunto)
 
         # 2) Añadimos demandados de procesos, aunque no tengan inmueble.
-        params: List[Any] = [float(saldo_minimo)]
+        params: List[Any] = []
         where = [
             "pp.rol = 'DEMANDADO'",
             "c.telefono IS NOT NULL",
             "TRIM(c.telefono) <> ''",
             "LOWER(COALESCE(p.estado,'')) NOT IN ('cancelado','inactivo','archivado','terminado')",
-            "COALESCE(p.pretensiones, 0) >= %s",
             "NOT EXISTS ("
             " SELECT 1 FROM sms_cola_envios prev"
             " WHERE prev.contacto_id = c.id"
@@ -50,7 +51,6 @@ def _install_candidate_query() -> None:
         ]
         if saldo_maximo is not None:
             where.append("COALESCE(p.pretensiones, 0) <= %s")
-            params.append(float(saldo_maximo))
         if cartera:
             where.append("COALESCE(p.tipo_cartera,'PREJURIDICO') = %s")
             params.append(cartera)
@@ -132,9 +132,33 @@ def _install_candidate_query() -> None:
             if actual is None or candidato["fuente_cobro"] == "PROCESO":
                 candidatos[key] = candidato
 
-        resultado = list(candidatos.values())
-        resultado.sort(key=lambda r: (-float(r.get("saldo_total") or 0), r.get("nombre") or ""))
-        return resultado
+        resultado = enriquecer_candidatos(list(candidatos.values()))
+
+        # Los límites se aplican al saldo liquidado, no a pretensiones/capital.
+        salida = []
+        for item in resultado:
+            if not item.get("saldo_verificado"):
+                item["saldo_bloqueado"] = True
+                salida.append(item)
+                continue
+
+            saldo = float(item.get("saldo_total") or 0)
+            if saldo < float(saldo_minimo or 0):
+                continue
+            if saldo_maximo is not None and saldo > float(saldo_maximo):
+                continue
+
+            item["saldo_bloqueado"] = False
+            salida.append(item)
+
+        salida.sort(
+            key=lambda r: (
+                not bool(r.get("saldo_verificado")),
+                -float(r.get("saldo_total") or 0),
+                r.get("nombre") or "",
+            )
+        )
+        return salida
 
     sms_router._candidatos_cartera = _candidatos_cartera_general
 
