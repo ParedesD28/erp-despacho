@@ -493,7 +493,6 @@ def cargar_procesos_general_sin_duplicados():
                         p.id_cliente,
                         COALESCE(
                             NULLIF(TRIM(pdemandante.nombres), ''),
-                            NULLIF(TRIM(p.demandante), ''),
                             NULLIF(TRIM(p.id_cliente), ''),
                             'SIN REGISTRO'
                         ) AS demandante_nombre,
