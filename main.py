@@ -1176,12 +1176,25 @@ def crm(
                         p.inmueble_id,
                         p.id_demandado,
                         p.demandado,
+                        pob.obligacion_id,
                         i.conjunto_residencial,
                         i.torre_apto
                     FROM procesos p
                     LEFT JOIN inmuebles_ph i ON i.id=p.inmueble_id
-                    WHERE %s = ANY(
-                        string_to_array(replace(COALESCE(p.id_cliente,''), ' ', ''), '|')
+                    LEFT JOIN LATERAL (
+                        SELECT po.obligacion_id
+                        FROM proceso_obligaciones po
+                        WHERE po.radicado_interno=p.radicado_interno
+                        ORDER BY po.es_principal DESC,po.id
+                        LIMIT 1
+                    ) pob ON TRUE
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM proceso_partes pp
+                        JOIN contactos c ON c.id=pp.contacto_id
+                        WHERE pp.radicado_interno=p.radicado_interno
+                          AND UPPER(pp.rol)='DEMANDANTE'
+                          AND c.identificacion=%s
                     )
                     ORDER BY p.radicado_interno DESC
                     """,
@@ -1214,6 +1227,9 @@ def crm(
                 if expedientes_service._table_exists(cur, "gestiones_crm"):
                     condiciones = ["radicado_interno=%s"]
                     params = [cuenta_actual["radicado_interno"]]
+                    if cuenta_actual.get("obligacion_id"):
+                        condiciones.append("obligacion_id=%s")
+                        params.append(int(cuenta_actual["obligacion_id"]))
                     if inmueble_id:
                         condiciones.append("(radicado_interno IS NULL AND inmueble_id=%s)")
                         params.append(int(inmueble_id))
