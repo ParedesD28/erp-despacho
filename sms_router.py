@@ -373,6 +373,8 @@ def _registrar_en_crm_idempotente(
         data["canal"] = "SMS"
     elif "medio" in cols:
         data["medio"] = "SMS"
+    if "tipo_contacto" in cols:
+        data["tipo_contacto"] = "SMS"
 
     tipo_gestion = (
         "COBRANZA_JURIDICA"
@@ -422,6 +424,50 @@ def _registrar_en_crm_idempotente(
         (item_id,),
     )
     return True
+
+
+def _contacto_bloqueado_por_ley_2300(cur, obligacion_id: int, contacto_id: Optional[int]) -> Optional[str]:
+    """Bloquea contacto adicional si ya hubo una gestión de cobranza reciente."""
+    if not contacto_id and not obligacion_id:
+        return None
+
+    cur.execute(
+        """
+        SELECT fecha, tipo_contacto, resumen
+        FROM gestiones_crm
+        WHERE anulado=FALSE
+          AND (
+                (obligacion_id=%s AND obligacion_id IS NOT NULL)
+                OR (
+                    identificacion_deudor IS NOT NULL
+                    AND obligacion_id IS NULL
+                    AND identificacion_deudor = (
+                        SELECT c.identificacion
+                        FROM obligaciones o
+                        JOIN obligacion_partes op
+                          ON op.obligacion_id=o.id AND op.rol='DEUDOR'
+                        JOIN contactos c ON c.id=op.contacto_id
+                        WHERE o.id=%s
+                          AND (%s IS NULL OR op.contacto_id=%s)
+                        ORDER BY op.es_principal DESC, op.id
+                        LIMIT 1
+                    )
+                )
+              )
+          AND fecha >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+        ORDER BY fecha DESC
+        LIMIT 1
+        """,
+        (obligacion_id, obligacion_id, contacto_id, contacto_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+
+    fecha = row["fecha"] if isinstance(row, dict) else row[0]
+    tipo = row["tipo_contacto"] if isinstance(row, dict) else row[1]
+    resumen = row["resumen"] if isinstance(row, dict) else row[2]
+    return f"Ya existe una gestión de cobranza/contacto registrada el {fecha} ({tipo or 'canal no informado'})."
 
 
 def _asentar_resultado_sms_y_crm(
@@ -567,6 +613,25 @@ def _reclamar_lote(cur, limite: int):
                     "telefono":row[3],"mensaje_texto":row[4],"tipo_campana":row[5],
                 },
             )
+            bloqueo_ley = _contacto_bloqueado_por_ley_2300(
+                cur,
+                int(refreshed.get("obligacion_id") or 0),
+                int(refreshed.get("contacto_id")) if refreshed.get("contacto_id") else None,
+            )
+            if bloqueo_ley:
+                cur.execute(
+                    """
+                    UPDATE sms_cola_envios
+                    SET estado='FALLIDO',
+                        fecha_proceso=NULL,
+                        processing_token=NULL,
+                        error_detalle=%s
+                    WHERE id=%s AND estado='EN_PROCESO'
+                    """,
+                    (f"Envío bloqueado por Ley 2300: {bloqueo_ley}", fila_id),
+                )
+                continue
+
             if refreshed.get("bloqueado_envio"):
                 cur.execute(
                     """
