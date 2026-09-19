@@ -33,7 +33,23 @@ REQUIRED_COLUMNS = {
     "expensas_ph": {"id", "inmueble_id", "concepto", "valor_capital", "obligation_id"},
     "gestiones_crm": {"id", "obligacion_id", "radicado_interno"},
     "acuerdos_pago": {"id", "obligacion_id"},
+    "acuerdos_pago_cuotas": {
+        "id", "acuerdo_id", "numero_cuota", "fecha_vencimiento",
+        "valor_cuota", "estado", "anulado", "abogado_id",
+    },
+    "agenda_auditoria": {
+        "id", "fecha", "abogado_id", "abogado_nombre", "accion",
+        "tipo", "registro_id", "radicado_interno", "inmueble_id",
+    },
     "vencimientos": {"id", "obligacion_id"},
+    "recaudos_contabilidad": {
+        "id", "obligacion_id", "inmueble_id", "identificacion_deudor",
+        "nombre_deudor", "fecha_pago", "valor_total", "estado_conciliacion",
+    },
+    "solicitudes_paz_y_salvo": {
+        "id", "obligacion_id", "inmueble_id", "recaudo_id",
+        "identificacion_deudor", "estado",
+    },
     "sms_cola_envios": {
         "id", "obligacion_id", "saldo_calculado",
         "saldo_fuente", "saldo_verificado", "saldo_calculado_en",
