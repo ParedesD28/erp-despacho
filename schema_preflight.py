@@ -179,6 +179,60 @@ def verify() -> None:
 
             cur.execute(
                 """
+                SELECT 1
+                FROM schema_migrations
+                WHERE version='20260919_fase15_completar_obligaciones_ejecutivos_historicos'
+                LIMIT 1
+                """
+            )
+            if not cur.fetchone():
+                raise RuntimeError(
+                    "[SCHEMA PREFLIGHT] No está registrada la reparación "
+                    "20260919_fase15_completar_obligaciones_ejecutivos_historicos"
+                )
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM procesos p
+                WHERE UPPER(COALESCE(p.naturaleza,'')) <> 'VERBAL'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM proceso_obligaciones po
+                      WHERE po.radicado_interno=p.radicado_interno
+                  )
+                """
+            )
+            if int(cur.fetchone()[0] or 0) != 0:
+                raise RuntimeError(
+                    "[SCHEMA PREFLIGHT] Existen procesos no-VERBAL sin obligación canónica"
+                )
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM procesos p
+                WHERE UPPER(COALESCE(p.naturaleza,'')) <> 'VERBAL'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM proceso_obligaciones po
+                      JOIN obligacion_partes op
+                        ON op.obligacion_id=po.obligacion_id
+                      WHERE po.radicado_interno=p.radicado_interno
+                        AND po.es_principal=TRUE
+                        AND UPPER(op.rol)='DEUDOR'
+                        AND op.es_principal=TRUE
+                  )
+                """
+            )
+            if int(cur.fetchone()[0] or 0) != 0:
+                raise RuntimeError(
+                    "[SCHEMA PREFLIGHT] Existen procesos no-VERBAL sin deudor principal "
+                    "en su obligación principal"
+                )
+
+            cur.execute(
+                """
                 SELECT COUNT(*)
                 FROM tipos_proceso
                 WHERE activo=TRUE
