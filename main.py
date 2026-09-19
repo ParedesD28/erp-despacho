@@ -223,8 +223,9 @@ def cargar_inmuebles_ph(conn=None) -> list[dict]:
                    ) AS obligacion_id
             FROM inmuebles_ph i
             JOIN procesos p ON p.inmueble_id = i.id
-            JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
-            JOIN contactos c ON c.identificacion = pl.identificacion_demandado
+            JOIN proceso_partes pp ON pp.radicado_interno = p.radicado_interno
+                                   AND pp.rol='DEMANDADO'
+            JOIN contactos c ON c.id = pp.contacto_id
             ORDER BY expediente DESC, nombre ASC
         """)
         lista = [
@@ -904,15 +905,6 @@ async def guardar_expediente_estructurado(request: Request):
                 if "abogado_id" in cols:
                     abogado = str(form.get("abogado_id") or "").strip()
                     editable["abogado_id"] = int(abogado) if abogado.isdigit() else None
-                if "id_cliente" in cols:
-                    editable["id_cliente"] = " | ".join(demandante_ids)
-                if "demandante" in cols:
-                    editable["demandante"] = " | ".join(contacts[x] for x in demandante_ids)
-                if "id_demandado" in cols:
-                    editable["id_demandado"] = " | ".join(demandado_ids)
-                if "demandado" in cols:
-                    editable["demandado"] = " | ".join(contacts[x] for x in demandado_ids)
-
                 usable = [k for k in editable if k in cols and k != "radicado_interno"]
                 if usable:
                     cur.execute(
@@ -972,16 +964,6 @@ async def guardar_expediente_estructurado(request: Request):
                         obligacion_id=int(obligaciones_actuales[0]["id"]),
                         contactos_deudores=[contact_records[x] for x in demandado_ids],
                     )
-
-                if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
-                    lcols = expedientes_service._cols(cur, "procesos_litisconsorcio")
-                    if "radicado_interno" in lcols and "identificacion_demandado" in lcols:
-                        cur.execute("DELETE FROM procesos_litisconsorcio WHERE radicado_interno=%s", (radicado,))
-                        for ident in demandado_ids:
-                            cur.execute(
-                                "INSERT INTO procesos_litisconsorcio (radicado_interno,identificacion_demandado) VALUES (%s,%s)",
-                                (radicado, ident),
-                            )
 
                 expedientes_service._ensure_audit_table(cur)
                 after_process = expedientes_service._get_process(cur, radicado)
@@ -1174,8 +1156,7 @@ def crm(
                         p.estado,
                         p.pretensiones,
                         p.inmueble_id,
-                        p.id_demandado,
-                        p.demandado,
+                        COALESCE(ppddo.identificaciones, '') AS identificaciones_demandado,
                         pob.obligacion_id,
                         i.conjunto_residencial,
                         i.torre_apto
@@ -1188,6 +1169,13 @@ def crm(
                         ORDER BY po.es_principal DESC,po.id
                         LIMIT 1
                     ) pob ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT STRING_AGG(DISTINCT c.identificacion, '|' ORDER BY c.identificacion) AS identificaciones
+                        FROM proceso_partes pp
+                        JOIN contactos c ON c.id=pp.contacto_id
+                        WHERE pp.radicado_interno=p.radicado_interno
+                          AND UPPER(pp.rol)='DEMANDADO'
+                    ) ppddo ON TRUE
                     WHERE EXISTS (
                         SELECT 1
                         FROM proceso_partes pp
@@ -1253,8 +1241,8 @@ def crm(
                 if expedientes_service._table_exists(cur, "gestiones_cartera"):
                     ids_deudores = [
                         str(x).strip()
-                        for x in str(cuenta_actual.get("id_demandado") or "").split("|")
-                        if str(x).strip().isdigit()
+                        for x in str(cuenta_actual.get("identificaciones_demandado") or "").split("|")
+                        if str(x).strip()
                     ]
                     if ids_deudores:
                         cur.execute(
