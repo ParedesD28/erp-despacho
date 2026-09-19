@@ -196,13 +196,31 @@ def cargar_inmuebles_ph(conn=None) -> list[dict]:
         cur = conn.cursor()
         cur.execute("""
             SELECT i.id, i.conjunto_residencial, i.torre_apto, c.identificacion, c.nombre,
-                   COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente
+                   COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente,
+                   (
+                       SELECT o.id
+                       FROM obligaciones o
+                       WHERE o.inmueble_id=i.id
+                         AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+                         AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+                       ORDER BY o.id DESC
+                       LIMIT 1
+                   ) AS obligacion_id
             FROM inmuebles_ph i
             JOIN contactos c ON i.contacto_id = c.id
             LEFT JOIN procesos p ON p.inmueble_id = i.id
             UNION
             SELECT i.id, i.conjunto_residencial, i.torre_apto, c.identificacion, c.nombre,
-                   COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente
+                   COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente,
+                   (
+                       SELECT o.id
+                       FROM obligaciones o
+                       WHERE o.inmueble_id=i.id
+                         AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+                         AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+                       ORDER BY o.id DESC
+                       LIMIT 1
+                   ) AS obligacion_id
             FROM inmuebles_ph i
             JOIN procesos p ON p.inmueble_id = i.id
             JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
@@ -210,7 +228,7 @@ def cargar_inmuebles_ph(conn=None) -> list[dict]:
             ORDER BY expediente DESC, nombre ASC
         """)
         lista = [
-            {"id": r[0], "conjunto_residencial": r[1], "torre_apto": r[2], "apto": r[2], "cedula": r[3], "nombre": r[4], "expediente": r[5]}
+            {"id": r[0], "conjunto_residencial": r[1], "torre_apto": r[2], "apto": r[2], "cedula": r[3], "nombre": r[4], "expediente": r[5], "obligacion_id": r[6]}
             for r in cur.fetchall()
         ]
         cur.close()
