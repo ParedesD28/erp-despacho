@@ -127,7 +127,7 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertIn('accion == "INACTIVAR" and len(motivo) < 5', source)
         template = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8")
         self.assertIn('name="motivo"', template)
-        self.assertIn("minlength="5"", template)
+        self.assertIn('minlength="5"', template)
 
     def test_expedientes_filtro_estado(self):
         source = (ROOT / "expedientes_service.py").read_text(encoding="utf-8")
