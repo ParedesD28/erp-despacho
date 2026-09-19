@@ -39,6 +39,10 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertEqual(sms_router.normalizar_telefono("+57 310 692 7812"), "3106927812")
         self.assertIsNone(sms_router.normalizar_telefono("6015551234"))
 
+    def test_calendario_colombiano_incluye_festivos_trasladados(self):
+        self.assertTrue(sms_router._es_festivo_colombia(__import__("datetime").datetime(2026, 10, 12)))
+        self.assertFalse(sms_router._es_festivo_colombia(__import__("datetime").datetime(2026, 10, 13)))
+
     def test_balance_generico_usa_capital_y_movimientos(self):
         cur = FakeCursor([
             {
