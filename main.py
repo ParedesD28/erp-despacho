@@ -765,13 +765,19 @@ async def guardar_expediente_estructurado(request: Request):
                 all_ids = list(dict.fromkeys(demandante_ids + demandado_ids))
                 placeholders = ",".join(["%s"] * len(all_ids))
                 cur.execute(
-                    f"SELECT identificacion, nombre FROM contactos WHERE identificacion IN ({placeholders})",
+                    f"SELECT id, identificacion, nombre FROM contactos WHERE identificacion IN ({placeholders})",
                     all_ids,
                 )
-                contacts = {str(r["identificacion"]): r["nombre"] for r in cur.fetchall()}
+                contact_rows = [dict(r) for r in cur.fetchall()]
+                contacts = {str(r["identificacion"]): r["nombre"] for r in contact_rows}
+                contact_records = {str(r["identificacion"]): r for r in contact_rows}
                 missing = [x for x in all_ids if x not in contacts]
                 if missing:
                     raise ValueError("Hay una parte seleccionada que no existe en Contactos")
+                if set(demandante_ids) & set(demandado_ids):
+                    raise ValueError(
+                        "Una misma persona no puede ser demandante y demandado en el mismo proceso"
+                    )
 
                 before = {
                     "proceso": jsonable_encoder(proceso),
@@ -803,6 +809,27 @@ async def guardar_expediente_estructurado(request: Request):
                     raise ValueError(
                         "No se puede convertir a VERBAL un proceso que ya tiene obligaciones financieras vinculadas"
                     )
+
+                principal_demandante_id = demandante_ids[0]
+                if obligaciones_actuales:
+                    principal_obligacion = obligaciones_actuales[0]
+                    if principal_obligacion.get("tipo_obligacion_codigo") == "CUOTAS_ADMINISTRACION":
+                        acreedor_id = principal_obligacion.get("acreedor_contacto_id")
+                        cur.execute(
+                            "SELECT identificacion FROM contactos WHERE id=%s LIMIT 1",
+                            (acreedor_id,),
+                        )
+                        acreedor_row = cur.fetchone()
+                        acreedor_ident = (
+                            acreedor_row["identificacion"]
+                            if isinstance(acreedor_row, dict) and acreedor_row
+                            else acreedor_row[0] if acreedor_row else None
+                        )
+                        if not acreedor_ident or acreedor_ident not in demandante_ids:
+                            raise ValueError(
+                                "La persona jurídica acreedora del conjunto debe permanecer como demandante"
+                            )
+                        principal_demandante_id = str(acreedor_ident)
 
                 tipo_proceso_editado = catalogos_service.obtener_tipo_proceso(
                     cur,
@@ -898,7 +925,7 @@ async def guardar_expediente_estructurado(request: Request):
                                     (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
                                 VALUES (%s,%s,'DEMANDANTE',%s,CURRENT_TIMESTAMP)
                                 """,
-                                (radicado, contacto["id"], idx == 0),
+                                (radicado, contacto["id"], ident == principal_demandante_id),
                             )
 
                     for idx, ident in enumerate(demandado_ids):
@@ -920,6 +947,13 @@ async def guardar_expediente_estructurado(request: Request):
                                 """,
                                 (radicado, contacto["id"], idx == 0),
                             )
+
+                if obligaciones_actuales:
+                    obligaciones_service.sincronizar_deudores_obligacion(
+                        cur,
+                        obligacion_id=int(obligaciones_actuales[0]["id"]),
+                        contactos_deudores=[contact_records[x] for x in demandado_ids],
+                    )
 
                 if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
                     lcols = expedientes_service._cols(cur, "procesos_litisconsorcio")
