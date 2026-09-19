@@ -21,7 +21,7 @@ def dedupe_expensas():
                         FROM (
                             SELECT id,
                                    ROW_NUMBER() OVER (
-                                       PARTITION BY inmueble_id, periodo_anio, periodo_mes, concepto
+                                       PARTITION BY inmueble_id, obligation_id, periodo_anio, periodo_mes, concepto
                                        ORDER BY id DESC
                                    ) as rn
                             FROM expensas_ph
