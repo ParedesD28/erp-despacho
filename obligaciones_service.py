@@ -155,6 +155,92 @@ def vincular_partes_obligacion(
         )
 
 
+def sincronizar_deudores_obligacion(
+    cur,
+    *,
+    obligacion_id: int,
+    contactos_deudores: list[dict],
+) -> None:
+    """Sincroniza demandados del expediente con los roles DEUDOR de la obligación.
+
+    Los roles CODEUDOR/GARANTE, si existen en el futuro, no se eliminan aquí.
+    Se preserva el deudor principal actual cuando sigue presente; de lo contrario,
+    el primer demandado pasa a ser principal por compatibilidad.
+    """
+    if not contactos_deudores:
+        raise ValueError("La obligación requiere al menos un deudor")
+
+    contacto_ids = [int(c["id"]) for c in contactos_deudores if c.get("id")]
+    if not contacto_ids:
+        raise ValueError("Todos los deudores deben existir en Contactos")
+
+    cur.execute(
+        """
+        SELECT contacto_id
+        FROM obligacion_partes
+        WHERE obligacion_id=%s
+          AND rol='DEUDOR'
+          AND es_principal=TRUE
+        LIMIT 1
+        """,
+        (int(obligacion_id),),
+    )
+    row = cur.fetchone()
+    principal_actual = int(row["contacto_id"]) if isinstance(row, dict) and row else (
+        int(row[0]) if row else None
+    )
+    principal_id = (
+        principal_actual
+        if principal_actual in contacto_ids
+        else contacto_ids[0]
+    )
+
+    cur.execute(
+        """
+        DELETE FROM obligacion_partes
+        WHERE obligacion_id=%s
+          AND rol='DEUDOR'
+        """,
+        (int(obligacion_id),),
+    )
+
+    for contacto_id in contacto_ids:
+        cur.execute(
+            """
+            INSERT INTO obligacion_partes
+                (obligacion_id,contacto_id,rol,es_principal)
+            VALUES (%s,%s,'DEUDOR',%s)
+            """,
+            (int(obligacion_id), contacto_id, contacto_id == principal_id),
+        )
+
+    cur.execute(
+        """
+        SELECT identificacion
+        FROM contactos
+        WHERE id=%s
+        LIMIT 1
+        """,
+        (principal_id,),
+    )
+    principal_contacto = cur.fetchone()
+    principal_identificacion = (
+        principal_contacto["identificacion"]
+        if isinstance(principal_contacto, dict)
+        else principal_contacto[0] if principal_contacto else None
+    )
+
+    cur.execute(
+        """
+        UPDATE obligaciones
+        SET deudor_contacto_id=%s,
+            identificacion_deudor=%s
+        WHERE id=%s
+        """,
+        (principal_id, principal_identificacion, int(obligacion_id)),
+    )
+
+
 def vincular_obligacion_a_proceso(
     cur,
     *,
