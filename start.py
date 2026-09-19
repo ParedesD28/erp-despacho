@@ -18,7 +18,6 @@ load_dotenv()
 import agenda_service
 import db
 import main
-import proceso_partes_runtime
 import security
 import schema_preflight
 import sms_cartera_runtime
