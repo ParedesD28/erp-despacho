@@ -8,32 +8,23 @@
 
 BEGIN;
 
--- 1. Cuando hay más de un principal en un mismo proceso/rol,
--- primero se desmarcan todos los principales afectados.
+CREATE TEMP TABLE fase7_principales_afectados
+ON COMMIT DROP
+AS
+SELECT radicado_interno, rol
+FROM proceso_partes
+WHERE es_principal=TRUE
+GROUP BY radicado_interno, rol
+HAVING COUNT(*)>1;
+
 UPDATE proceso_partes pp
 SET es_principal=FALSE
-WHERE pp.es_principal=TRUE
-  AND EXISTS (
-      SELECT 1
-      FROM proceso_partes pp2
-      WHERE pp2.radicado_interno=pp.radicado_interno
-        AND pp2.rol=pp.rol
-        AND pp2.es_principal=TRUE
-      GROUP BY pp2.radicado_interno, pp2.rol
-      HAVING COUNT(*)>1
-  );
+FROM fase7_principales_afectados a
+WHERE a.radicado_interno=pp.radicado_interno
+  AND a.rol=pp.rol
+  AND pp.es_principal=TRUE;
 
--- 2. Se elige un único principal para cada grupo afectado.
--- Para DEMANDANTE: acreedor de la obligación principal.
--- Para DEMANDADO: deudor principal de obligacion_partes de la obligación principal.
--- Si no existe correspondencia económica, se conserva el menor contacto_id
--- como criterio determinista y no se inventa una relación.
-WITH afectados AS (
-    SELECT DISTINCT radicado_interno, rol
-    FROM proceso_partes
-    WHERE es_principal=FALSE
-),
-candidatos AS (
+WITH candidatos AS (
     SELECT
         pp.radicado_interno,
         pp.rol,
@@ -54,7 +45,7 @@ candidatos AS (
                 pp.contacto_id
         ) AS rn
     FROM proceso_partes pp
-    JOIN afectados a
+    JOIN fase7_principales_afectados a
       ON a.radicado_interno=pp.radicado_interno
      AND a.rol=pp.rol
     LEFT JOIN proceso_obligaciones pox
