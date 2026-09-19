@@ -32,6 +32,11 @@
         </div>
 
         <div class="flex flex-col md:flex-row gap-3 w-full lg:w-auto">
+            <select id="filtro-estado" onchange="filtrarTodo()" class="border border-slate-300 rounded-lg px-4 py-2.5 bg-white text-sm font-bold text-slate-700">
+                <option value="ACTIVOS" {% if estado_filtro == 'ACTIVOS' %}selected{% endif %}>Activos</option>
+                <option value="INACTIVOS" {% if estado_filtro == 'INACTIVOS' %}selected{% endif %}>Inactivos</option>
+                <option value="TODOS" {% if estado_filtro == 'TODOS' %}selected{% endif %}>Todos</option>
+            </select>
             <select id="filtro-cartera" onchange="filtrarTodo()" class="border border-slate-300 rounded-lg px-4 py-2.5 bg-white text-sm font-bold text-slate-700">
                 <option value="">Todas las carteras</option>
                 <option value="PREJURIDICO">Prejurídico</option>
@@ -58,9 +63,10 @@
                 </thead>
                 <tbody id="cuerpo-tabla" class="divide-y divide-slate-100">
                 {% for p in procesos %}
-                    <tr onclick="window.location.href='/expediente/{{ p.radicado_interno }}'" class="hover:bg-blue-50 transition-colors fila-proceso cursor-pointer" data-cartera="{{ (p.tipo_cartera or 'JURIDICO')|upper }}">
+                    <tr onclick="window.location.href='/expediente/{{ p.radicado_interno }}'" class="hover:bg-blue-50 transition-colors fila-proceso cursor-pointer {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}bg-rose-50/40{% endif %}" data-cartera="{{ (p.tipo_cartera or 'JURIDICO')|upper }}" data-estado="{{ (p.estado or 'ACTIVO')|upper }}">
                         <td class="px-6 py-4">
                             <div class="font-bold text-blue-600">{{ p.radicado_interno }}</div>
+                            {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}<span class="inline-flex mt-1 items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">Inactivo</span>{% endif %}
                             <div class="text-xs font-mono text-slate-500 mt-1">{{ p.radicado_rama }}</div>
                         </td>
                         <td class="px-6 py-4">
@@ -101,6 +107,7 @@
     const vistaTabla = document.getElementById('vista-tabla');
     const inputPrincipal = document.getElementById('input-principal');
     const inputTabla = document.getElementById('input-tabla');
+    const filtroEstado = document.getElementById('filtro-estado');
     const filtroCartera = document.getElementById('filtro-cartera');
     const filas = document.querySelectorAll('.fila-proceso');
     const mensajeVacio = document.getElementById('mensaje-vacio');
@@ -121,6 +128,7 @@
     function mostrarTodo() {
         inputPrincipal.value = '';
         inputTabla.value = '';
+        filtroEstado.value = 'ACTIVOS';
         filtroCartera.value = '';
         vistaBusqueda.classList.add('hidden');
         vistaTabla.classList.remove('hidden');
@@ -141,15 +149,18 @@
 
     function filtrarTodo() {
         const busqueda = normalizar(inputTabla.value);
+        const estado = (filtroEstado.value || 'ACTIVOS').toUpperCase();
         const cartera = (filtroCartera.value || '').toUpperCase();
         let visibles = 0;
 
         filas.forEach(fila => {
             const contenido = normalizar(fila.textContent);
             const tipo = (fila.dataset.cartera || '').toUpperCase();
+            const estadoFila = (fila.dataset.estado || 'ACTIVO').toUpperCase();
             const coincideTexto = !busqueda || contenido.includes(busqueda);
             const coincideCartera = !cartera || tipo === cartera;
-            const visible = coincideTexto && coincideCartera;
+            const coincideEstado = estado === 'TODOS' || (estado === 'INACTIVOS' ? estadoFila === 'INACTIVO' : estadoFila !== 'INACTIVO');
+            const visible = coincideTexto && coincideCartera && coincideEstado;
             fila.style.display = visible ? '' : 'none';
             if (visible) visibles++;
         });
