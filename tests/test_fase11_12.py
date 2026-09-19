@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 import bot_api
 import sms_router
+import expedientes_service
 from obligacion_saldo_service import _saldo_generico
 
 
@@ -76,6 +77,16 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertEqual(payload.mensajes[0].contacto_id, 7)
         self.assertEqual(payload.tipo_campana, "PREJUDICIAL")
 
+
+
+    def test_row_value_soporta_cursor_dict_y_tupla(self):
+        self.assertEqual(expedientes_service._row_value({"column_name": "tipo_cartera"}, "column_name"), "tipo_cartera")
+        self.assertEqual(expedientes_service._row_value(("tipo_cartera",), 0), "tipo_cartera")
+
+    def test_crm_fuente_devuelve_nombre_demandado(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("AS demandado,", source)
+        self.assertIn("STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre)", source)
 
     def test_bootstrap_no_requiere_modulos_legacy_eliminados(self):
         start_source = (ROOT / "start.py").read_text(encoding="utf-8").lower()
