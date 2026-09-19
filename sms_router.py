@@ -250,8 +250,11 @@ def _candidatos_cartera(
             COALESCE(p.tipo_cartera,'PREJURIDICO') AS tipo_cartera,
             p.radicado_interno
         FROM obligaciones o
+        JOIN obligacion_partes op
+          ON op.obligacion_id=o.id
+         AND op.rol='DEUDOR'
+        JOIN contactos c ON c.id=op.contacto_id
         JOIN inmuebles_ph i ON i.id=o.inmueble_id
-        JOIN contactos c ON c.id=o.deudor_contacto_id
         LEFT JOIN LATERAL (
             SELECT p0.tipo_cartera,p0.radicado_interno
             FROM procesos p0
