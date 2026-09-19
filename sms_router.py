@@ -585,6 +585,194 @@ class ReporteLote(BaseModel):
     reportes: List[ReporteItem] = Field(..., min_items=1, max_items=100)
 
 
+class WizardMensaje(BaseModel):
+    contacto_id: int = Field(..., ge=1)
+    mensaje_texto: str = Field(..., min_length=1, max_length=640)
+
+
+class ConfirmarColaRequest(BaseModel):
+    tipo_campana: str = Field(..., min_length=1, max_length=40)
+    tipo_cartera: str = Field(default="", max_length=20)
+    saldo_minimo: float = Field(default=0, ge=0)
+    saldo_maximo: Optional[float] = Field(default=None, ge=0)
+    mensajes: List[WizardMensaje] = Field(..., min_items=1, max_items=100)
+
+
+@router.post("/wizard/confirmar-cola")
+def confirmar_cola_wizard(data: ConfirmarColaRequest):
+    """Confirma el asistente SMS revalidando candidatos y saldo en servidor."""
+    _ensure_sms_schema()
+
+    tipo_campana = (data.tipo_campana or "").upper().strip()
+    if tipo_campana not in CAMPAÑAS_VALIDAS:
+        raise HTTPException(status_code=422, detail="Tipo de campaña no válido.")
+
+    tipo_cartera = (data.tipo_cartera or "").upper().strip()
+    if tipo_cartera and tipo_cartera not in CARTERAS_VALIDAS:
+        raise HTTPException(status_code=422, detail="Tipo de cartera no válido.")
+    if data.saldo_maximo is not None and data.saldo_maximo < data.saldo_minimo:
+        raise HTTPException(status_code=422, detail="saldo_maximo no puede ser menor que saldo_minimo.")
+
+    # El navegador solo aporta IDs y texto editable. El servidor reconstruye
+    # los candidatos y vuelve a calcular el saldo mediante la fuente única.
+    ids = list(dict.fromkeys(int(item.contacto_id) for item in data.mensajes))
+    if not ids:
+        raise HTTPException(status_code=422, detail="No hay destinatarios para confirmar.")
+
+    conn = db.get_connection()
+    insertados = 0
+    omitidos = []
+
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                candidatos = _candidatos_liquidados(
+                    _candidatos_cartera(
+                        cur,
+                        tipo_cartera=tipo_cartera,
+                        saldo_minimo=0,
+                        saldo_maximo=None,
+                        ids=ids,
+                        conjunto="",
+                    )
+                )
+
+                por_contacto = {}
+                for candidato in candidatos:
+                    por_contacto[int(candidato["contacto_id"])] = dict(candidato)
+
+                cur.execute(
+                    "SELECT cuerpo_template FROM sms_plantillas WHERE tipo=%s LIMIT 1;",
+                    (tipo_campana,),
+                )
+                tpl = cur.fetchone()
+                template = (
+                    tpl["cuerpo_template"]
+                    if tpl
+                    else "{nombre}, registra una deuda de COP {saldo} en {conjunto} {unidad}. WhatsApp: {telefono_wa}"
+                )
+
+                for item in data.mensajes:
+                    contacto_id = int(item.contacto_id)
+                    candidato = por_contacto.get(contacto_id)
+                    if not candidato:
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "Ya no es un candidato válido para la cartera/obligación seleccionada.",
+                        })
+                        continue
+
+                    if not candidato.get("saldo_verificado"):
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El saldo no pudo ser verificado por el motor financiero.",
+                        })
+                        continue
+
+                    saldo = float(candidato.get("saldo_total") or 0)
+                    if saldo < float(data.saldo_minimo or 0):
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El saldo actualizado quedó por debajo del mínimo seleccionado.",
+                        })
+                        continue
+                    if data.saldo_maximo is not None and saldo > float(data.saldo_maximo):
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El saldo actualizado superó el máximo seleccionado.",
+                        })
+                        continue
+
+                    tel = normalizar_telefono(candidato.get("telefono"))
+                    if not tel:
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El teléfono no tiene un formato móvil colombiano válido.",
+                        })
+                        continue
+
+                    mensaje = item.mensaje_texto.strip()
+                    if not mensaje:
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El mensaje no puede quedar vacío.",
+                        })
+                        continue
+
+                    # Política global de 24 h por contacto, independiente de la
+                    # campaña. También bloqueamos duplicados que aún estén en cola.
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM sms_cola_envios
+                        WHERE contacto_id=%s
+                          AND (
+                              estado IN ('PENDIENTE','EN_PROCESO')
+                              OR (
+                                  estado='ENVIADO'
+                                  AND fecha_envio >= NOW() - INTERVAL '24 hours'
+                              )
+                          )
+                        LIMIT 1;
+                        """,
+                        (contacto_id,),
+                    )
+                    if cur.fetchone():
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El contacto ya tiene un SMS en cola/proceso o enviado durante las últimas 24 horas.",
+                        })
+                        continue
+
+                    cur.execute(
+                        """
+                        INSERT INTO sms_cola_envios(
+                            inmueble_id,contacto_id,obligacion_id,identificacion,nombre,
+                            conjunto_residencial,torre_apto,telefono,
+                            saldo_calculado,saldo_fuente,saldo_verificado,
+                            saldo_calculado_en,mensaje_template,mensaje_texto,
+                            tipo_campana,estado
+                        )
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s,%s,%s,%s,'PENDIENTE')
+                        ON CONFLICT(inmueble_id,telefono,tipo_campana)
+                        WHERE estado IN ('PENDIENTE','EN_PROCESO') DO NOTHING
+                        RETURNING id;
+                        """,
+                        (
+                            candidato.get("inmueble_id"),
+                            candidato.get("contacto_id"),
+                            candidato.get("obligacion_id"),
+                            candidato.get("identificacion"),
+                            (candidato.get("nombre") or "Propietario").strip().title(),
+                            (candidato.get("conjunto_residencial") or "Copropiedad").strip(),
+                            (candidato.get("torre_apto") or "").strip(),
+                            tel,
+                            saldo,
+                            candidato.get("saldo_fuente"),
+                            candidato.get("saldo_calculado_en"),
+                            template,
+                            mensaje,
+                            tipo_campana,
+                        ),
+                    )
+                    inserted = cur.fetchone()
+                    if inserted:
+                        insertados += 1
+                    else:
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El mensaje ya estaba en cola para esa cuenta/campaña.",
+                        })
+
+        return JSONResponse({
+            "status": "ok",
+            "insertados": insertados,
+            "omitidos": omitidos,
+        })
+    finally:
+        conn.release()
+
+
 @router.get("")
 @router.get("/")
 def vista_sms(
