@@ -3,12 +3,13 @@
 {% block contenido %}
 <!-- 1. IDENTIFICACIÓN AUTOMÁTICA DEL INMUEBLE -->
 <input type="hidden" name="inmueble_id" value="{{ parametros.inmueble_id }}">
+<input type="hidden" name="obligacion_id" id="obligacion_id_liq" value="{{ parametros.obligacion_id or '' }}">
 
 <div class="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg flex items-center gap-3 mb-6">
     <i data-lucide="check-circle" class="w-6 h-6 text-blue-600"></i>
     <div>
         <p class="text-sm font-bold uppercase tracking-wide">Liquidación Sincronizada</p>
-        <p class="text-xs text-blue-700">Este liquidador está conectado automáticamente al expediente y al deudor (incluyendo codeudores).</p>
+        <p class="text-xs text-blue-700">Liquidación asociada a una obligación PH concreta; el saldo se calcula únicamente sobre sus expensas.</p>
     </div>
 </div>
     
@@ -23,7 +24,7 @@
                 <select name="inmueble_id" id="select_inmueble_liq" required placeholder="🔍 Escribe cédula, nombre o exp..." class="w-full">
                     <option value="">Selecciona un deudor...</option>
                     {% for i in inmuebles %}
-                    <option value="{{ i.id }}" {% if parametros and parametros.inmueble_id|string == i.id|string %}selected{% endif %}>
+                    <option value="{{ i.id }}" data-obligacion-id="{{ i.obligacion_id or '' }}" {% if parametros and parametros.inmueble_id|string == i.id|string %}selected{% endif %}>
                         CC: {{ i.cedula }} | {{ i.nombre }} | Exp: {{ i.expediente }} | {{ i.conjunto_residencial }} {{ i.torre_apto }}
                     </option>
                     {% endfor %}
