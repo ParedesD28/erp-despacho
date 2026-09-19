@@ -53,6 +53,8 @@ import liquidador
 import exportaciones
 import expedientes_service
 import catalogos_service
+import obligaciones_service
+import radicacion_service
 import bot_api
 import agent_supervision
 
@@ -194,21 +196,40 @@ def cargar_inmuebles_ph(conn=None) -> list[dict]:
         cur = conn.cursor()
         cur.execute("""
             SELECT i.id, i.conjunto_residencial, i.torre_apto, c.identificacion, c.nombre,
-                   COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente
+                   COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente,
+                   (
+                       SELECT o.id
+                       FROM obligaciones o
+                       WHERE o.inmueble_id=i.id
+                         AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+                         AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+                       ORDER BY o.id DESC
+                       LIMIT 1
+                   ) AS obligacion_id
             FROM inmuebles_ph i
             JOIN contactos c ON i.contacto_id = c.id
             LEFT JOIN procesos p ON p.inmueble_id = i.id
             UNION
             SELECT i.id, i.conjunto_residencial, i.torre_apto, c.identificacion, c.nombre,
-                   COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente
+                   COALESCE(p.radicado_interno, 'SIN EXPEDIENTE') AS expediente,
+                   (
+                       SELECT o.id
+                       FROM obligaciones o
+                       WHERE o.inmueble_id=i.id
+                         AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+                         AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+                       ORDER BY o.id DESC
+                       LIMIT 1
+                   ) AS obligacion_id
             FROM inmuebles_ph i
             JOIN procesos p ON p.inmueble_id = i.id
-            JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
-            JOIN contactos c ON c.identificacion = pl.identificacion_demandado
+            JOIN proceso_partes pp ON pp.radicado_interno = p.radicado_interno
+                                   AND pp.rol='DEMANDADO'
+            JOIN contactos c ON c.id = pp.contacto_id
             ORDER BY expediente DESC, nombre ASC
         """)
         lista = [
-            {"id": r[0], "conjunto_residencial": r[1], "torre_apto": r[2], "apto": r[2], "cedula": r[3], "nombre": r[4], "expediente": r[5]}
+            {"id": r[0], "conjunto_residencial": r[1], "torre_apto": r[2], "apto": r[2], "cedula": r[3], "nombre": r[4], "expediente": r[5], "obligacion_id": r[6]}
             for r in cur.fetchall()
         ]
         cur.close()
@@ -546,6 +567,7 @@ def procesos(request: Request):
             cur.execute("SELECT id, nombre FROM abogados ORDER BY nombre")
             abogados = [dict(r) for r in cur.fetchall()]
             tipos_proceso = catalogos_service.listar_tipos_proceso(cur, activos=True)
+            tipos_obligacion = catalogos_service.listar_tipos_obligacion(cur, activos=True)
             conjuntos = catalogos_service.listar_conjuntos(cur, activos=True)
         return render_template("procesos.html", {
             "request": request,
@@ -553,6 +575,7 @@ def procesos(request: Request):
             "contactos_contrapartes": contrapartes,
             "abogados": abogados,
             "tipos_proceso": tipos_proceso,
+            "tipos_obligacion": tipos_obligacion,
             "conjuntos": conjuntos,
         })
     finally:
@@ -561,464 +584,117 @@ def procesos(request: Request):
 
 @app.post("/crear_expediente_completo")
 async def crear_expediente_completo(request: Request):
+    """Adaptador HTTP del servicio canónico de radicación."""
     form = await request.form()
-    tipo_proceso_codigo = str(form.get("tipo_proceso") or "").strip().upper()
+
+    naturaleza = str(form.get("naturaleza") or "").strip().upper()
+    tipo_obligacion_codigo = str(form.get("tipo_obligacion") or "").strip().upper()
+    tipo_cartera = str(form.get("tipo_cartera") or "").strip().upper()
+    radicado_rama = str(form.get("radicado_rama") or "").strip().upper()
+
+    abogado_raw = str(form.get("abogado_id") or "").strip()
+    abogado_id = int(abogado_raw) if abogado_raw.isdigit() else None
+    if abogado_id is None:
+        session_user = getattr(request.state, "user_id", None)
+        if str(session_user or "").isdigit():
+            abogado_id = int(session_user)
+
+    medidas = str(form.get("medidas_cautelares") or "").strip()
     conjunto_id_raw = str(form.get("conjunto_id") or "").strip()
     conjunto_nombre = str(form.get("conjunto_residencial") or "").strip()
-    tipo_cartera_form = str(form.get("tipo_cartera") or "").strip().upper()
-    radicado_rama = str(form.get("radicado_rama") or "").strip()
-    naturaleza = str(form.get("naturaleza", "")).strip()
-    juzgado = f"{form.get('juzgado_numero','')} {form.get('juzgado_tipo','')} - {form.get('juzgado_ciudad','')}".strip()
-    apto = str(form.get("apto", "")).strip()
-    pretensiones = str(form.get("pretensiones", "0")).strip() or "0"
-    abogado_id = str(form.get("abogado_id", "")).strip() or str(getattr(request.state, "user_id", "") or "").strip() or None
-    medidas = str(form.get("medidas_cautelares", "")).strip()
+    apto = str(form.get("apto") or "").strip()
+
+    juzgado = None
+    if tipo_cartera == "JURIDICO":
+        numero = str(form.get("juzgado_numero") or "").strip()
+        tipo_juzgado = str(form.get("juzgado_tipo") or "").strip()
+        ciudad_juzgado = str(form.get("juzgado_ciudad") or "").strip()
+        if numero:
+            juzgado = " ".join(
+                x for x in (numero, tipo_juzgado, ciudad_juzgado) if x
+            ).strip() or None
+
+    pretensiones = expedientes_service._parse_money(
+        form.get("pretensiones_general"),
+        default=0,
+    )
+    capital_titulo = expedientes_service._parse_money(
+        form.get("capital_titulo"),
+        default=0,
+    )
+    documento_referencia = str(form.get("documento_referencia") or "").strip()
+    fecha_exigibilidad = str(form.get("fecha_exigibilidad") or "").strip()
 
     def split_values(name, new_id, new_name):
         vals = [x.strip() for x in form.getlist(name) if str(x).strip()]
         ids = [x.strip() for x in form.getlist(new_id) if str(x).strip()]
         names = [x.strip() for x in form.getlist(new_name) if str(x).strip()]
+        if len(ids) != len(names):
+            raise ValueError(
+                "Hay nuevos contactos con identificación y nombre incompletos"
+            )
         return vals, list(zip(ids, names))
 
-    demandantes, nuevos_dem = split_values("demandantes_existentes", "nuevo_dem_id", "nuevo_dem_nombre")
-    demandados, nuevos_ddo = split_values("demandados_existentes", "nuevo_ddo_id", "nuevo_ddo_nombre")
-
-    conn = db.get_connection()
     try:
-        with conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Si el usuario no indica tipo, mantenemos compatibilidad con el flujo
-                # anterior: un expediente con conjunto es PH; sin conjunto queda como OTRO.
-                if not tipo_proceso_codigo:
-                    tipo_proceso_codigo = "CUOTAS_ADMINISTRACION" if (conjunto_id_raw or conjunto_nombre) else "OTRO"
+        demandantes, nuevos_dem = split_values(
+            "demandantes_existentes",
+            "nuevo_dem_id",
+            "nuevo_dem_nombre",
+        )
+        demandados, nuevos_ddo = split_values(
+            "demandados_existentes",
+            "nuevo_ddo_id",
+            "nuevo_ddo_nombre",
+        )
 
-                tipo_proceso = catalogos_service.obtener_tipo_proceso(cur, tipo_proceso_codigo)
-                if not tipo_proceso:
-                    raise ValueError("Tipo de proceso no válido")
-
-                tipo_cartera = tipo_cartera_form or str(tipo_proceso["tipo_cartera_default"]).upper()
-                if tipo_cartera not in {"JURIDICO", "PREJURIDICO"}:
-                    raise ValueError("Tipo de cartera no válido")
-
-                conjunto = None
-                if tipo_proceso["requiere_conjunto"]:
-                    if conjunto_id_raw:
-                        conjunto = catalogos_service.obtener_conjunto(cur, int(conjunto_id_raw))
-                    elif conjunto_nombre:
-                        cur.execute(
-                            """
-                            SELECT id
-                            FROM conjuntos_residenciales
-                            WHERE activo=TRUE AND UPPER(BTRIM(nombre))=UPPER(BTRIM(%s))
-                            LIMIT 1
-                            """,
-                            (conjunto_nombre,),
-                        )
-                        row = cur.fetchone()
-                        if row:
-                            conjunto = catalogos_service.obtener_conjunto(cur, int(row["id"]))
-                    if not conjunto:
-                        raise ValueError("Debes seleccionar un conjunto residencial válido")
-                    if not conjunto.get("contacto_id"):
-                        raise ValueError("El conjunto debe tener configurada su persona jurídica antes de radicar cuotas de administración")
-
-                    # Para cuotas de administración el demandante no se digita:
-                    # sale automáticamente de la persona jurídica del conjunto.
-                    cur.execute(
-                        "SELECT identificacion FROM contactos WHERE id=%s",
-                        (conjunto["contacto_id"],),
-                    )
-                    row = cur.fetchone()
-                    if not row or not row["identificacion"]:
-                        raise ValueError("La persona jurídica del conjunto no tiene identificación configurada")
-                    demandantes = [str(row["identificacion"])]
-
-                if tipo_proceso["requiere_inmueble"] and not apto:
-                    raise ValueError("Debes indicar la torre/apartamento del inmueble")
-
-                if tipo_proceso["requiere_juzgado"] and tipo_cartera == "JURIDICO":
-                    if not juzgado or juzgado.startswith("-"):
-                        raise ValueError("El juzgado es obligatorio para este tipo de proceso jurídico")
-
-                if tipo_proceso["requiere_documento"] and not str(form.get("documento_referencia") or "").strip():
-                    raise ValueError("Debes indicar el número o referencia del documento título")
-
-                for ident, nombre in nuevos_dem:
-                    cur.execute(
-                        """
-                        INSERT INTO contactos (identificacion,nombre,tipo,ciudad)
-                        VALUES (%s,%s,'Cliente','PEREIRA')
-                        ON CONFLICT (identificacion) DO UPDATE SET nombre=EXCLUDED.nombre
-                        """,
-                        (ident, nombre),
-                    )
-                for ident, nombre in nuevos_ddo:
-                    cur.execute(
-                        """
-                        INSERT INTO contactos (identificacion,nombre,tipo,ciudad)
-                        VALUES (%s,%s,'Contraparte','PEREIRA')
-                        ON CONFLICT (identificacion) DO UPDATE SET nombre=EXCLUDED.nombre
-                        """,
-                        (ident, nombre),
-                    )
-
-                demandantes += [x[0] for x in nuevos_dem]
-                demandados += [x[0] for x in nuevos_ddo]
-                if not demandantes or not demandados:
-                    raise ValueError("Debe existir al menos un demandante y un demandado")
-
-                if tipo_cartera == "JURIDICO":
-                    radicado_rama = radicado_rama or "EN REPARTO"
-                elif not radicado_rama or radicado_rama.upper() == "EN REPARTO":
-                    radicado_rama = "PREJURIDICO"
-
-                radicado_interno = _generar_radicado_interno(cur)
-
-                if tipo_cartera == "JURIDICO" and radicado_rama.upper() != "EN REPARTO":
-                    cur.execute(
-                        "SELECT 1 FROM procesos WHERE radicado_rama=%s LIMIT 1",
-                        (radicado_rama,),
-                    )
-                    if cur.fetchone():
-                        raise ValueError("El radicado Rama Judicial ya existe")
-
-                all_ids = list(dict.fromkeys(demandantes + demandados))
-                placeholders = ",".join(["%s"] * len(all_ids))
-                cur.execute(
-                    f"SELECT identificacion,nombre FROM contactos WHERE identificacion IN ({placeholders})",
-                    all_ids,
-                )
-                nombres = {str(r["identificacion"]): str(r["nombre"] or "") for r in cur.fetchall()}
-                faltantes = [ident for ident in all_ids if ident not in nombres]
-                if faltantes:
-                    raise RuntimeError("Hay partes seleccionadas que no existen en Contactos")
-
-                inmueble_id = None
-                if tipo_proceso["requiere_inmueble"]:
-                    conjunto_id = int(conjunto["id"])
-                    cur.execute(
-                        """
-                        SELECT id, contacto_id
-                        FROM inmuebles_ph
-                        WHERE conjunto_id=%s AND torre_apto=%s
-                        LIMIT 1
-                        """,
-                        (conjunto_id, apto),
-                    )
-                    inmueble = cur.fetchone()
-                    if inmueble:
-                        inmueble_id = inmueble["id"]
-                    else:
-                        cur.execute(
-                            """
-                            SELECT id FROM contactos
-                            WHERE identificacion=%s
-                            LIMIT 1
-                            """,
-                            (demandados[0],),
-                        )
-                        ddo = cur.fetchone()
-                        if not ddo:
-                            raise RuntimeError("Demandado no existe")
-                        cur.execute(
-                            """
-                            INSERT INTO inmuebles_ph
-                                (contacto_id,conjunto_residencial,conjunto_id,torre_apto)
-                            VALUES (%s,%s,%s,%s)
-                            RETURNING id
-                            """,
-                            (ddo["id"], conjunto["nombre"], conjunto_id, apto),
-                        )
-                        inmueble_id = cur.fetchone()["id"]
-
-                cols = expedientes_service._cols(cur, "procesos")
-                data = {
-                    "radicado_interno": radicado_interno,
-                    "radicado_rama": radicado_rama,
-                    "tipo_cartera": tipo_cartera,
-                    "tipo_proceso_id": tipo_proceso["id"],
-                    "naturaleza": naturaleza or "EJECUTIVO",
-                    "etapa_actual": "1. Presentación de la demanda",
-                    "juzgado": juzgado if tipo_cartera == "JURIDICO" else "",
-                    "estado": "Activo",
-                    "id_demandado": " | ".join(demandados),
-                    "demandado": " | ".join(nombres.get(x, x) for x in demandados),
-                    "inmueble_id": inmueble_id,
-                    "id_cliente": " | ".join(demandantes),
-                    "demandante": " | ".join(nombres.get(x, x) for x in demandantes),
-                    "pretensiones": pretensiones,
-                    "medidas_cautelares": medidas,
-                    "abogado_id": abogado_id,
-                }
-                usable = [c for c in data if c in cols and data[c] is not None]
-                cur.execute(
-                    f"INSERT INTO procesos ({', '.join(usable)}) VALUES ({', '.join(['%s']*len(usable))})",
-                    [data[c] for c in usable],
-                )
-
-                # Relación canónica de partes: contactos + proceso_partes.
-                if expedientes_service._table_exists(cur, "proceso_partes"):
-                    for idx, ident in enumerate(demandantes):
-                        cur.execute("SELECT id FROM contactos WHERE identificacion=%s LIMIT 1", (ident,))
-                        contacto = cur.fetchone()
-                        if contacto:
-                            cur.execute(
-                                """
-                                INSERT INTO proceso_partes
-                                    (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
-                                VALUES (%s,%s,'DEMANDANTE',%s,CURRENT_TIMESTAMP)
-                                ON CONFLICT (radicado_interno,contacto_id,rol) DO UPDATE
-                                SET es_principal=EXCLUDED.es_principal
-                                """,
-                                (radicado_interno, contacto["id"], idx == 0),
-                            )
-                    for idx, ident in enumerate(demandados):
-                        cur.execute("SELECT id FROM contactos WHERE identificacion=%s LIMIT 1", (ident,))
-                        contacto = cur.fetchone()
-                        if contacto:
-                            cur.execute(
-                                """
-                                INSERT INTO proceso_partes
-                                    (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
-                                VALUES (%s,%s,'DEMANDADO',%s,CURRENT_TIMESTAMP)
-                                ON CONFLICT (radicado_interno,contacto_id,rol) DO UPDATE
-                                SET es_principal=EXCLUDED.es_principal
-                                """,
-                                (radicado_interno, contacto["id"], idx == 0),
-                            )
-
-                if tipo_proceso["fuente_saldo"] == "OBLIGACION":
-                    documento_referencia = str(form.get("documento_referencia") or "").strip()
-                    cur.execute(
-                        """
-                        INSERT INTO obligaciones
-                            (identificacion_deudor,tipo_titulo,numero_documento,capital,fecha_exigibilidad,estado,proceso_id,tipo_proceso_id)
-                        VALUES (%s,%s,%s,%s,NULLIF(%s,''),'En Mora',%s,%s)
-                        """,
-                        (
-                            demandados[0],
-                            tipo_proceso["codigo"],
-                            documento_referencia,
-                            pretensiones,
-                            str(form.get("fecha_exigibilidad") or "").strip(),
-                            radicado_interno,
-                            tipo_proceso["id"],
-                        ),
-                    )
-
-                if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
-                    lit_cols = expedientes_service._cols(cur, "procesos_litisconsorcio")
-                    for ident in demandados:
-                        payload = {"radicado_interno": radicado_interno, "identificacion_demandado": ident}
-                        use = [c for c in payload if c in lit_cols]
-                        cur.execute(
-                            f"INSERT INTO procesos_litisconsorcio ({', '.join(use)}) VALUES ({', '.join(['%s']*len(use))})",
-                            [payload[c] for c in use],
-                        )
-
-                if expedientes_service._table_exists(cur, "actuaciones") and tipo_cartera == "JURIDICO":
-                    act_cols = expedientes_service._cols(cur, "actuaciones")
-                    payload = {
-                        "radicado_interno": radicado_interno,
-                        "fecha": date.today(),
-                        "etapa": "Inicio",
-                        "descripcion": "Presentación inicial de la demanda",
-                        "usuario": "Sistema",
-                        "tipificacion_sugerida": "Radicación",
-                    }
-                    use = [c for c in payload if c in act_cols]
-                    cur.execute(
-                        f"INSERT INTO actuaciones ({', '.join(use)}) VALUES ({', '.join(['%s']*len(use))})",
-                        [payload[c] for c in use],
-                    )
-
-                print(
-                    f"[RADICACION] ID interno={radicado_interno} | "
-                    f"tipo_proceso={tipo_proceso['codigo']} | "
-                    f"radicado_rama={radicado_rama} | tipo_cartera={tipo_cartera}",
-                    flush=True,
-                )
-
-        return _redirect("/expedientes", mensaje="Proceso+creado+exitosamente")
+        resultado = radicacion_service.radicar_proceso(
+            naturaleza=naturaleza,
+            tipo_obligacion_codigo=tipo_obligacion_codigo,
+            tipo_cartera=tipo_cartera,
+            radicado_rama=radicado_rama,
+            juzgado=juzgado,
+            apto=apto,
+            conjunto_id_raw=conjunto_id_raw,
+            conjunto_nombre=conjunto_nombre,
+            abogado_id=abogado_id,
+            medidas=medidas,
+            pretensiones=pretensiones,
+            capital_titulo=capital_titulo,
+            documento_referencia=documento_referencia,
+            fecha_exigibilidad=fecha_exigibilidad,
+            demandantes=demandantes,
+            nuevos_dem=nuevos_dem,
+            demandados=demandados,
+            nuevos_ddo=nuevos_ddo,
+        )
+        print(
+            f"[RADICACION] Proceso={resultado['radicado_interno']} | "
+            f"Obligación={resultado['obligacion_id'] or 'NINGUNA'} | "
+            f"Procedimiento={resultado['naturaleza']} | "
+            f"Cartera={resultado['tipo_cartera']} | "
+            f"Rama={resultado['estado_rama']}",
+            flush=True,
+        )
+        return _redirect("/expedientes", mensaje="Proceso+radicado+exitosamente")
+    except ValueError as exc:
+        print(f"[PROCESOS] Validación en radicación: {exc!r}", flush=True)
+        return _redirect("/procesos", error="Datos+de+radicación+no+válidos")
     except Exception as exc:
         print(f"[PROCESOS] Error creando expediente: {exc!r}", flush=True)
-        return _redirect("/procesos", error=str(exc).replace(" ", "+"))
-    finally:
-        conn.release()
+        return _redirect("/procesos", error="No+fue+posible+radicar+el+proceso")
 
 
 @app.post("/crear_proceso_cascada")
-async def crear_proceso_cascada(
-    request: Request,
-    radicado_interno: str = Form(...),
-    radicado_rama: str = Form(...),
-    naturaleza: str = Form(...),
-    juzgado: str = Form(...),
-    demandante_nombre: str = Form(...),
-    demandante_cedula: str = Form(...),
-    demandado_cedulas: str = Form(...),
-    demandado_nombres: str = Form(...),
-    conjunto_residencial: str = Form(...),
-    nomenclatura_apto: str = Form(...),
-):
-    """Ruta heredada: conserva la firma, pero alimenta las relaciones canónicas."""
-    radicado_interno = radicado_interno.strip()
-    cedulas_list = [c.strip() for c in demandado_cedulas.split("|") if c.strip()]
-    nombres_list = [n.strip() for n in demandado_nombres.split("|") if n.strip()]
+async def crear_proceso_cascada_compat(request: Request):
+    """Compatibilidad explícita: la creación legacy ya no escribe procesos.
 
-    if not radicado_interno or not cedulas_list or len(cedulas_list) != len(nombres_list):
-        return RedirectResponse(url="/expedientes?error=Datos+de+demandados+invalidos", status_code=303)
-    if any(not re.match(r"^\d{6,15}$", c) for c in cedulas_list):
-        return RedirectResponse(url="/expedientes?error=Identificacion+invalida", status_code=303)
-
-    conn = db.get_connection()
-    try:
-        with conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT 1 FROM procesos WHERE radicado_interno=%s LIMIT 1", (radicado_interno,))
-                if cur.fetchone():
-                    return RedirectResponse(url="/expedientes?error=El+radicado+ya+existe", status_code=303)
-
-                cur.execute(
-                    """
-                    SELECT id, contacto_id, nombre
-                    FROM conjuntos_residenciales
-                    WHERE lower(trim(nombre))=lower(trim(%s))
-                    LIMIT 1
-                    """,
-                    (conjunto_residencial,),
-                )
-                conjunto = cur.fetchone()
-                if not conjunto:
-                    raise ValueError("El conjunto residencial no existe en el catálogo")
-
-                conjunto_id = conjunto["id"]
-
-                # Demandante.
-                cur.execute(
-                    """
-                    INSERT INTO contactos (identificacion,nombre,tipo,ciudad)
-                    VALUES (%s,%s,'Cliente','PEREIRA')
-                    ON CONFLICT (identificacion)
-                    DO UPDATE SET nombre=EXCLUDED.nombre
-                    RETURNING id
-                    """,
-                    (demandante_cedula.strip(), demandante_nombre.strip()),
-                )
-                demandante_contacto_id = cur.fetchone()["id"]
-
-                # Demandados.
-                demandado_contactos = []
-                for cedula, nombre in zip(cedulas_list, nombres_list):
-                    cur.execute(
-                        """
-                        INSERT INTO contactos (identificacion,nombre,tipo,ciudad)
-                        VALUES (%s,%s,'Contraparte','PEREIRA')
-                        ON CONFLICT (identificacion)
-                        DO UPDATE SET nombre=EXCLUDED.nombre
-                        RETURNING id
-                        """,
-                        (cedula, nombre),
-                    )
-                    demandado_contactos.append(cur.fetchone()["id"])
-
-                # Inmueble con conjunto_id obligatorio.
-                cur.execute(
-                    """
-                    SELECT id, contacto_id
-                    FROM inmuebles_ph
-                    WHERE conjunto_id=%s AND torre_apto=%s
-                    LIMIT 1
-                    """,
-                    (conjunto_id, nomenclatura_apto.strip()),
-                )
-                inmueble = cur.fetchone()
-                if inmueble:
-                    inmueble_id = inmueble["id"]
-                else:
-                    cur.execute(
-                        """
-                        INSERT INTO inmuebles_ph
-                            (contacto_id,conjunto_residencial,conjunto_id,torre_apto)
-                        VALUES (%s,%s,%s,%s)
-                        RETURNING id
-                        """,
-                        (demandado_contactos[0], conjunto["nombre"], conjunto_id, nomenclatura_apto.strip()),
-                    )
-                    inmueble_id = cur.fetchone()["id"]
-
-                naturaleza_norm = "VERBAL" if "VERBAL" in naturaleza.upper() else "EJECUTIVO"
-                tipo_cartera = "PREJURIDICO" if "PREJURIDICO" in naturaleza.upper() else "JURIDICO"
-
-                cur.execute(
-                    """
-                    INSERT INTO procesos
-                        (radicado_interno,radicado_rama,naturaleza,juzgado,estado,
-                         id_demandado,demandado,inmueble_id,id_cliente,tipo_cartera)
-                    VALUES (%s,%s,%s,%s,'Activo',%s,%s,%s,%s,%s)
-                    """,
-                    (
-                        radicado_interno,
-                        radicado_rama.strip() or ("EN REPARTO" if tipo_cartera=="JURIDICO" else "PREJURIDICO"),
-                        naturaleza_norm,
-                        juzgado.strip(),
-                        " | ".join(cedulas_list),
-                        " | ".join(nombres_list),
-                        inmueble_id,
-                        demandante_cedula.strip(),
-                        tipo_cartera,
-                    ),
-                )
-
-                # Fuente canónica de partes.
-                cur.execute(
-                    """
-                    INSERT INTO proceso_partes
-                        (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
-                    VALUES (%s,%s,'DEMANDANTE',TRUE,CURRENT_TIMESTAMP)
-                    ON CONFLICT (radicado_interno,contacto_id,rol) DO NOTHING
-                    """,
-                    (radicado_interno, demandante_contacto_id),
-                )
-                for idx, contacto_id in enumerate(demandado_contactos):
-                    cur.execute(
-                        """
-                        INSERT INTO proceso_partes
-                            (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
-                        VALUES (%s,%s,'DEMANDADO',%s,CURRENT_TIMESTAMP)
-                        ON CONFLICT (radicado_interno,contacto_id,rol) DO NOTHING
-                        """,
-                        (radicado_interno, contacto_id, idx == 0),
-                    )
-
-                if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
-                    for idx, ident in enumerate(cedulas_list):
-                        cur.execute(
-                            """
-                            INSERT INTO procesos_litisconsorcio
-                                (radicado_interno,identificacion_demandado,es_principal,fecha_vinculacion)
-                            VALUES (%s,%s,%s,CURRENT_TIMESTAMP)
-                            ON CONFLICT (radicado_interno,identificacion_demandado) DO NOTHING
-                            """,
-                            (radicado_interno, ident, idx == 0),
-                        )
-
-                if expedientes_service._table_exists(cur, "actuaciones") and tipo_cartera == "JURIDICO":
-                    cur.execute(
-                        """
-                        INSERT INTO actuaciones
-                            (radicado_interno,fecha,etapa,descripcion,usuario,tipificacion_sugerida)
-                        VALUES (%s,CURRENT_DATE,'Inicio','Presentación inicial de la demanda','Sistema','Radicación')
-                        """,
-                        (radicado_interno,),
-                    )
-
-        return RedirectResponse(url="/expedientes?mensaje=Proceso+creado+exitosamente", status_code=303)
-    except Exception as e:
-        print(f"[CASCADA] Error en la creación: {e}", flush=True)
-        return RedirectResponse(url="/expedientes?error=Fallo+la+creacion", status_code=303)
-    finally:
-        conn.release()
+    Toda nueva radicación debe pasar por /crear_expediente_completo, que aplica
+    el modelo canónico Proceso + Obligación en una sola transacción.
+    """
+    return _redirect(
+        "/procesos",
+        error="La+ruta+legacy+está+deshabilitada.+Use+Radicar+proceso.",
+    )
 
 
 # ==============================================================================
@@ -1047,10 +723,34 @@ def detalle_expediente(request: Request, radicado: str):
                 actuaciones = expedientes_service._get_actuaciones(cur, radicado)
                 contactos_opts = expedientes_service._contact_options(cur)
                 abogados_opts = expedientes_service._get_abogados(cur)
+                obligaciones = obligaciones_service.obtener_obligaciones_proceso(cur, radicado)
+                obligacion_principal = obligaciones[0] if obligaciones else None
                 ids = [x.get("identificacion") for x in demandantes + demandados]
-                acuerdos = expedientes_service._get_crm_agreements(cur, proceso.get("inmueble_id"), ids)
+                acuerdos = expedientes_service._get_crm_agreements(
+                    cur,
+                    proceso.get("inmueble_id"),
+                    ids,
+                    obligacion_principal.get("id") if obligacion_principal else None,
+                )
                 audit = expedientes_service._audit(cur, radicado)
-                return render_template("detalle_expediente_v4.html", {"request": request, "proceso": proceso, "demandantes": demandantes, "demandados": demandados, "contactos": contactos_opts, "abogados": abogados_opts, "actuaciones": actuaciones, "acuerdos_crm": acuerdos, "audit_ediciones": audit, "demandante_ids": {str(x.get("identificacion")) for x in demandantes if x.get("identificacion")}, "demandado_ids": {str(x.get("identificacion")) for x in demandados if x.get("identificacion")}})
+                return render_template(
+                    "detalle_expediente_v4.html",
+                    {
+                        "request": request,
+                        "proceso": proceso,
+                        "demandantes": demandantes,
+                        "demandados": demandados,
+                        "obligaciones": obligaciones,
+                        "obligacion_principal": obligacion_principal,
+                        "contactos": contactos_opts,
+                        "abogados": abogados_opts,
+                        "actuaciones": actuaciones,
+                        "acuerdos_crm": acuerdos,
+                        "audit_ediciones": audit,
+                        "demandante_ids": {str(x.get("identificacion")) for x in demandantes if x.get("identificacion")},
+                        "demandado_ids": {str(x.get("identificacion")) for x in demandados if x.get("identificacion")},
+                    },
+                )
     finally:
         conn.release()
 
@@ -1084,13 +784,19 @@ async def guardar_expediente_estructurado(request: Request):
                 all_ids = list(dict.fromkeys(demandante_ids + demandado_ids))
                 placeholders = ",".join(["%s"] * len(all_ids))
                 cur.execute(
-                    f"SELECT identificacion, nombre FROM contactos WHERE identificacion IN ({placeholders})",
+                    f"SELECT id, identificacion, nombre FROM contactos WHERE identificacion IN ({placeholders})",
                     all_ids,
                 )
-                contacts = {str(r["identificacion"]): r["nombre"] for r in cur.fetchall()}
+                contact_rows = [dict(r) for r in cur.fetchall()]
+                contacts = {str(r["identificacion"]): r["nombre"] for r in contact_rows}
+                contact_records = {str(r["identificacion"]): r for r in contact_rows}
                 missing = [x for x in all_ids if x not in contacts]
                 if missing:
                     raise ValueError("Hay una parte seleccionada que no existe en Contactos")
+                if set(demandante_ids) & set(demandado_ids):
+                    raise ValueError(
+                        "Una misma persona no puede ser demandante y demandado en el mismo proceso"
+                    )
 
                 before = {
                     "proceso": jsonable_encoder(proceso),
@@ -1098,24 +804,83 @@ async def guardar_expediente_estructurado(request: Request):
                     "demandados": [dict(x) for x in expedientes_service._get_demandados(cur, radicado)],
                 }
 
-                tipo_cartera_form = str(form.get("tipo_cartera") or proceso.get("tipo_cartera") or "JURIDICO").strip().upper()
-                rama = str(form.get("radicado_rama") or "").strip()
-                if tipo_cartera_form == "JURIDICO" and not rama:
-                    rama = "EN REPARTO"
-                if tipo_cartera_form != "JURIDICO" and not rama:
-                    rama = proceso.get("radicado_rama") or None
-                if "radicado_rama" in cols and rama and rama.upper() != "EN REPARTO":
+                tipo_cartera_form = str(
+                    form.get("tipo_cartera") or proceso.get("tipo_cartera") or "JURIDICO"
+                ).strip().upper()
+                if tipo_cartera_form not in {"JURIDICO", "PREJURIDICO"}:
+                    raise ValueError("Tipo de cartera no válido")
+
+                naturaleza = str(form.get("naturaleza") or "").strip().upper()
+                if naturaleza not in {"EJECUTIVO", "VERBAL"}:
+                    raise ValueError("La naturaleza debe ser EJECUTIVO o VERBAL")
+                if naturaleza == "VERBAL" and tipo_cartera_form == "PREJURIDICO":
+                    raise ValueError("Un proceso VERBAL no puede quedar PREJURÍDICO")
+
+                obligaciones_actuales = obligaciones_service.obtener_obligaciones_proceso(
+                    cur,
+                    radicado,
+                )
+                if naturaleza == "EJECUTIVO" and not obligaciones_actuales:
+                    raise ValueError(
+                        "Un proceso ejecutivo debe tener al menos una obligación financiera vinculada"
+                    )
+                if naturaleza == "VERBAL" and obligaciones_actuales:
+                    raise ValueError(
+                        "No se puede convertir a VERBAL un proceso que ya tiene obligaciones financieras vinculadas"
+                    )
+
+                principal_demandante_id = demandante_ids[0]
+                if obligaciones_actuales:
+                    principal_obligacion = obligaciones_actuales[0]
+                    if principal_obligacion.get("tipo_obligacion_codigo") == "CUOTAS_ADMINISTRACION":
+                        acreedor_id = principal_obligacion.get("acreedor_contacto_id")
+                        cur.execute(
+                            "SELECT identificacion FROM contactos WHERE id=%s LIMIT 1",
+                            (acreedor_id,),
+                        )
+                        acreedor_row = cur.fetchone()
+                        acreedor_ident = (
+                            acreedor_row["identificacion"]
+                            if isinstance(acreedor_row, dict) and acreedor_row
+                            else acreedor_row[0] if acreedor_row else None
+                        )
+                        if not acreedor_ident or acreedor_ident not in demandante_ids:
+                            raise ValueError(
+                                "La persona jurídica acreedora del conjunto debe permanecer como demandante"
+                            )
+                        principal_demandante_id = str(acreedor_ident)
+
+                tipo_proceso_editado = catalogos_service.obtener_tipo_proceso(
+                    cur,
+                    naturaleza,
+                )
+                if not tipo_proceso_editado:
+                    raise ValueError("El procedimiento seleccionado no está configurado")
+
+                rama_form = str(form.get("radicado_rama") or "").strip().upper()
+                if rama_form in {"EN REPARTO", "PREJURIDICO", "PRE-JURIDICO"}:
+                    rama_form = ""
+
+                if tipo_cartera_form == "PREJURIDICO":
+                    rama = None
+                    estado_rama = "NO_APLICA"
+                    juzgado = None
+                else:
+                    rama = rama_form or None
+                    estado_rama = "ASIGNADO" if rama else "PENDIENTE_REPARTO"
+                    juzgado = str(form.get("juzgado") or "").strip() or None
+                    if rama and not juzgado:
+                        raise ValueError(
+                            "Cuando existe radicado Rama debe existir juzgado de conocimiento"
+                        )
+
+                if "radicado_rama" in cols and rama:
                     cur.execute(
                         "SELECT 1 FROM procesos WHERE radicado_rama=%s AND radicado_interno<>%s LIMIT 1",
                         (rama, radicado),
                     )
                     if cur.fetchone():
                         raise ValueError("El radicado Rama ya pertenece a otro expediente")
-
-                naturaleza = str(form.get("naturaleza") or "").strip()
-                juzgado = str(form.get("juzgado") or "").strip()
-                if not naturaleza:
-                    raise ValueError("La naturaleza es obligatoria")
 
                 if "pretensiones" in form:
                     pretensiones = expedientes_service._parse_money(form.get("pretensiones"))
@@ -1124,25 +889,22 @@ async def guardar_expediente_estructurado(request: Request):
 
                 editable = {
                     "radicado_rama": rama,
+                    "estado_rama": estado_rama,
                     "tipo_cartera": tipo_cartera_form,
+                    "tipo_proceso_id": tipo_proceso_editado["id"],
                     "naturaleza": naturaleza,
                     "juzgado": juzgado,
                     "pretensiones": pretensiones,
                 }
+                if "estado_rama" in cols:
+                    editable["estado_rama"] = estado_rama
+                if "etapa_actual" in cols and tipo_cartera_form == "PREJURIDICO":
+                    editable["etapa_actual"] = None
                 if "medidas_cautelares" in cols:
                     editable["medidas_cautelares"] = "\n".join(medidas)
                 if "abogado_id" in cols:
                     abogado = str(form.get("abogado_id") or "").strip()
                     editable["abogado_id"] = int(abogado) if abogado.isdigit() else None
-                if "id_cliente" in cols:
-                    editable["id_cliente"] = " | ".join(demandante_ids)
-                if "demandante" in cols:
-                    editable["demandante"] = " | ".join(contacts[x] for x in demandante_ids)
-                if "id_demandado" in cols:
-                    editable["id_demandado"] = " | ".join(demandado_ids)
-                if "demandado" in cols:
-                    editable["demandado"] = " | ".join(contacts[x] for x in demandado_ids)
-
                 usable = [k for k in editable if k in cols and k != "radicado_interno"]
                 if usable:
                     cur.execute(
@@ -1150,15 +912,58 @@ async def guardar_expediente_estructurado(request: Request):
                         [editable[k] for k in usable] + [radicado],
                     )
 
-                if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
-                    lcols = expedientes_service._cols(cur, "procesos_litisconsorcio")
-                    if "radicado_interno" in lcols and "identificacion_demandado" in lcols:
-                        cur.execute("DELETE FROM procesos_litisconsorcio WHERE radicado_interno=%s", (radicado,))
-                        for ident in demandado_ids:
+                # Fuente canónica de partes: reconstruir proceso_partes según la edición.
+                if expedientes_service._table_exists(cur, "proceso_partes"):
+                    cur.execute(
+                        "DELETE FROM proceso_partes WHERE radicado_interno=%s",
+                        (radicado,),
+                    )
+                    for idx, ident in enumerate(demandante_ids):
+                        cur.execute(
+                            """
+                            SELECT id FROM contactos
+                            WHERE identificacion=%s
+                            LIMIT 1
+                            """,
+                            (ident,),
+                        )
+                        contacto = cur.fetchone()
+                        if contacto:
                             cur.execute(
-                                "INSERT INTO procesos_litisconsorcio (radicado_interno,identificacion_demandado) VALUES (%s,%s)",
-                                (radicado, ident),
+                                """
+                                INSERT INTO proceso_partes
+                                    (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
+                                VALUES (%s,%s,'DEMANDANTE',%s,CURRENT_TIMESTAMP)
+                                """,
+                                (radicado, contacto["id"], ident == principal_demandante_id),
                             )
+
+                    for idx, ident in enumerate(demandado_ids):
+                        cur.execute(
+                            """
+                            SELECT id FROM contactos
+                            WHERE identificacion=%s
+                            LIMIT 1
+                            """,
+                            (ident,),
+                        )
+                        contacto = cur.fetchone()
+                        if contacto:
+                            cur.execute(
+                                """
+                                INSERT INTO proceso_partes
+                                    (radicado_interno,contacto_id,rol,es_principal,fecha_vinculacion)
+                                VALUES (%s,%s,'DEMANDADO',%s,CURRENT_TIMESTAMP)
+                                """,
+                                (radicado, contacto["id"], idx == 0),
+                            )
+
+                if obligaciones_actuales:
+                    obligaciones_service.sincronizar_deudores_obligacion(
+                        cur,
+                        obligacion_id=int(obligaciones_actuales[0]["id"]),
+                        contactos_deudores=[contact_records[x] for x in demandado_ids],
+                    )
 
                 expedientes_service._ensure_audit_table(cur)
                 after_process = expedientes_service._get_process(cur, radicado)
@@ -1240,80 +1045,46 @@ def eliminar_actuacion(actuacion_id: int, radicado_interno: str):
 # CRM (GESTIÓN EXTRAJUDICIAL Y ANULACIÓN AUDITABLE)
 # ==============================================================================
 def _ensure_crm_and_vencimientos_schema():
+    """Compatibilidad histórica: verifica estructura CRM/agenda en solo lectura."""
     conn = db.get_connection()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS gestiones_crm (
-                        id BIGSERIAL PRIMARY KEY,
-                        inmueble_id INTEGER,
-                        identificacion_deudor TEXT,
-                        tipo_contacto TEXT,
-                        resumen TEXT NOT NULL,
-                        promesa_pago_fecha DATE,
-                        fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        usuario TEXT NOT NULL DEFAULT 'ERP',
-                        anulado BOOLEAN NOT NULL DEFAULT FALSE,
-                        estado TEXT NOT NULL DEFAULT 'ACTIVO'
+        with conn.cursor() as cur:
+            required = {
+                "gestiones_crm": {
+                    "radicado_interno", "inmueble_id", "obligacion_id",
+                    "identificacion_deudor", "resumen", "fecha", "usuario",
+                    "anulado", "estado",
+                },
+                "vencimientos": {
+                    "radicado_interno", "titulo", "fecha_vencimiento",
+                    "completado", "tipo", "valor", "inmueble_id",
+                    "anulado", "categoria", "abogado_id", "obligacion_id",
+                },
+                "acuerdos_pago": {
+                    "id", "inmueble_id", "obligacion_id",
+                    "identificacion_deudor", "valor_acordado",
+                    "fecha_compromiso", "estado",
+                },
+            }
+            for table, expected in required.items():
+                cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name=%s
+                    """,
+                    (table,),
+                )
+                actual = {str(row[0]) for row in cur.fetchall()}
+                if not actual:
+                    raise RuntimeError(f"Falta tabla requerida: {table}")
+                missing = sorted(expected - actual)
+                if missing:
+                    raise RuntimeError(
+                        f"Faltan columnas en {table}: {', '.join(missing)}"
                     )
-                """)
-                cur.execute("ALTER TABLE gestiones_crm ALTER COLUMN inmueble_id DROP NOT NULL")
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS vencimientos (
-                        id BIGSERIAL PRIMARY KEY,
-                        radicado_interno TEXT NOT NULL,
-                        titulo TEXT NOT NULL,
-                        fecha_vencimiento DATE NOT NULL,
-                        observaciones TEXT,
-                        completado BOOLEAN NOT NULL DEFAULT FALSE,
-                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS completado BOOLEAN NOT NULL DEFAULT FALSE")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'PROCESAL'")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS valor NUMERIC(14,2) DEFAULT 0")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS inmueble_id INTEGER")
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS acuerdos_pago (
-                        id BIGSERIAL PRIMARY KEY,
-                        inmueble_id INTEGER,
-                        identificacion_deudor TEXT NOT NULL,
-                        nombre_deudor TEXT,
-                        telefono TEXT,
-                        valor_acordado NUMERIC(14,2) NOT NULL DEFAULT 0,
-                        numero_cuotas INTEGER NOT NULL DEFAULT 1,
-                        cuota_actual INTEGER NOT NULL DEFAULT 1,
-                        fecha_compromiso DATE NOT NULL,
-                        estado TEXT NOT NULL DEFAULT 'PENDIENTE',
-                        origen TEXT NOT NULL DEFAULT 'ROBOT_IA',
-                        observaciones TEXT,
-                        recordatorio_previo_enviado BOOLEAN NOT NULL DEFAULT FALSE,
-                        recordatorio_dia_enviado BOOLEAN NOT NULL DEFAULT FALSE,
-                        recordatorio_mora_enviado BOOLEAN NOT NULL DEFAULT FALSE,
-                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_vencimientos_fecha ON vencimientos (fecha_vencimiento, completado)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_gestiones_crm_inmueble ON gestiones_crm (inmueble_id, fecha DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_gestiones_crm_identificacion ON gestiones_crm (identificacion_deudor, fecha DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_fecha ON acuerdos_pago (fecha_compromiso, estado)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_deudor ON acuerdos_pago (identificacion_deudor)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_inmueble ON acuerdos_pago (inmueble_id)")
-    except Exception as exc:
-        print(f"[SCHEMA] Error asegurando tablas auxiliares: {exc!r}", flush=True)
     finally:
         conn.release()
-
-
-@app.on_event("startup")
-def startup_schema_init():
-    """Garantiza la creación y actualización de tablas e índices en Neon automáticamente al iniciar."""
-    print("[STARTUP] Verificando y asegurando esquema de base de datos...", flush=True)
-    _ensure_crm_and_vencimientos_schema()
-    print("[STARTUP] Esquema verificado y asegurado correctamente.", flush=True)
 
 
 @app.get("/crm")
@@ -1385,14 +1156,33 @@ def crm(
                         p.estado,
                         p.pretensiones,
                         p.inmueble_id,
-                        p.id_demandado,
-                        p.demandado,
+                        COALESCE(ppddo.identificaciones, '') AS identificaciones_demandado,
+                        pob.obligacion_id,
                         i.conjunto_residencial,
                         i.torre_apto
                     FROM procesos p
                     LEFT JOIN inmuebles_ph i ON i.id=p.inmueble_id
-                    WHERE %s = ANY(
-                        string_to_array(replace(COALESCE(p.id_cliente,''), ' ', ''), '|')
+                    LEFT JOIN LATERAL (
+                        SELECT po.obligacion_id
+                        FROM proceso_obligaciones po
+                        WHERE po.radicado_interno=p.radicado_interno
+                        ORDER BY po.es_principal DESC,po.id
+                        LIMIT 1
+                    ) pob ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT STRING_AGG(DISTINCT c.identificacion, '|' ORDER BY c.identificacion) AS identificaciones
+                        FROM proceso_partes pp
+                        JOIN contactos c ON c.id=pp.contacto_id
+                        WHERE pp.radicado_interno=p.radicado_interno
+                          AND UPPER(pp.rol)='DEMANDADO'
+                    ) ppddo ON TRUE
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM proceso_partes pp
+                        JOIN contactos c ON c.id=pp.contacto_id
+                        WHERE pp.radicado_interno=p.radicado_interno
+                          AND UPPER(pp.rol)='DEMANDANTE'
+                          AND c.identificacion=%s
                     )
                     ORDER BY p.radicado_interno DESC
                     """,
@@ -1425,6 +1215,9 @@ def crm(
                 if expedientes_service._table_exists(cur, "gestiones_crm"):
                     condiciones = ["radicado_interno=%s"]
                     params = [cuenta_actual["radicado_interno"]]
+                    if cuenta_actual.get("obligacion_id"):
+                        condiciones.append("obligacion_id=%s")
+                        params.append(int(cuenta_actual["obligacion_id"]))
                     if inmueble_id:
                         condiciones.append("(radicado_interno IS NULL AND inmueble_id=%s)")
                         params.append(int(inmueble_id))
@@ -1448,8 +1241,8 @@ def crm(
                 if expedientes_service._table_exists(cur, "gestiones_cartera"):
                     ids_deudores = [
                         str(x).strip()
-                        for x in str(cuenta_actual.get("id_demandado") or "").split("|")
-                        if str(x).strip().isdigit()
+                        for x in str(cuenta_actual.get("identificaciones_demandado") or "").split("|")
+                        if str(x).strip()
                     ]
                     if ids_deudores:
                         cur.execute(
@@ -1514,6 +1307,7 @@ def crm_guardar(
     request: Request,
     radicado_interno: str | None = Form(None),
     inmueble_id: int | None = Form(None),
+    obligacion_id: int | None = Form(None),
     tipo_contacto: str = Form(...),
     resumen: str = Form(...),
     promesa_pago_fecha: date | None = Form(None),
@@ -1523,27 +1317,92 @@ def crm_guardar(
     try:
         with conn:
             with conn.cursor() as cur:
+                radicado = str(radicado_interno or "").strip() or None
+                ident = str(identificacion_deudor or "").strip() or None
+
+                if not obligacion_id and radicado:
+                    cur.execute(
+                        """
+                        SELECT po.obligacion_id
+                        FROM proceso_obligaciones po
+                        WHERE po.radicado_interno=%s
+                        ORDER BY po.es_principal DESC,po.id
+                        LIMIT 1
+                        """,
+                        (radicado,),
+                    )
+                    row_ob = cur.fetchone()
+                    if row_ob:
+                        obligacion_id = int(row_ob["obligacion_id"])
+
+                if obligacion_id:
+                    cur.execute(
+                        """
+                        SELECT o.id,o.inmueble_id
+                        FROM obligaciones o
+                        WHERE o.id=%s
+                        LIMIT 1
+                        """,
+                        (int(obligacion_id),),
+                    )
+                    ob = cur.fetchone()
+                    if not ob:
+                        raise ValueError("La obligación indicada no existe.")
+                    if radicado:
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM proceso_obligaciones
+                            WHERE obligacion_id=%s AND radicado_interno=%s
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id),radicado),
+                        )
+                        if not cur.fetchone():
+                            raise ValueError("La obligación no pertenece al expediente indicado.")
+                    if inmueble_id is None and ob["inmueble_id"] is not None:
+                        inmueble_id = int(ob["inmueble_id"])
+
+                    if ident:
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM obligacion_partes op
+                            JOIN contactos c ON c.id=op.contacto_id
+                            WHERE op.obligacion_id=%s
+                              AND op.rol='DEUDOR'
+                              AND REGEXP_REPLACE(COALESCE(c.identificacion::text,''),'[^0-9]','','g')
+                                  = REGEXP_REPLACE(%s,'[^0-9]','','g')
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id),ident),
+                        )
+                        if not cur.fetchone():
+                            raise ValueError("La identificación no pertenece a un deudor de la obligación.")
+
                 cur.execute(
                     """
                     INSERT INTO gestiones_crm
                         (
                             radicado_interno,
                             inmueble_id,
+                            obligacion_id,
                             tipo_contacto,
                             resumen,
                             promesa_pago_fecha,
                             identificacion_deudor,
                             usuario
                         )
-                    VALUES (%s, %s, %s, %s, %s, %s, 'ERP')
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,'ERP')
                     """,
                     (
-                        str(radicado_interno or "").strip() or None,
+                        radicado,
                         inmueble_id,
+                        int(obligacion_id) if obligacion_id else None,
                         tipo_contacto.strip(),
                         resumen.strip(),
                         promesa_pago_fecha,
-                        identificacion_deudor,
+                        ident,
                     ),
                 )
 
@@ -1852,10 +1711,51 @@ def descargar_excel():
 # ==============================================================================
 # LIQUIDADOR DE EXPENSAS PH
 # ==============================================================================
+def _resolver_obligacion_ph(cur, inmueble_id: int, obligacion_id: int | None = None) -> int:
+    if obligacion_id is not None:
+        cur.execute(
+            """
+            SELECT o.id
+            FROM obligaciones o
+            WHERE o.id=%s
+              AND o.inmueble_id=%s
+              AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+              AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+            LIMIT 1
+            """,
+            (int(obligacion_id), int(inmueble_id)),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("La obligación PH no pertenece al inmueble seleccionado o no está activa.")
+        return int(row["id"] if isinstance(row, dict) else row[0])
+
+    cur.execute(
+        """
+        SELECT o.id
+        FROM obligaciones o
+        WHERE o.inmueble_id=%s
+          AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+          AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+        ORDER BY o.id DESC
+        LIMIT 2
+        """,
+        (int(inmueble_id),),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        raise ValueError("El inmueble no tiene una obligación PH activa.")
+    if len(rows) > 1:
+        raise ValueError("El inmueble tiene más de una obligación PH activa; debe seleccionarse una obligación concreta.")
+    row = rows[0]
+    return int(row["id"] if isinstance(row, dict) else row[0])
+
+
 @app.get("/liquidador")
 def vista_liquidador(
     request: Request,
     inmueble_id: str | None = None,
+    obligacion_id: str | None = None,
     tipo_tasa: str = "Máxima Legal",
     tasa_fija: float = 2.5,
     honorarios_pct: float = 23.8,
@@ -1870,42 +1770,65 @@ def vista_liquidador(
         m = re.search(r"\d+", str(inmueble_id))
         if m:
             inm_id_clean = int(m.group(0))
+    ob_id_clean = None
+    if obligacion_id:
+        m_ob = re.search(r"\d+", str(obligacion_id))
+        if m_ob:
+            ob_id_clean = int(m_ob.group(0))
     if inm_id_clean:
         try:
+            conn = db.get_connection()
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    ob_id_clean = _resolver_obligacion_ph(cur, inm_id_clean, ob_id_clean)
+            finally:
+                conn.release()
             resultados, resumen, _ = liquidador.motor_calculo_judicial(
-                inm_id_clean, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte_obj
+                inm_id_clean, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte_obj,
+                obligacion_id=ob_id_clean,
             )
         except Exception as e:
             print(f"[LIQUIDADOR] Error en auto-cálculo: {e}", flush=True)
-    return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte_obj.strftime("%Y-%m-%d")}})
+    return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "obligacion_id": ob_id_clean, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte_obj.strftime("%Y-%m-%d")}})
 
 
 @app.post("/liquidador")
 def calcular_liquidador(
     request: Request,
     inmueble_id: int = Form(...),
+    obligacion_id: int | None = Form(None),
     tipo_tasa: str = Form(...),
     tasa_fija: float = Form(2.5),
     honorarios_pct: float = Form(23.8),
     gastos: float = Form(0.0),
     fecha_corte: date = Form(...),
 ):
+    conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
+    finally:
+        conn.release()
+
     resultados, resumen, _ = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        obligacion_id=obligacion_id,
     )
     if not resultados:
         return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "error": "No hay deudas.", "resultados": None})
-    return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
+    return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "obligacion_id": obligacion_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
 
 
 @app.post("/liquidador/actualizar")
 async def actualizar_cuotas(request: Request):
     form_data = await request.form()
     inmueble_id = int(form_data.get("inmueble_id"))
+    obligacion_id = int(form_data.get("obligacion_id")) if str(form_data.get("obligacion_id") or "").isdigit() else None
     conn = db.get_connection()
     try:
         with conn:
             with conn.cursor() as cur:
+                obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
                 for key, value in form_data.items():
                     if key.startswith(("ord_", "ext_", "gas_", "abo_")):
                         prefijo, y, m = key.split("_")
@@ -1919,17 +1842,19 @@ async def actualizar_cuotas(request: Request):
                         cur.execute("""
                             UPDATE expensas_ph
                             SET valor_capital = %s
-                            WHERE inmueble_id = %s AND concepto = %s
+                            WHERE inmueble_id = %s
+                              AND obligation_id = %s
+                              AND concepto = %s
                               AND periodo_anio = %s AND periodo_mes = %s
-                        """, (valor, inmueble_id, concepto, int(y), int(m)))
+                        """, (valor, inmueble_id, obligacion_id, concepto, int(y), int(m)))
                         if cur.rowcount == 0 and valor > 0:
                             f_vencimiento = f"{y}-{int(m):02d}-01"
                             cur.execute("""
                                 INSERT INTO expensas_ph
-                                    (inmueble_id, concepto, periodo_mes, periodo_anio,
+                                    (inmueble_id, obligation_id, concepto, periodo_mes, periodo_anio,
                                      valor_capital, fecha_vencimiento, estado)
-                                VALUES (%s, %s, %s, %s, %s, %s, 'Aplicado')
-                            """, (inmueble_id, concepto, int(m), int(y), valor, f_vencimiento))
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, 'Aplicado')
+                            """, (inmueble_id, obligation_id, concepto, int(m), int(y), valor, f_vencimiento))
     except Exception as e:
         print(f"[LIQUIDADOR] Error actualizando cuotas: {e}", flush=True)
     finally:
@@ -1941,6 +1866,7 @@ async def actualizar_cuotas(request: Request):
 async def exportar_pdf(
     request: Request,
     inmueble_id: int = Form(...),
+    obligacion_id: int | None = Form(None),
     tipo_tasa: str = Form(...),
     tasa_fija: float = Form(2.5),
     honorarios_pct: float = Form(23.8),
@@ -1955,8 +1881,16 @@ async def exportar_pdf(
     if fecha_corte is None:
         fecha_corte = date.today()
 
+    conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
+    finally:
+        conn.release()
+
     resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        obligacion_id=obligacion_id,
     )
     path = exportaciones.generar_pdf_liquidacion(inmueble_id, fecha_corte, resultados, resumen, inm_info)
     return FileResponse(
@@ -1970,14 +1904,23 @@ async def exportar_pdf(
 async def exportar_excel(
     request: Request,
     inmueble_id: int = Form(...),
+    obligacion_id: int | None = Form(None),
     tipo_tasa: str = Form(...),
     tasa_fija: float = Form(2.5),
     honorarios_pct: float = Form(23.8),
     gastos: float = Form(0.0),
     fecha_corte: date = Form(...),
 ):
+    conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
+    finally:
+        conn.release()
+
     resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        obligacion_id=obligacion_id,
     )
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -2065,6 +2008,7 @@ def descargar_plantilla_liquidador():
 async def carga_masiva_excel(
     request: Request,
     inmueble_id: int = Form(...),
+    obligacion_id: int | None = Form(None),
     tipo_tasa: str = Form(...),
     tasa_fija: float = Form(2.5),
     honorarios_pct: float = Form(23.8),
@@ -2103,6 +2047,7 @@ async def carga_masiva_excel(
                 try:
                     with conn:
                         with conn.cursor() as cur:
+                            obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
                             for index, row in df.iterrows():
                                 fecha = row['desde']
                                 if pd.isna(fecha):
@@ -2130,9 +2075,11 @@ async def carga_masiva_excel(
                                         cur.execute("""
                                             UPDATE expensas_ph
                                             SET valor_capital = %s
-                                            WHERE inmueble_id = %s AND concepto = %s
+                                            WHERE inmueble_id = %s
+                                              AND obligation_id = %s
+                                              AND concepto = %s
                                               AND periodo_anio = %s AND periodo_mes = %s
-                                        """, (valor_limpio, inmueble_id, concepto, y, m))
+                                        """, (valor_limpio, inmueble_id, obligacion_id, concepto, y, m))
                                         if cur.rowcount == 0:
                                             f_vencimiento = f"{y}-{m:02d}-01"
                                             cur.execute("""
@@ -2148,7 +2095,8 @@ async def carga_masiva_excel(
             print(f"[LIQUIDADOR] Error procesando carga masiva: {e}", flush=True)
 
     resultados, resumen, _ = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        obligacion_id=obligacion_id,
     )
     lista_inmuebles = cargar_inmuebles_ph()
-    return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
+    return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "obligacion_id": obligacion_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})

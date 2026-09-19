@@ -63,138 +63,95 @@ def _get_api_token() -> str:
 
 
 def _ensure_sms_schema() -> None:
-    """Crea/migra el esquema SMS sin borrar información existente."""
+    """Verifica el contrato SMS en solo lectura; las migraciones hacen los cambios estructurales."""
+    required = {
+        "sms_cola_envios": {
+            "id", "inmueble_id", "contacto_id", "identificacion", "telefono",
+            "saldo_calculado", "saldo_fuente", "saldo_verificado",
+            "saldo_calculado_en", "mensaje_template", "mensaje_texto",
+            "tipo_campana", "estado", "fecha_creacion", "fecha_envio",
+            "processing_token", "crm_auditado", "crm_auditoria_fecha",
+            "obligacion_id",
+        },
+        "sms_plantillas": {"id", "tipo", "cuerpo_template"},
+    }
+    import db
     conn = db.get_connection()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                expedientes_service._cols(cur, "procesos")
+        with conn.cursor() as cur:
+            for table, expected in required.items():
                 cur.execute(
                     """
-                    CREATE TABLE IF NOT EXISTS sms_cola_envios (
-                        id BIGSERIAL PRIMARY KEY,
-                        inmueble_id INT REFERENCES inmuebles_ph(id) ON DELETE SET NULL,
-                        contacto_id INT REFERENCES contactos(id) ON DELETE SET NULL,
-                        identificacion VARCHAR(50) NOT NULL,
-                        nombre VARCHAR(255),
-                        conjunto_residencial VARCHAR(255),
-                        torre_apto VARCHAR(100),
-                        telefono VARCHAR(20) NOT NULL,
-                        saldo_calculado NUMERIC(14,2) DEFAULT 0.0,
-                        saldo_fuente VARCHAR(80),
-                        saldo_verificado BOOLEAN NOT NULL DEFAULT FALSE,
-                        saldo_calculado_en TIMESTAMP,
-                        mensaje_template TEXT,
-                        mensaje_texto TEXT NOT NULL,
-                        tipo_campana VARCHAR(50) DEFAULT 'PREJUDICIAL',
-                        estado VARCHAR(30) DEFAULT 'PENDIENTE',
-                        fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        fecha_proceso TIMESTAMP,
-                        fecha_envio TIMESTAMP,
-                        error_detalle TEXT,
-                        processing_token VARCHAR(128),
-                        crm_auditado BOOLEAN NOT NULL DEFAULT FALSE,
-                        crm_auditoria_fecha TIMESTAMP
-                    );
-                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name=%s
+                    """,
+                    (table,),
                 )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS contacto_id INT REFERENCES contactos(id) ON DELETE SET NULL;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS fecha_proceso TIMESTAMP;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS processing_token VARCHAR(128);"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS crm_auditado BOOLEAN NOT NULL DEFAULT FALSE;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS crm_auditoria_fecha TIMESTAMP;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS saldo_fuente VARCHAR(80);"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS saldo_verificado BOOLEAN NOT NULL DEFAULT FALSE;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS saldo_calculado_en TIMESTAMP;"
-                )
-                cur.execute(
-                    "ALTER TABLE sms_cola_envios ADD COLUMN IF NOT EXISTS mensaje_template TEXT;"
-                )
-                cur.execute(
-                    """
-                    UPDATE sms_cola_envios s
-                    SET contacto_id = i.contacto_id
-                    FROM inmuebles_ph i
-                    WHERE s.inmueble_id = i.id
-                      AND s.contacto_id IS NULL;
-                    """
-                )
-                cur.execute(
-                    """
-                    UPDATE sms_cola_envios
-                    SET estado = 'PENDIENTE', fecha_proceso = NULL, processing_token = NULL
-                    WHERE estado = 'EN_PROCESO' AND processing_token IS NULL;
-                    """
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_sms_cola_estado ON sms_cola_envios(estado);"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_sms_cola_proceso ON sms_cola_envios(estado, fecha_proceso);"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_sms_cola_telefono ON sms_cola_envios(telefono);"
-                )
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_sms_cola_contacto_fecha ON sms_cola_envios(contacto_id, fecha_envio);"
-                )
-                cur.execute(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS uq_sms_cola_inm_tel_campana_activo
-                    ON sms_cola_envios(inmueble_id, telefono, tipo_campana)
-                    WHERE estado IN ('PENDIENTE','EN_PROCESO');
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS sms_plantillas (
-                        id SERIAL PRIMARY KEY,
-                        nombre VARCHAR(100) NOT NULL,
-                        tipo VARCHAR(50) NOT NULL UNIQUE,
-                        cuerpo_template TEXT NOT NULL,
-                        es_predeterminada BOOLEAN DEFAULT FALSE,
-                        actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );
-                    """
-                )
-                cur.execute(
-                    """
-                    INSERT INTO sms_plantillas(nombre,tipo,cuerpo_template,es_predeterminada)
-                    VALUES
-                    ('Acuerdo Prejudicial Amistoso','PREJUDICIAL',
-                     'Prejuridico: {nombre}, registra mora de ${saldo} en {conjunto} {unidad}. Evite cobro judicial y acuerde su pago al WhatsApp {telefono_wa}.',TRUE),
-                    ('Aviso de Inicio de Cobro Jurídico','COBRO_JURIDICO',
-                     'Aviso Juridico: {nombre}, inicio de proceso ejecutivo por mora de ${saldo} en {conjunto} {unidad}. Evite embargo y concilie al WhatsApp {telefono_wa}.',FALSE),
-                    ('Alerta de Mandamiento de Pago','MANDAMIENTO',
-                     'Urgente: {nombre}, mandamiento de pago en tramite para {conjunto} {unidad} (${saldo}). Comuniquese al WhatsApp {telefono_wa} antes de medidas cautelares.',FALSE)
-                    ON CONFLICT(tipo) DO NOTHING;
-                    """
-                )
-    except Exception as exc:
-        raise RuntimeError(
-            f"[SMS SCHEMA ERROR] Falló la migración del esquema SMS en Neon: {exc}"
-        ) from exc
+                actual = {str(row[0]) for row in cur.fetchall()}
+                if not actual:
+                    raise RuntimeError(f"[SMS PREFLIGHT] Falta tabla: {table}")
+                missing = sorted(expected - actual)
+                if missing:
+                    raise RuntimeError(
+                        f"[SMS PREFLIGHT] Faltan columnas en {table}: {', '.join(missing)}"
+                    )
     finally:
         conn.release()
 
 
+def _domingo_pascua(anio: int) -> datetime:
+    """Calcula el Domingo de Pascua para el calendario gregoriano."""
+    a = anio % 19
+    b = anio // 100
+    c = anio % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    j = c % 4
+    k = c % 7
+    l = (32 + 2 * e + 2 * i - h - j) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    mes = (h + l - 7 * m + 114) // 31
+    dia = ((h + l - 7 * m + 114) % 31) + 1
+    return datetime(anio, mes, dia)
+
+
+def _es_festivo_colombia(fecha: datetime) -> bool:
+    """Calendario legal colombiano, incluyendo traslados al lunes."""
+    anio = fecha.year
+    fijas_no_movilizadas = {
+        (1, 1), (5, 1), (7, 20), (8, 7), (12, 8), (12, 25),
+    }
+    festivos = {datetime(anio, mes, dia).date() for mes, dia in fijas_no_movilizadas}
+
+    # Ley 51 de 1983: estas festividades se trasladan al lunes siguiente.
+    for mes, dia in ((1, 6), (3, 19), (6, 29), (8, 15), (10, 12), (11, 1), (11, 11)):
+        candidato = datetime(anio, mes, dia)
+        while candidato.weekday() != 0:
+            candidato += timedelta(days=1)
+        festivos.add(candidato.date())
+
+    pascua = _domingo_pascua(anio)
+    # Jueves y Viernes Santos.
+    festivos.add((pascua - timedelta(days=3)).date())
+    festivos.add((pascua - timedelta(days=2)).date())
+    # Ascensión, Corpus Christi y Sagrado Corazón: su descanso legal se
+    # traslada al lunes siguiente al día religioso correspondiente.
+    for dias_despues in (43, 64, 72):
+        festivos.add((pascua + timedelta(days=dias_despues)).date())
+
+    return fecha.date() in festivos
+
+
 def validar_horario_ley_2300() -> Tuple[bool, str]:
     ahora = datetime.now(TZ_COLOMBIA)
+    if _es_festivo_colombia(ahora):
+        return False, f"Día festivo ({ahora:%Y-%m-%d}): Prohibida la gestión según Ley 2300 de 2023."
+
     dia = ahora.weekday()
     hora = ahora.hour + ahora.minute / 60.0
     if dia == 6:
@@ -252,14 +209,12 @@ def _candidatos_cartera(
     ids: Optional[List[int]] = None,
     conjunto: str = "",
 ):
-    """Devuelve candidatos por contacto y excluye reenvíos realizados en las últimas 24 h."""
+    """Devuelve candidatos PH asociados a una obligación canónica activa."""
     cartera = (tipo_cartera or "").upper().strip()
     if cartera and cartera not in CARTERAS_VALIDAS:
         raise ValueError("Tipo de cartera no válido.")
 
-    saldo_where, params = _saldo_clause(saldo_minimo, saldo_maximo)
     where = [
-        saldo_where,
         "c.telefono IS NOT NULL",
         "TRIM(c.telefono) <> ''",
         "NOT EXISTS ("
@@ -269,6 +224,7 @@ def _candidatos_cartera(
         "   AND prev.fecha_envio >= NOW() - INTERVAL '24 hours'"
         ")",
     ]
+    params: List[Any] = []
 
     if cartera:
         where.append("COALESCE(p.tipo_cartera,'PREJURIDICO')=%s")
@@ -277,53 +233,11 @@ def _candidatos_cartera(
         where.append("c.id = ANY(%s)")
         params.append(ids)
     if conjunto:
-        where.append("COALESCE(i.conjunto_residencial, '') = %s")
+        where.append("COALESCE(i.conjunto_residencial,'')=%s")
         params.append(conjunto.strip())
 
-    cur.execute("SELECT to_regclass('public.inmueble_propietarios') AS tabla;")
-    fila_tabla = cur.fetchone()
-    if isinstance(fila_tabla, dict):
-        tiene_tabla_multiple = fila_tabla.get("tabla") is not None
-    else:
-        tiene_tabla_multiple = fila_tabla is not None and fila_tabla[0] is not None
-
-    if tiene_tabla_multiple:
-        propietarios_cte = """
-            propietarios AS (
-                SELECT ip.inmueble_id, ip.contacto_id
-                FROM inmueble_propietarios ip
-                UNION ALL
-                SELECT i.id, i.contacto_id
-                FROM inmuebles_ph i
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM inmueble_propietarios ip2
-                    WHERE ip2.inmueble_id=i.id
-                )
-            )
-        """
-    else:
-        propietarios_cte = """
-            propietarios AS (
-                SELECT i.id AS inmueble_id, i.contacto_id
-                FROM inmuebles_ph i
-            )
-        """
-
-    query = f"""
-        WITH {propietarios_cte},
-        saldos AS (
-            SELECT inmueble_id,
-                   SUM(
-                       CASE WHEN LOWER(COALESCE(concepto,'')) != 'abono'
-                            THEN valor_capital ELSE -valor_capital END
-                   ) AS saldo_total
-            FROM expensas_ph
-            GROUP BY inmueble_id
-            HAVING SUM(
-                CASE WHEN LOWER(COALESCE(concepto,'')) != 'abono'
-                     THEN valor_capital ELSE -valor_capital END
-            ) > 0
-        )
+    cur.execute(
+        f"""
         SELECT DISTINCT ON (i.id,c.id)
             i.id AS inmueble_id,
             c.id AS contacto_id,
@@ -332,26 +246,32 @@ def _candidatos_cartera(
             c.identificacion,
             c.nombre,
             c.telefono,
-            s.saldo_total,
-            COALESCE(p.tipo_cartera,'PREJURIDICO') AS tipo_cartera
-        FROM saldos s
-        JOIN inmuebles_ph i ON i.id=s.inmueble_id
-        JOIN propietarios pr ON pr.inmueble_id=i.id
-        JOIN contactos c ON c.id=pr.contacto_id
+            o.id AS obligacion_id,
+            COALESCE(p.tipo_cartera,'PREJURIDICO') AS tipo_cartera,
+            p.radicado_interno
+        FROM obligaciones o
+        JOIN obligacion_partes op
+          ON op.obligacion_id=o.id
+         AND op.rol='DEUDOR'
+        JOIN contactos c ON c.id=op.contacto_id
+        JOIN inmuebles_ph i ON i.id=o.inmueble_id
         LEFT JOIN LATERAL (
-            SELECT tipo_cartera
+            SELECT p0.tipo_cartera,p0.radicado_interno
             FROM procesos p0
-            WHERE p0.inmueble_id=i.id
-            ORDER BY CASE WHEN p0.tipo_cartera='JURIDICO' THEN 0 ELSE 1 END,
-                     p0.radicado_interno DESC
+            JOIN proceso_obligaciones po0
+              ON po0.radicado_interno=p0.radicado_interno
+             AND po0.obligacion_id=o.id
+            ORDER BY po0.es_principal DESC, po0.id
             LIMIT 1
         ) p ON TRUE
-        WHERE {' AND '.join(where)}
-        ORDER BY i.id,c.id,s.saldo_total DESC;
-    """
-    cur.execute(query, params)
+        WHERE UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+          AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+          AND {' AND '.join(where)}
+        ORDER BY i.id,c.id,o.id DESC
+        """,
+        params,
+    )
     return cur.fetchall()
-
 
 def _filtrar_saldos_verificados(candidatos, saldo_minimo: float, saldo_maximo: Optional[float]):
     """Aplica el filtro monetario sobre el saldo REAL del liquidador, no sobre el saldo preliminar."""
@@ -396,6 +316,7 @@ def _registrar_en_crm_idempotente(
     item_id: int,
     inmueble_id: Optional[int],
     contacto_id: Optional[int],
+    obligacion_id: Optional[int],
     telefono: str,
     mensaje: str,
     tipo_campana: str,
@@ -445,12 +366,18 @@ def _registrar_en_crm_idempotente(
         data["inmueble_id"] = inmueble_id
     if "contacto_id" in cols:
         data["contacto_id"] = contacto_id
+    if "obligacion_id" in cols:
+        if not obligacion_id:
+            raise RuntimeError("El SMS no tiene obligación financiera asociada.")
+        data["obligacion_id"] = obligacion_id
     data[texto_col] = f"{marker} [SMS - {tipo_campana}] {mensaje}"
 
     if "canal" in cols:
         data["canal"] = "SMS"
     elif "medio" in cols:
         data["medio"] = "SMS"
+    if "tipo_contacto" in cols:
+        data["tipo_contacto"] = "SMS"
 
     tipo_gestion = (
         "COBRANZA_JURIDICA"
@@ -502,6 +429,50 @@ def _registrar_en_crm_idempotente(
     return True
 
 
+def _contacto_bloqueado_por_ley_2300(cur, obligacion_id: int, contacto_id: Optional[int]) -> Optional[str]:
+    """Bloquea contacto adicional si ya hubo una gestión de cobranza reciente."""
+    if not contacto_id and not obligacion_id:
+        return None
+
+    cur.execute(
+        """
+        SELECT fecha, tipo_contacto, resumen
+        FROM gestiones_crm
+        WHERE anulado=FALSE
+          AND (
+                (obligacion_id=%s AND obligacion_id IS NOT NULL)
+                OR (
+                    identificacion_deudor IS NOT NULL
+                    AND obligacion_id IS NULL
+                    AND identificacion_deudor = (
+                        SELECT c.identificacion
+                        FROM obligaciones o
+                        JOIN obligacion_partes op
+                          ON op.obligacion_id=o.id AND op.rol='DEUDOR'
+                        JOIN contactos c ON c.id=op.contacto_id
+                        WHERE o.id=%s
+                          AND (%s IS NULL OR op.contacto_id=%s)
+                        ORDER BY op.es_principal DESC, op.id
+                        LIMIT 1
+                    )
+                )
+              )
+          AND fecha >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+        ORDER BY fecha DESC
+        LIMIT 1
+        """,
+        (obligacion_id, obligacion_id, contacto_id, contacto_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+
+    fecha = row["fecha"] if isinstance(row, dict) else row[0]
+    tipo = row["tipo_contacto"] if isinstance(row, dict) else row[1]
+    resumen = row["resumen"] if isinstance(row, dict) else row[2]
+    return f"Ya existe una gestión de cobranza/contacto registrada el {fecha} ({tipo or 'canal no informado'})."
+
+
 def _asentar_resultado_sms_y_crm(
     item_id: int,
     processing_token: str,
@@ -524,7 +495,7 @@ def _asentar_resultado_sms_y_crm(
                     WHERE id=%s
                       AND estado='EN_PROCESO'
                       AND processing_token=%s
-                    RETURNING id,inmueble_id,contacto_id,telefono,
+                    RETURNING id,inmueble_id,contacto_id,obligacion_id,telefono,
                               mensaje_texto,tipo_campana,saldo_calculado;
                     """,
                     (
@@ -555,6 +526,7 @@ def _asentar_resultado_sms_y_crm(
                     item_id=item["id"],
                     inmueble_id=item["inmueble_id"],
                     contacto_id=item["contacto_id"],
+                    obligacion_id=item["obligacion_id"],
                     telefono=item["telefono"],
                     mensaje=item["mensaje_texto"],
                     tipo_campana=item["tipo_campana"],
@@ -644,6 +616,25 @@ def _reclamar_lote(cur, limite: int):
                     "telefono":row[3],"mensaje_texto":row[4],"tipo_campana":row[5],
                 },
             )
+            bloqueo_ley = _contacto_bloqueado_por_ley_2300(
+                cur,
+                int(refreshed.get("obligacion_id") or 0),
+                int(refreshed.get("contacto_id")) if refreshed.get("contacto_id") else None,
+            )
+            if bloqueo_ley:
+                cur.execute(
+                    """
+                    UPDATE sms_cola_envios
+                    SET estado='FALLIDO',
+                        fecha_proceso=NULL,
+                        processing_token=NULL,
+                        error_detalle=%s
+                    WHERE id=%s AND estado='EN_PROCESO'
+                    """,
+                    (f"Envío bloqueado por Ley 2300: {bloqueo_ley}", fila_id),
+                )
+                continue
+
             if refreshed.get("bloqueado_envio"):
                 cur.execute(
                     """
@@ -710,6 +701,194 @@ class ReporteItem(BaseModel):
 
 class ReporteLote(BaseModel):
     reportes: List[ReporteItem] = Field(..., min_items=1, max_items=100)
+
+
+class WizardMensaje(BaseModel):
+    contacto_id: int = Field(..., ge=1)
+    mensaje_texto: str = Field(..., min_length=1, max_length=640)
+
+
+class ConfirmarColaRequest(BaseModel):
+    tipo_campana: str = Field(..., min_length=1, max_length=40)
+    tipo_cartera: str = Field(default="", max_length=20)
+    saldo_minimo: float = Field(default=0, ge=0)
+    saldo_maximo: Optional[float] = Field(default=None, ge=0)
+    mensajes: List[WizardMensaje] = Field(..., min_items=1, max_items=100)
+
+
+@router.post("/wizard/confirmar-cola")
+def confirmar_cola_wizard(data: ConfirmarColaRequest):
+    """Confirma el asistente SMS revalidando candidatos y saldo en servidor."""
+    _ensure_sms_schema()
+
+    tipo_campana = (data.tipo_campana or "").upper().strip()
+    if tipo_campana not in CAMPAÑAS_VALIDAS:
+        raise HTTPException(status_code=422, detail="Tipo de campaña no válido.")
+
+    tipo_cartera = (data.tipo_cartera or "").upper().strip()
+    if tipo_cartera and tipo_cartera not in CARTERAS_VALIDAS:
+        raise HTTPException(status_code=422, detail="Tipo de cartera no válido.")
+    if data.saldo_maximo is not None and data.saldo_maximo < data.saldo_minimo:
+        raise HTTPException(status_code=422, detail="saldo_maximo no puede ser menor que saldo_minimo.")
+
+    # El navegador solo aporta IDs y texto editable. El servidor reconstruye
+    # los candidatos y vuelve a calcular el saldo mediante la fuente única.
+    ids = list(dict.fromkeys(int(item.contacto_id) for item in data.mensajes))
+    if not ids:
+        raise HTTPException(status_code=422, detail="No hay destinatarios para confirmar.")
+
+    conn = db.get_connection()
+    insertados = 0
+    omitidos = []
+
+    try:
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                candidatos = _candidatos_liquidados(
+                    _candidatos_cartera(
+                        cur,
+                        tipo_cartera=tipo_cartera,
+                        saldo_minimo=0,
+                        saldo_maximo=None,
+                        ids=ids,
+                        conjunto="",
+                    )
+                )
+
+                por_contacto = {}
+                for candidato in candidatos:
+                    por_contacto[int(candidato["contacto_id"])] = dict(candidato)
+
+                cur.execute(
+                    "SELECT cuerpo_template FROM sms_plantillas WHERE tipo=%s LIMIT 1;",
+                    (tipo_campana,),
+                )
+                tpl = cur.fetchone()
+                template = (
+                    tpl["cuerpo_template"]
+                    if tpl
+                    else "{nombre}, registra una deuda de COP {saldo} en {conjunto} {unidad}. WhatsApp: {telefono_wa}"
+                )
+
+                for item in data.mensajes:
+                    contacto_id = int(item.contacto_id)
+                    candidato = por_contacto.get(contacto_id)
+                    if not candidato:
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "Ya no es un candidato válido para la cartera/obligación seleccionada.",
+                        })
+                        continue
+
+                    if not candidato.get("saldo_verificado"):
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El saldo no pudo ser verificado por el motor financiero.",
+                        })
+                        continue
+
+                    saldo = float(candidato.get("saldo_total") or 0)
+                    if saldo < float(data.saldo_minimo or 0):
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El saldo actualizado quedó por debajo del mínimo seleccionado.",
+                        })
+                        continue
+                    if data.saldo_maximo is not None and saldo > float(data.saldo_maximo):
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El saldo actualizado superó el máximo seleccionado.",
+                        })
+                        continue
+
+                    tel = normalizar_telefono(candidato.get("telefono"))
+                    if not tel:
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El teléfono no tiene un formato móvil colombiano válido.",
+                        })
+                        continue
+
+                    mensaje = item.mensaje_texto.strip()
+                    if not mensaje:
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El mensaje no puede quedar vacío.",
+                        })
+                        continue
+
+                    # Política global de 24 h por contacto, independiente de la
+                    # campaña. También bloqueamos duplicados que aún estén en cola.
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM sms_cola_envios
+                        WHERE contacto_id=%s
+                          AND (
+                              estado IN ('PENDIENTE','EN_PROCESO')
+                              OR (
+                                  estado='ENVIADO'
+                                  AND fecha_envio >= NOW() - INTERVAL '24 hours'
+                              )
+                          )
+                        LIMIT 1;
+                        """,
+                        (contacto_id,),
+                    )
+                    if cur.fetchone():
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El contacto ya tiene un SMS en cola/proceso o enviado durante las últimas 24 horas.",
+                        })
+                        continue
+
+                    cur.execute(
+                        """
+                        INSERT INTO sms_cola_envios(
+                            inmueble_id,contacto_id,obligacion_id,identificacion,nombre,
+                            conjunto_residencial,torre_apto,telefono,
+                            saldo_calculado,saldo_fuente,saldo_verificado,
+                            saldo_calculado_en,mensaje_template,mensaje_texto,
+                            tipo_campana,estado
+                        )
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s,%s,%s,%s,'PENDIENTE')
+                        ON CONFLICT(inmueble_id,telefono,tipo_campana)
+                        WHERE estado IN ('PENDIENTE','EN_PROCESO') DO NOTHING
+                        RETURNING id;
+                        """,
+                        (
+                            candidato.get("inmueble_id"),
+                            candidato.get("contacto_id"),
+                            candidato.get("obligacion_id"),
+                            candidato.get("identificacion"),
+                            (candidato.get("nombre") or "Propietario").strip().title(),
+                            (candidato.get("conjunto_residencial") or "Copropiedad").strip(),
+                            (candidato.get("torre_apto") or "").strip(),
+                            tel,
+                            saldo,
+                            candidato.get("saldo_fuente"),
+                            candidato.get("saldo_calculado_en"),
+                            template,
+                            mensaje,
+                            tipo_campana,
+                        ),
+                    )
+                    inserted = cur.fetchone()
+                    if inserted:
+                        insertados += 1
+                    else:
+                        omitidos.append({
+                            "contacto_id": contacto_id,
+                            "motivo": "El mensaje ya estaba en cola para esa cuenta/campaña.",
+                        })
+
+        return JSONResponse({
+            "status": "ok",
+            "insertados": insertados,
+            "omitidos": omitidos,
+        })
+    finally:
+        conn.release()
 
 
 @router.get("")
@@ -884,19 +1063,20 @@ def generar_cola(
                     cur.execute(
                         """
                         INSERT INTO sms_cola_envios(
-                            inmueble_id,contacto_id,identificacion,nombre,
+                            inmueble_id,contacto_id,obligacion_id,identificacion,nombre,
                             conjunto_residencial,torre_apto,telefono,
                             saldo_calculado,saldo_fuente,saldo_verificado,
                             saldo_calculado_en,mensaje_template,mensaje_texto,
                             tipo_campana,estado
                         )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE')
                         ON CONFLICT(inmueble_id,telefono,tipo_campana)
                         WHERE estado IN ('PENDIENTE','EN_PROCESO') DO NOTHING;
                         """,
                         (
                             d["inmueble_id"],
                             d.get("contacto_id"),
+                            d.get("obligacion_id"),
                             d["identificacion"],
                             nombre_corto,
                             conjunto,

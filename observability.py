@@ -47,19 +47,8 @@ def _es_api_path(path: str) -> bool:
 
 
 def _instalar_selector_sms(app=None) -> None:
-    """Activa selector normalizado y el wizard SMS después de cargar sms_router."""
-    try:
-        from sms_candidates_override import install
-        install()
-        if app is not None:
-            from sms_wizard_override import install as install_wizard
-            install_wizard(app)
-    except Exception as exc:
-        log_msg(
-            "⚠️ [SMS CANDIDATOS]",
-            "No se pudo activar la capa SMS normalizada; se conserva temporalmente el flujo existente.",
-            error=f"{type(exc).__name__}: {exc}",
-        )
+    """Punto de compatibilidad; la integración SMS canónica se instala en start.py."""
+    return
 
 
 def install_exception_handling(app) -> None:

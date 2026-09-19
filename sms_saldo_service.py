@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 import liquidador
+from obligacion_saldo_service import calcular_saldo_obligacion
 
 TZ_COLOMBIA = ZoneInfo("America/Bogota")
 TIPO_TASA_SMS = "Máxima Legal"
@@ -27,35 +28,33 @@ def calcular_saldo_ph(inmueble_id: Optional[int], fecha_corte: Optional[date] = 
         return {
             "saldo_total": None,
             "saldo_verificado": False,
-            "saldo_fuente": "SIN_LIQUIDADOR",
+            "saldo_fuente": "SIN_OBLIGACION",
             "saldo_calculado_en": ahora_colombia(),
         }
 
-    resultados, resumen, _ = liquidador.motor_calculo_judicial(
-        int(inmueble_id),
-        TIPO_TASA_SMS,
-        TASA_FIJA_SMS,
-        HONORARIOS_PCT_SMS,
-        GASTOS_SMS,
-        fecha_corte or ahora_colombia().date(),
-    )
+    # Compatibilidad: resolver primero la obligación PH activa del inmueble.
+    import db
+    conn = db.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT o.id
+                FROM obligaciones o
+                WHERE o.inmueble_id=%s
+                  AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+                  AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+                ORDER BY o.id DESC
+                LIMIT 1
+                """,
+                (int(inmueble_id),),
+            )
+            row = cur.fetchone()
+            obligacion_id = int(row[0]) if row else None
+    finally:
+        conn.release()
 
-    if not resultados or not resumen:
-        return {
-            "saldo_total": None,
-            "saldo_verificado": False,
-            "saldo_fuente": "LIQUIDADOR_PH_SIN_DEUDA",
-            "saldo_calculado_en": ahora_colombia(),
-        }
-
-    total = round(float(resumen.get("gran_total") or 0.0), 2)
-    return {
-        "saldo_total": total,
-        "saldo_verificado": True,
-        "saldo_fuente": "LIQUIDADOR_PH",
-        "saldo_calculado_en": ahora_colombia(),
-        "detalle_liquidacion": resumen,
-    }
+    return calcular_saldo_obligacion(obligacion_id, fecha_corte=fecha_corte)
 
 
 def enriquecer_candidatos(candidatos):
@@ -64,18 +63,20 @@ def enriquecer_candidatos(candidatos):
 
     for candidato in candidatos:
         item = dict(candidato)
-        inmueble_id = item.get("inmueble_id")
+        obligation_id = item.get("obligacion_id")
 
-        if inmueble_id:
-            inmueble_id = int(inmueble_id)
-            if inmueble_id not in cache:
-                cache[inmueble_id] = calcular_saldo_ph(inmueble_id)
-            item.update(cache[inmueble_id])
+        if obligation_id:
+            oid = int(obligation_id)
+            if oid not in cache:
+                cache[oid] = calcular_saldo_obligacion(oid)
+            item.update(cache[oid])
         else:
-            item["saldo_total"] = None
-            item["saldo_verificado"] = False
-            item["saldo_fuente"] = item.get("saldo_fuente") or "SIN_LIQUIDADOR"
-            item["saldo_calculado_en"] = ahora_colombia()
+            item.update({
+                "saldo_total": None,
+                "saldo_verificado": False,
+                "saldo_fuente": "SIN_OBLIGACION",
+                "saldo_calculado_en": ahora_colombia(),
+            })
 
         salida.append(item)
 
@@ -90,7 +91,7 @@ def actualizar_item_cola(cur, item: Dict[str, Any]) -> Dict[str, Any]:
     """Recalcula y actualiza el SMS justo antes de entregarlo al worker."""
     cur.execute(
         """
-        SELECT id, inmueble_id, contacto_id, identificacion, nombre,
+        SELECT id, inmueble_id, contacto_id, obligacion_id, identificacion, nombre,
                conjunto_residencial, torre_apto, telefono,
                mensaje_texto, tipo_campana
         FROM sms_cola_envios
@@ -104,13 +105,15 @@ def actualizar_item_cola(cur, item: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError(f"No existe sms_cola_envios.id={item['id']}")
 
     data = dict(row) if isinstance(row, dict) else {
-        "id": row[0], "inmueble_id": row[1], "contacto_id": row[2],
-        "identificacion": row[3], "nombre": row[4],
-        "conjunto_residencial": row[5], "torre_apto": row[6],
-        "telefono": row[7], "mensaje_texto": row[8], "tipo_campana": row[9],
+        "id": row[0], "inmueble_id": row[1], "contacto_id": row[2], "obligacion_id": row[3],
+        "identificacion": row[4], "nombre": row[5],
+        "conjunto_residencial": row[6], "torre_apto": row[7],
+        "telefono": row[8], "mensaje_texto": row[9], "tipo_campana": row[10],
     }
 
-    saldo = calcular_saldo_ph(data.get("inmueble_id"))
+    saldo = calcular_saldo_obligacion(
+        int(data["obligacion_id"]) if data.get("obligacion_id") else None
+    )
 
     if not saldo.get("saldo_verificado"):
         cur.execute(

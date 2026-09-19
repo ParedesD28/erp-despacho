@@ -31,136 +31,339 @@ def _require_bot_auth(request: Request):
 @router.post("/bot/abono")
 async def reportar_abono_agente(request: Request):
     """
-    Endpoint M2M invocado por el agente de WhatsApp al detectar un comprobante bancario.
-    Asienta el abono contablemente, recalcula saldos y activa la alerta humana si extingue la deuda.
+    Registra un recaudo contra la obligación canónica.
+
+    - EXPENSAS_PH conserva su asiento histórico en expensas_ph para que el
+      liquidador PH siga siendo la fuente de saldo.
+    - Las demás obligaciones registran un movimiento ABONO en
+      obligacion_movimientos.
+    Nunca modifica procesos.pretensiones.
     """
     _require_bot_auth(request)
     try:
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=422, detail="Cuerpo de petición inválido (JSON esperado)")
-        
+
     try:
-        inmueble_id = int(data.get("inmueble_id"))
+        obligacion_id = int(data.get("obligacion_id")) if data.get("obligacion_id") else None
+        inmueble_id = int(data.get("inmueble_id")) if data.get("inmueble_id") else None
         valor_abono = float(data.get("valor"))
-        if valor_abono <= 0:
+        if valor_abono <= 0 or (not obligacion_id and not inmueble_id):
             raise ValueError()
     except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="inmueble_id y valor (> 0) son obligatorios")
-        
+        raise HTTPException(
+            status_code=422,
+            detail="obligacion_id/inmueble_id y valor (> 0) son obligatorios",
+        )
+
     fecha_pago_raw = str(data.get("fecha_pago") or date.today().isoformat())
     try:
         fecha_pago = datetime.strptime(fecha_pago_raw, "%Y-%m-%d").date()
     except ValueError:
-        fecha_pago = date.today()
-        
+        raise HTTPException(status_code=422, detail="fecha_pago debe tener formato YYYY-MM-DD")
+
+    identificacion_reportante = str(
+        data.get("identificacion_deudor")
+        or data.get("identificacion")
+        or data.get("cedula")
+        or ""
+    ).strip()
     banco = str(data.get("banco") or "Transferencia bancaria").strip()
     referencia = str(data.get("referencia") or "Comprobante IA").strip()
     soporte_url = str(data.get("soporte_url") or "").strip()
+
+    import obligacion_saldo_service
 
     conn = db.get_connection()
     try:
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # 1. Obtener información del inmueble y deudor
-                cur.execute("""
-                    SELECT i.id, i.conjunto_residencial, i.torre_apto, c.identificacion, c.nombre, c.telefono
-                    FROM inmuebles_ph i
-                    JOIN contactos c ON i.contacto_id = c.id
-                    WHERE i.id = %s
-                """, (inmueble_id,))
-                inm = cur.fetchone()
-                if not inm:
-                    raise HTTPException(status_code=404, detail="Inmueble no encontrado")
+                if obligacion_id:
+                    cur.execute(
+                        """
+                        SELECT o.id,o.inmueble_id,o.fuente_saldo,o.estado,
+                               c.identificacion,c.nombre,c.telefono,
+                               i.conjunto_residencial,i.torre_apto
+                        FROM obligaciones o
+                        JOIN obligacion_partes op
+                          ON op.obligacion_id=o.id
+                         AND op.rol='DEUDOR'
+                         AND op.es_principal=TRUE
+                        JOIN contactos c ON c.id=op.contacto_id
+                        LEFT JOIN inmuebles_ph i ON i.id=o.inmueble_id
+                        WHERE o.id=%s
+                        LIMIT 1
+                        """,
+                        (obligacion_id,),
+                    )
+                    ob = cur.fetchone()
+                else:
+                    cur.execute(
+                        """
+                        SELECT o.id,o.inmueble_id,o.fuente_saldo,o.estado
+                        FROM obligaciones o
+                        WHERE o.inmueble_id=%s
+                          AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+                        ORDER BY CASE WHEN UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH' THEN 0 ELSE 1 END,
+                                 o.id DESC
+                        LIMIT 2
+                        """,
+                        (inmueble_id,),
+                    )
+                    candidates = cur.fetchall()
+                    if not candidates:
+                        ob = None
+                    elif len(candidates) > 1:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Debe indicar obligacion_id cuando existen varias obligaciones activas para el inmueble",
+                        )
+                    else:
+                        ob = candidates[0]
 
-                # 2. Liquidación previa para calcular imputación exacta
-                _, resumen_prev, _ = liquidador.motor_calculo_judicial(
-                    inmueble_id, "usura", 2.5, 23.8, 0.0, fecha_pago
+                    if ob:
+                        cur.execute(
+                            """
+                            SELECT c.identificacion,c.nombre,c.telefono,
+                                   i.conjunto_residencial,i.torre_apto
+                            FROM obligaciones o
+                            JOIN obligacion_partes op
+                              ON op.obligacion_id=o.id
+                             AND op.rol='DEUDOR'
+                             AND op.es_principal=TRUE
+                            JOIN contactos c ON c.id=op.contacto_id
+                            LEFT JOIN inmuebles_ph i ON i.id=o.inmueble_id
+                            WHERE o.id=%s
+                            LIMIT 1
+                            """,
+                            (ob["id"],),
+                        )
+                        ob = dict(ob) | dict(cur.fetchone() or {})
+
+                ob = dict(ob) if ob else None
+                if not ob:
+                    raise HTTPException(status_code=404, detail="Obligación no encontrada")
+
+                obligacion_id = int(ob["id"])
+                inmueble_id = int(ob["inmueble_id"]) if ob["inmueble_id"] else inmueble_id
+                fuente = str(ob["fuente_saldo"] or "").upper()
+
+                if str(ob["estado"] or "ACTIVA").upper() in {"CANCELADA", "ANULADA"}:
+                    raise HTTPException(status_code=409, detail="La obligación no está activa")
+
+                if identificacion_reportante:
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM obligacion_partes op
+                        JOIN contactos c ON c.id=op.contacto_id
+                        WHERE op.obligacion_id=%s
+                          AND op.rol='DEUDOR'
+                          AND REGEXP_REPLACE(COALESCE(c.identificacion::text,''),'[^0-9]','','g')
+                              = REGEXP_REPLACE(%s,'[^0-9]','','g')
+                        LIMIT 1
+                        """,
+                        (obligacion_id,identificacion_reportante),
+                    )
+                    if not cur.fetchone():
+                        raise HTTPException(
+                            status_code=409,
+                            detail="La identificación reportante no corresponde a un deudor de la obligación",
+                        )
+
+                inm = {
+                    "id": inmueble_id,
+                    "conjunto_residencial": ob["conjunto_residencial"] or "Obligación",
+                    "torre_apto": ob["torre_apto"] or "",
+                    "identificacion": ob["identificacion"],
+                    "nombre": ob["nombre"],
+                    "telefono": ob["telefono"],
+                }
+
+                if fuente == "EXPENSAS_PH":
+                    if not inmueble_id:
+                        raise HTTPException(status_code=409, detail="La obligación PH no tiene inmueble")
+
+                    _, resumen_prev, _ = liquidador.motor_calculo_judicial(
+                        inmueble_id, "usura", 2.5, 23.8, 0.0, fecha_pago,
+                        obligacion_id=obligacion_id,
+                    )
+                    saldo_int = float(resumen_prev.get("intereses", 0.0))
+                    saldo_cap = float(resumen_prev.get("capital", 0.0))
+                    honorarios_pct = float(resumen_prev.get("honorarios_pct", 23.8))
+                    imputacion = recaudos_service.calcular_imputacion_abono(
+                        saldo_int, saldo_cap, honorarios_pct, valor_abono
+                    )
+
+                    cur.execute(
+                        """
+                        INSERT INTO expensas_ph (
+                            inmueble_id,concepto,periodo_mes,periodo_anio,
+                            valor_capital,fecha_vencimiento,estado,obligation_id
+                        ) VALUES (%s,'Abono',%s,%s,%s,%s,'Pagado',%s)
+                        RETURNING id
+                        """,
+                        (
+                            inmueble_id,fecha_pago.month,fecha_pago.year,
+                            valor_abono,fecha_pago,obligacion_id,
+                        ),
+                    )
+                    recaudo_params = (
+                        inmueble_id,obligacion_id,inm["identificacion"],inm["nombre"],fecha_pago,
+                        valor_abono,imputacion["abono_intereses"],imputacion["abono_capital"],
+                        imputacion["honorarios_cobro"],banco,referencia,soporte_url,
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO recaudos_contabilidad (
+                            inmueble_id,obligacion_id,identificacion_deudor,nombre_deudor,fecha_pago,
+                            valor_total,abono_intereses,abono_capital,honorarios_cobro,
+                            banco_origen,referencia_transaccion,soporte_url,estado_conciliacion
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDIENTE_CONCILIACION')
+                        RETURNING id
+                        """,
+                        recaudo_params,
+                    )
+                    recaudo_id = int(cur.fetchone()["id"])
+                    saldo_post = None
+                    imputacion_resultado = imputacion
+                else:
+                    saldo_pre = obligacion_saldo_service.calcular_saldo_obligacion(
+                        obligacion_id,fecha_corte=fecha_pago,conn=conn
+                    )
+                    if not saldo_pre.get("saldo_verificado"):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="No existe un saldo verificable para la obligación",
+                        )
+                    saldo_actual = float(saldo_pre.get("saldo_total") or 0)
+                    if valor_abono > saldo_actual + 0.01:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="El abono excede el saldo verificable de la obligación",
+                        )
+
+                    cur.execute(
+                        """
+                        INSERT INTO recaudos_contabilidad (
+                            inmueble_id,obligacion_id,identificacion_deudor,nombre_deudor,fecha_pago,
+                            valor_total,abono_intereses,abono_capital,honorarios_cobro,
+                            banco_origen,referencia_transaccion,soporte_url,estado_conciliacion
+                        ) VALUES (%s,%s,%s,%s,%s,%s,0,%s,0,%s,%s,%s,'PENDIENTE_CONCILIACION')
+                        RETURNING id
+                        """,
+                        (
+                            inmueble_id,obligacion_id,inm["identificacion"],inm["nombre"],fecha_pago,
+                            valor_abono,valor_abono,banco,referencia,soporte_url,
+                        ),
+                    )
+                    recaudo_id = int(cur.fetchone()["id"])
+
+                    cur.execute(
+                        """
+                        INSERT INTO obligacion_movimientos (
+                            obligacion_id,tipo,concepto,valor,fecha,observaciones,recaudo_id
+                        ) VALUES (%s,'ABONO','Recaudo recibido',%s,%s,%s,%s)
+                        """,
+                        (
+                            obligacion_id,valor_abono,fecha_pago,
+                            f"Banco: {banco}; referencia: {referencia}",
+                            recaudo_id,
+                        ),
+                    )
+                    saldo_post = obligacion_saldo_service.calcular_saldo_obligacion(
+                        obligacion_id,fecha_corte=fecha_pago,conn=conn
+                    )
+                    imputacion_resultado = {
+                        "abono_intereses": 0.0,
+                        "abono_capital": valor_abono,
+                        "honorarios_cobro": 0.0,
+                    }
+
+                cur.execute(
+                    """
+                    SELECT po.radicado_interno
+                    FROM proceso_obligaciones po
+                    WHERE po.obligacion_id=%s
+                    ORDER BY po.es_principal DESC,po.id
+                    LIMIT 1
+                    """,
+                    (obligacion_id,),
                 )
-                saldo_int = float(resumen_prev.get("intereses", 0.0))
-                saldo_cap = float(resumen_prev.get("capital", 0.0))
-                honorarios_pct = float(resumen_prev.get("honorarios_pct", 23.8))
-                
-                imputacion = recaudos_service.calcular_imputacion_abono(
-                    saldo_int, saldo_cap, honorarios_pct, valor_abono
-                )
+                p_row = cur.fetchone()
+                radicado = p_row["radicado_interno"] if p_row else None
 
-                # 3. Asentar contablemente en expensas_ph (impacta de inmediato el liquidador)
-                cur.execute("""
-                    INSERT INTO expensas_ph (
-                        inmueble_id, concepto, periodo_mes, periodo_anio,
-                        valor_capital, fecha_vencimiento, estado
-                    ) VALUES (%s, 'Abono', %s, %s, %s, %s, 'Pagado')
-                    RETURNING id;
-                """, (inmueble_id, fecha_pago.month, fecha_pago.year, valor_abono, fecha_pago))
-                
-                # 4. Registrar discriminación de fondos por cuenta en recaudos_contabilidad
-                cur.execute("""
-                    INSERT INTO recaudos_contabilidad (
-                        inmueble_id, identificacion_deudor, nombre_deudor, fecha_pago,
-                        valor_total, abono_intereses, abono_capital, honorarios_cobro,
-                        banco_origen, referencia_transaccion, soporte_url, estado_conciliacion
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDIENTE_CONCILIACION')
-                    RETURNING id;
-                """, (
-                    inmueble_id, inm["identificacion"], inm["nombre"], fecha_pago,
-                    valor_abono, imputacion["abono_intereses"], imputacion["abono_capital"],
-                    imputacion["honorarios_cobro"], banco, referencia, soporte_url
-                ))
-                recaudo_id = cur.fetchone()["id"]
-
-                # 5. Asentar en el CRM del ERP
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO gestiones_crm (
-                        inmueble_id, identificacion_deudor, tipo_contacto,
-                        resumen, usuario, estado
-                    ) VALUES (%s, %s, 'WhatsApp IA - Comprobante', %s, 'Bot Vision', 'ACTIVO');
-                """, (
-                    inmueble_id, inm["identificacion"],
-                    f"Abono reportado por IA: ${valor_abono:,.0f} ({banco} Ref: {referencia}). Imputado: Capital ${imputacion['abono_capital']:,.0f}, Intereses ${imputacion['abono_intereses']:,.0f}."
-                ))
+                        radicado_interno,inmueble_id,obligacion_id,identificacion_deudor,
+                        tipo_contacto,resumen,usuario,estado
+                    ) VALUES (%s,%s,%s,%s,'WhatsApp IA - Comprobante',%s,'Bot Vision','ACTIVO')
+                    """,
+                    (
+                        radicado,inmueble_id,obligacion_id,inm["identificacion"],
+                        f"Abono reportado por IA: ${valor_abono:,.0f} ({banco} Ref: {referencia}).",
+                    ),
+                )
 
-                # 6. Actualizar acuerdo de pago si existe
-                cur.execute("""
-                    SELECT id, cuota_actual, numero_cuotas 
-                    FROM acuerdos_pago 
-                    WHERE inmueble_id = %s AND estado = 'PENDIENTE'
-                    ORDER BY id DESC LIMIT 1;
-                """, (inmueble_id,))
+                cur.execute(
+                    """
+                    SELECT id,cuota_actual,numero_cuotas
+                    FROM acuerdos_pago
+                    WHERE obligacion_id=%s AND estado='PENDIENTE'
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (obligacion_id,),
+                )
                 ac = cur.fetchone()
                 if ac:
-                    if ac["cuota_actual"] >= ac["numero_cuotas"]:
-                        cur.execute("UPDATE acuerdos_pago SET estado = 'CUMPLIDO' WHERE id = %s;", (ac["id"],))
+                    if int(ac["cuota_actual"] or 0) >= int(ac["numero_cuotas"] or 0):
+                        cur.execute(
+                            "UPDATE acuerdos_pago SET estado='CUMPLIDO' WHERE id=%s",
+                            (ac["id"],),
+                        )
                     else:
-                        cur.execute("UPDATE acuerdos_pago SET cuota_actual = cuota_actual + 1 WHERE id = %s;", (ac["id"],))
+                        cur.execute(
+                            "UPDATE acuerdos_pago SET cuota_actual=cuota_actual+1 WHERE id=%s",
+                            (ac["id"],),
+                        )
 
-        # 7. Re-liquidar deuda post-abono
-        _, resumen_post, _ = liquidador.motor_calculo_judicial(
-            inmueble_id, "usura", 2.5, 23.8, 0.0, date.today()
-        )
-        saldo_restante = float(resumen_post.get("gran_total", 0.0))
-        
-        solicitud_creada = False
-        if saldo_restante <= 100.0:
-            # Crear solicitud de paz y salvo sujeta a validación humana
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO solicitudes_paz_y_salvo (
-                            inmueble_id, identificacion_deudor, nombre_deudor,
-                            conjunto_residencial, torre_apto, recaudo_id, estado
-                        ) VALUES (%s, %s, %s, %s, %s, %s, 'PENDIENTE_REVISION');
-                    """, (inmueble_id, inm["identificacion"], inm["nombre"], inm["conjunto_residencial"], inm["torre_apto"], recaudo_id))
-            solicitud_creada = True
+                solicitud_creada = False
+                saldo_restante = None
+                if fuente == "EXPENSAS_PH":
+                    _, resumen_post_ph, _ = liquidador.motor_calculo_judicial(
+                        inmueble_id,"usura",2.5,23.8,0.0,date.today(),
+                        obligacion_id=obligacion_id,
+                    )
+                    saldo_restante = float(resumen_post_ph.get("gran_total",0.0))
+                    if saldo_restante <= 100.0:
+                        cur.execute(
+                            """
+                            INSERT INTO solicitudes_paz_y_salvo (
+                                inmueble_id,obligacion_id,identificacion_deudor,nombre_deudor,
+                                conjunto_residencial,torre_apto,recaudo_id,estado
+                            ) VALUES (%s,%s,%s,%s,%s,%s,%s,'PENDIENTE_REVISION')
+                            """,
+                            (
+                                inmueble_id,obligacion_id,inm["identificacion"],inm["nombre"],
+                                inm["conjunto_residencial"],inm["torre_apto"],recaudo_id,
+                            ),
+                        )
+                        solicitud_creada = True
+                    saldo_payload = max(0.0,saldo_restante)
+                else:
+                    saldo_payload = max(0.0,float((saldo_post or {}).get("saldo_total") or 0))
 
         return JSONResponse({
-            "status": "success",
-            "mensaje": "Abono asentado exitosamente en contabilidad y liquidador",
-            "recaudo_id": recaudo_id,
-            "valor_abono": valor_abono,
-            "imputacion": imputacion,
-            "saldo_restante": max(0.0, saldo_restante),
-            "requiere_aprobacion_paz_y_salvo": solicitud_creada
+            "status":"success",
+            "mensaje":"Abono asentado contra la obligación canónica",
+            "recaudo_id":recaudo_id,
+            "obligacion_id":obligacion_id,
+            "valor_abono":valor_abono,
+            "imputacion":imputacion_resultado,
+            "saldo_restante":saldo_payload,
+            "requiere_aprobacion_paz_y_salvo":solicitud_creada,
         })
     finally:
         conn.release()
@@ -223,9 +426,14 @@ def aprobar_paz_y_salvo_humano(solicitud_id: int, request: Request, usuario_apro
                 # Asentar en CRM
                 cur.execute("""
                     INSERT INTO gestiones_crm (
-                        inmueble_id, identificacion_deudor, tipo_contacto, resumen, usuario, estado
-                    ) VALUES (%s, %s, 'Paz y Salvo Aprobado', %s, %s, 'FINALIZADO');
-                """, (sol["inmueble_id"], sol["identificacion_deudor"], f"Paz y Salvo APROBADO por {usuario_aprobador}. Código verificación: {codigo_verif}", usuario_aprobador))
+                        inmueble_id, obligacion_id, identificacion_deudor,
+                        tipo_contacto, resumen, usuario, estado
+                    ) VALUES (%s, %s, %s, 'Paz y Salvo Aprobado', %s, %s, 'FINALIZADO');
+                """, (
+                    sol["inmueble_id"], sol["obligacion_id"], sol["identificacion_deudor"],
+                    f"Paz y Salvo APROBADO por {usuario_aprobador}. Código verificación: {codigo_verif}",
+                    usuario_aprobador,
+                ))
 
         return JSONResponse({
             "status": "success",
@@ -243,7 +451,7 @@ def listar_solicitudes_pendientes(request: Request):
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT s.id, s.inmueble_id, s.identificacion_deudor, s.nombre_deudor,
+                SELECT s.id, s.inmueble_id, s.obligacion_id, s.identificacion_deudor, s.nombre_deudor,
                        s.conjunto_residencial, s.torre_apto, s.fecha_solicitud,
                        r.valor_total, r.banco_origen, r.referencia_transaccion, r.soporte_url
                 FROM solicitudes_paz_y_salvo s

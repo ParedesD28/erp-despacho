@@ -54,37 +54,34 @@ def _parse_fecha(valor):
 
 
 def asegurar_tabla_tasas():
+    """Verifica la caché de tasas en solo lectura; las migraciones hacen el DDL."""
     conn = db.get_connection()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS historico_tasas (
-                        anio INTEGER NOT NULL,
-                        mes INTEGER NOT NULL,
-                        tasa_efectiva_anual NUMERIC(18,10) NOT NULL,
-                        tasa_usura_ea NUMERIC(18,10),
-                        ibc_ea NUMERIC(18,10),
-                        modalidad VARCHAR(120) NOT NULL DEFAULT 'Consumo y ordinario',
-                        vigencia_desde DATE,
-                        vigencia_hasta DATE,
-                        fuente TEXT,
-                        consultado_en TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                        validado_sfc BOOLEAN DEFAULT FALSE
-                    )
-                """)
-                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS tasa_usura_ea NUMERIC(18,10)")
-                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS ibc_ea NUMERIC(18,10)")
-                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS modalidad VARCHAR(120)")
-                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS vigencia_desde DATE")
-                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS vigencia_hasta DATE")
-                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS fuente TEXT")
-                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS consultado_en TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP")
-                cur.execute("ALTER TABLE historico_tasas ADD COLUMN IF NOT EXISTS validado_sfc BOOLEAN DEFAULT FALSE")
-        print("[TASAS] Tabla historico_tasas asegurada en Neon", flush=True)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='historico_tasas'
+                """
+            )
+            columns = {str(row[0]) for row in cur.fetchall()}
+            expected = {
+                "anio", "mes", "tasa_efectiva_anual", "tasa_usura_ea",
+                "ibc_ea", "modalidad", "vigencia_desde", "vigencia_hasta",
+                "fuente", "consultado_en", "validado_sfc",
+            }
+            if not columns:
+                raise RuntimeError("Falta la tabla historico_tasas")
+            missing = sorted(expected - columns)
+            if missing:
+                raise RuntimeError(
+                    "Faltan columnas en historico_tasas: " + ", ".join(missing)
+                )
+        print("[TASAS] Caché historico_tasas verificada", flush=True)
         return True
     except Exception as exc:
-        print(f"[TASAS][ALERTA] No se pudo preparar historico_tasas: {exc!r}", flush=True)
+        print(f"[TASAS][ALERTA] Esquema de tasas incompleto: {exc!r}", flush=True)
         return False
     finally:
         conn.release()

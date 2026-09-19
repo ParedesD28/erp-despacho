@@ -52,91 +52,48 @@ def _table_exists(cur, name: str) -> bool:
 
 
 def ensure_schema() -> None:
-    """Migraciones idempotentes. Nunca elimina tablas ni registros."""
-    main._ensure_crm_and_vencimientos_schema()
+    """Verifica en solo lectura el contrato de Agenda; las migraciones crean la estructura."""
+    required = {
+        "acuerdos_pago": {
+            "id", "inmueble_id", "obligacion_id", "identificacion_deudor",
+            "valor_acordado", "numero_cuotas", "cuota_actual",
+            "fecha_compromiso", "estado", "frecuencia",
+        },
+        "acuerdos_pago_cuotas": {
+            "id", "acuerdo_id", "numero_cuota", "fecha_vencimiento",
+            "valor_cuota", "estado", "anulado", "abogado_id",
+        },
+        "vencimientos": {
+            "id", "radicado_interno", "obligacion_id", "titulo",
+            "fecha_vencimiento", "completado", "inmueble_id",
+            "anulado", "categoria", "abogado_id",
+        },
+        "agenda_auditoria": {
+            "id", "fecha", "abogado_id", "accion", "tipo",
+            "registro_id", "radicado_interno", "inmueble_id",
+        },
+        "inmueble_propietarios": {"inmueble_id", "contacto_id", "es_principal"},
+    }
     conn = db.get_connection()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS anulado BOOLEAN NOT NULL DEFAULT FALSE")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS categoria TEXT NOT NULL DEFAULT 'TERMINO'")
-                cur.execute("ALTER TABLE vencimientos ADD COLUMN IF NOT EXISTS abogado_id TEXT")
-                cur.execute("ALTER TABLE acuerdos_pago ADD COLUMN IF NOT EXISTS abogado_id TEXT")
-                cur.execute("ALTER TABLE acuerdos_pago ADD COLUMN IF NOT EXISTS frecuencia TEXT NOT NULL DEFAULT 'MENSUAL'")
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS acuerdos_pago_cuotas (
-                        id BIGSERIAL PRIMARY KEY,
-                        acuerdo_id BIGINT NOT NULL REFERENCES acuerdos_pago(id) ON DELETE CASCADE,
-                        numero_cuota INTEGER NOT NULL,
-                        fecha_vencimiento DATE NOT NULL,
-                        valor_cuota NUMERIC(14,2) NOT NULL DEFAULT 0,
-                        estado TEXT NOT NULL DEFAULT 'PENDIENTE',
-                        anulado BOOLEAN NOT NULL DEFAULT FALSE,
-                        abogado_id TEXT,
-                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(acuerdo_id, numero_cuota)
+        with conn.cursor() as cur:
+            for table, expected in required.items():
+                cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name=%s
+                    """,
+                    (table,),
+                )
+                actual = {str(row[0]) for row in cur.fetchall()}
+                if not actual:
+                    raise RuntimeError(f"[AGENDA PREFLIGHT] Falta tabla: {table}")
+                missing = sorted(expected - actual)
+                if missing:
+                    raise RuntimeError(
+                        f"[AGENDA PREFLIGHT] Faltan columnas en {table}: {', '.join(missing)}"
                     )
-                """)
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_acuerdos_cuotas_fecha ON acuerdos_pago_cuotas(fecha_vencimiento, estado, anulado)")
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS agenda_auditoria (
-                        id BIGSERIAL PRIMARY KEY,
-                        fecha TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        abogado_id TEXT,
-                        abogado_nombre TEXT NOT NULL DEFAULT 'Sistema',
-                        accion TEXT NOT NULL,
-                        tipo TEXT NOT NULL,
-                        registro_id BIGINT,
-                        radicado_interno TEXT,
-                        identificacion_deudor TEXT,
-                        nombre_deudor TEXT,
-                        inmueble_id INTEGER,
-                        detalle TEXT
-                    )
-                """)
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_agenda_auditoria_fecha ON agenda_auditoria(fecha DESC)")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_agenda_auditoria_abogado ON agenda_auditoria(abogado_id, fecha DESC)")
-
-                cur.execute("""
-                    INSERT INTO acuerdos_pago_cuotas (acuerdo_id, numero_cuota, fecha_vencimiento, valor_cuota, abogado_id)
-                    SELECT a.id, 1, a.fecha_compromiso, a.valor_acordado, a.abogado_id
-                    FROM acuerdos_pago a
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM acuerdos_pago_cuotas c WHERE c.acuerdo_id = a.id
-                    )
-                """)
-
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS inmueble_propietarios (
-                        id BIGSERIAL PRIMARY KEY,
-                        inmueble_id INTEGER NOT NULL,
-                        contacto_id INTEGER NOT NULL,
-                        es_principal BOOLEAN NOT NULL DEFAULT FALSE,
-                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(inmueble_id, contacto_id)
-                    )
-                """)
-                if _table_exists(cur, "inmuebles_ph"):
-                    cur.execute("""
-                        INSERT INTO inmueble_propietarios (inmueble_id, contacto_id, es_principal)
-                        SELECT i.id, i.contacto_id, TRUE
-                        FROM inmuebles_ph i
-                        WHERE i.contacto_id IS NOT NULL
-                        ON CONFLICT (inmueble_id, contacto_id) DO UPDATE
-                        SET es_principal = inmueble_propietarios.es_principal OR EXCLUDED.es_principal
-                    """)
-                if _table_exists(cur, "procesos_litisconsorcio"):
-                    cur.execute("""
-                        INSERT INTO inmueble_propietarios (inmueble_id, contacto_id, es_principal)
-                        SELECT DISTINCT p.inmueble_id, c.id, FALSE
-                        FROM procesos p
-                        JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
-                        JOIN contactos c ON c.identificacion = pl.identificacion_demandado
-                        WHERE p.inmueble_id IS NOT NULL
-                        ON CONFLICT (inmueble_id, contacto_id) DO NOTHING
-                    """)
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_inmueble_propietarios_inmueble ON inmueble_propietarios(inmueble_id)")
     finally:
         conn.release()
 
@@ -285,6 +242,7 @@ def _crear_router_agenda() -> APIRouter:
         numero_cuotas: int = Form(1),
         frecuencia: str = Form("MENSUAL"),
         radicado_interno: str | None = Form(None),
+        obligacion_id: int | None = Form(None),
     ):
         ensure_schema()
         conn = db.get_connection()
@@ -318,17 +276,84 @@ def _crear_router_agenda() -> APIRouter:
                     if frecuencia not in {"MENSUAL", "QUINCENAL", "SEMANAL"}:
                         frecuencia = "MENSUAL"
                     total = round(float(valor_acordado or 0), 2)
+                    if total <= 0:
+                        raise ValueError("El valor del acuerdo debe ser mayor que cero")
                     primera = date.fromisoformat(str(fecha_compromiso))
                     abogado_id = str(getattr(request.state, "user_id", "") or "") or None
+                    if radicado_interno and not obligacion_id and _table_exists(cur, "proceso_obligaciones"):
+                        cur.execute(
+                            """
+                            SELECT po.obligacion_id
+                            FROM proceso_obligaciones po
+                            WHERE po.radicado_interno=%s
+                            ORDER BY po.es_principal DESC, po.id
+                            LIMIT 1
+                            """,
+                            (str(radicado_interno).strip(),),
+                        )
+                        principal = cur.fetchone()
+                        obligacion_id = int(principal["obligacion_id"]) if principal else None
+                    if obligacion_id:
+                        cur.execute(
+                            """
+                            SELECT o.id,
+                                   op.contacto_id,
+                                   c.identificacion
+                            FROM obligaciones o
+                            JOIN obligacion_partes op
+                              ON op.obligacion_id=o.id
+                             AND op.rol='DEUDOR'
+                            JOIN contactos c ON c.id=op.contacto_id
+                            WHERE o.id=%s
+                              AND op.es_principal=TRUE
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id),),
+                        )
+                        obligacion = cur.fetchone()
+                        if not obligacion:
+                            raise ValueError("La obligación indicada no existe.")
+
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM obligacion_partes op
+                            JOIN contactos c ON c.id=op.contacto_id
+                            WHERE op.obligacion_id=%s
+                              AND op.rol='DEUDOR'
+                              AND REGEXP_REPLACE(COALESCE(c.identificacion::text,''),'[^0-9]','','g')
+                                  = REGEXP_REPLACE(%s,'[^0-9]','','g')
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id), ident),
+                        )
+                        if not cur.fetchone():
+                            raise ValueError("La persona seleccionada no es deudora de la obligación.")
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM proceso_obligaciones
+                            WHERE obligacion_id=%s
+                              AND (%s IS NULL OR radicado_interno=%s)
+                            LIMIT 1
+                            """,
+                            (
+                                int(obligacion_id),
+                                str(radicado_interno).strip() if radicado_interno else None,
+                                str(radicado_interno).strip() if radicado_interno else None,
+                            ),
+                        )
+                        if not cur.fetchone():
+                            raise ValueError("La obligación no pertenece al expediente indicado.")
 
                     cur.execute("""
                         INSERT INTO acuerdos_pago
-                            (inmueble_id,identificacion_deudor,nombre_deudor,telefono,
+                            (inmueble_id,obligacion_id,identificacion_deudor,nombre_deudor,telefono,
                              valor_acordado,numero_cuotas,cuota_actual,fecha_compromiso,
                              estado,origen,observaciones,abogado_id,frecuencia)
-                        VALUES (%s,%s,%s,%s,%s,%s,1,%s,'PENDIENTE','ABOGADO_HUMANO',%s,%s,%s)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s,'PENDIENTE','ABOGADO_HUMANO',%s,%s,%s)
                         RETURNING id
-                    """, (inmueble_id,ident,nombre_real,telefono_real,total,n,primera,
+                    """, (inmueble_id,obligacion_id,ident,nombre_real,telefono_real,total,n,primera,
                           observaciones.strip(),abogado_id,frecuencia))
                     acuerdo_id = int(cur.fetchone()["id"])
 
@@ -353,9 +378,9 @@ def _crear_router_agenda() -> APIRouter:
                     if main.expedientes_service._table_exists(cur, "gestiones_crm"):
                         cur.execute("""
                             INSERT INTO gestiones_crm
-                                (inmueble_id,identificacion_deudor,tipo_contacto,resumen,promesa_pago_fecha,usuario,estado)
-                            VALUES (%s,%s,'Acuerdo Manual',%s,%s,'Abogado ERP','ACTIVO')
-                        """, (inmueble_id,ident,
+                                (radicado_interno,inmueble_id,obligacion_id,identificacion_deudor,tipo_contacto,resumen,promesa_pago_fecha,usuario,estado)
+                            VALUES (%s,%s,%s,%s,'Acuerdo Manual',%s,%s,'Abogado ERP','ACTIVO')
+                        """, (radicado_interno,inmueble_id,obligacion_id,ident,
                               f"[ACUERDO DE PAGO #{acuerdo_id}] {n} cuota(s) {frecuencia} por ${total:,.0f}.",
                               primera))
                     _audit(cur, request, "CREAR_ACUERDO", "ACUERDO_PAGO", acuerdo_id,
@@ -425,7 +450,7 @@ def _crear_router_agenda() -> APIRouter:
             conn.release()
 
     @router.post("/vencimientos/guardar", name="agenda_guardar_vencimiento")
-    def agenda_guardar_vencimiento(request: Request, radicado_interno: str = Form(...), titulo: str = Form(...), fecha_vencimiento: date = Form(...), observaciones: str = Form(""), categoria: str = Form("TERMINO"), inmueble_id: int | None = Form(None)):
+    def agenda_guardar_vencimiento(request: Request, radicado_interno: str = Form(...), titulo: str = Form(...), fecha_vencimiento: date = Form(...), observaciones: str = Form(""), categoria: str = Form("TERMINO"), inmueble_id: int | None = Form(None), obligacion_id: int | None = Form(None)):
         ensure_schema()
         categoria = str(categoria or "TERMINO").upper()
         if categoria not in {"TERMINO","OTROS"}:
@@ -435,12 +460,39 @@ def _crear_router_agenda() -> APIRouter:
             with conn:
                 with conn.cursor() as cur:
                     abogado_id = str(getattr(request.state,"user_id","") or "") or None
+                    if not obligacion_id and _table_exists(cur, "proceso_obligaciones"):
+                        cur.execute(
+                            """
+                            SELECT po.obligacion_id
+                            FROM proceso_obligaciones po
+                            WHERE po.radicado_interno=%s
+                            ORDER BY po.es_principal DESC, po.id
+                            LIMIT 1
+                            """,
+                            (radicado_interno.strip(),),
+                        )
+                        principal = cur.fetchone()
+                        obligacion_id = int(principal["obligacion_id"]) if principal else None
+
+                    if obligacion_id:
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM proceso_obligaciones
+                            WHERE obligacion_id=%s AND radicado_interno=%s
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id), radicado_interno.strip()),
+                        )
+                        if not cur.fetchone():
+                            raise ValueError("La obligación no pertenece al expediente indicado.")
+
                     cur.execute("""
                         INSERT INTO vencimientos
-                            (radicado_interno,titulo,fecha_vencimiento,observaciones,completado,
+                            (radicado_interno,obligacion_id,titulo,fecha_vencimiento,observaciones,completado,
                              tipo,valor,inmueble_id,anulado,categoria,abogado_id)
-                        VALUES (%s,%s,%s,%s,FALSE,%s,0,%s,FALSE,%s,%s) RETURNING id
-                    """, (radicado_interno.strip(),titulo.strip(),fecha_vencimiento,observaciones.strip(),categoria,inmueble_id,categoria,abogado_id))
+                        VALUES (%s,%s,%s,%s,%s,FALSE,%s,0,%s,FALSE,%s,%s) RETURNING id
+                    """, (radicado_interno.strip(),obligacion_id,titulo.strip(),fecha_vencimiento,observaciones.strip(),categoria,inmueble_id,categoria,abogado_id))
                     registro_id = cur.fetchone()[0]
                     _audit(cur,request,"CREAR_VENCIMIENTO",categoria,registro_id,radicado_interno,None,None,inmueble_id,titulo.strip())
             return main._redirect("/vencimientos", mensaje="Vencimiento+registrado")
