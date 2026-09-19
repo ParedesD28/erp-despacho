@@ -115,6 +115,33 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertNotIn("deudor_contacto_id", schema_source)
         self.assertIn("20260919_fase14_eliminar_legacy_proceso_obligacion", schema_source)
 
+
+    def test_informe_ejecutivo_no_referencia_relaciones_legacy(self):
+        source = (ROOT / "exportaciones.py").read_text(encoding="utf-8").lower()
+        for token in ("procesos_litisconsorcio", "id_cliente", "id_demandado"):
+            self.assertNotIn(token, source)
+
+    def test_expedientes_exige_motivo_para_inactivar(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn('"/expediente/estado"', source)
+        self.assertIn('accion == "INACTIVAR" and len(motivo) < 5', source)
+        template = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8")
+        self.assertIn('name="motivo"', template)
+        self.assertIn("minlength="5"", template)
+
+    def test_expedientes_filtro_estado(self):
+        source = (ROOT / "expedientes_service.py").read_text(encoding="utf-8")
+        self.assertIn('estado_filtro: str = "ACTIVOS"', source)
+        template = (ROOT / "templates" / "expedientes.html").read_text(encoding="utf-8")
+        for value in ('ACTIVOS', 'INACTIVOS', 'TODOS'):
+            self.assertIn(value, template)
+
+    def test_sms_bloquea_proceso_inactivo(self):
+        sms = (ROOT / "sms_router.py").read_text(encoding="utf-8")
+        saldo = (ROOT / "sms_saldo_service.py").read_text(encoding="utf-8")
+        self.assertIn("p_inact.estado", sms)
+        self.assertIn("p.estado", saldo)
+
     def test_codigo_no_referencia_relaciones_legacy_de_proceso_obligacion(self):
         archivos = {
             "main.py",
