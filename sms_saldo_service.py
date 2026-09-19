@@ -111,9 +111,46 @@ def actualizar_item_cola(cur, item: Dict[str, Any]) -> Dict[str, Any]:
         "telefono": row[8], "mensaje_texto": row[9], "tipo_campana": row[10],
     }
 
-    saldo = calcular_saldo_obligacion(
-        int(data["obligacion_id"]) if data.get("obligacion_id") else None
-    )
+    obligacion_id_actual = int(data["obligacion_id"]) if data.get("obligacion_id") else None
+    if obligacion_id_actual:
+        cur.execute(
+            """
+            SELECT 1
+            FROM proceso_obligaciones po
+            JOIN procesos p ON p.radicado_interno=po.radicado_interno
+            WHERE po.obligacion_id=%s
+              AND UPPER(COALESCE(p.estado,'ACTIVO'))='INACTIVO'
+            LIMIT 1
+            """,
+            (obligacion_id_actual,),
+        )
+        if cur.fetchone():
+            saldo_bloqueado = {
+                "saldo_total": None,
+                "saldo_verificado": False,
+                "saldo_fuente": "PROCESO_INACTIVO",
+                "saldo_calculado_en": ahora_colombia(),
+            }
+            cur.execute(
+                """
+                UPDATE sms_cola_envios
+                SET saldo_verificado=FALSE,
+                    saldo_fuente=%s,
+                    saldo_calculado_en=CURRENT_TIMESTAMP,
+                    error_detalle=%s
+                WHERE id=%s
+                """,
+                (
+                    "PROCESO_INACTIVO",
+                    "Envío bloqueado: el expediente asociado está INACTIVO.",
+                    data["id"],
+                ),
+            )
+            data.update(saldo_bloqueado)
+            data["bloqueado_envio"] = True
+            return data
+
+    saldo = calcular_saldo_obligacion(obligacion_id_actual)
 
     if not saldo.get("saldo_verificado"):
         cur.execute(
