@@ -116,6 +116,24 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertIn("20260919_fase14_eliminar_legacy_proceso_obligacion", schema_source)
 
 
+
+    def test_carga_masiva_liquidador_persiste_obligation_id(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "(inmueble_id, obligation_id, concepto, periodo_mes, periodo_anio,",
+            source,
+        )
+        self.assertNotIn(
+            "INSERT INTO expensas_ph\n                                                    (inmueble_id, concepto, periodo_mes",
+            source,
+        )
+
+    def test_resolver_ph_repara_ejecutivo_historico_sin_obligacion(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("Reparación histórica:", source)
+        self.assertIn("CUOTAS_ADMINISTRACION", source)
+        self.assertIn("vincular_obligacion_a_proceso", source)
+
     def test_informe_ejecutivo_no_referencia_relaciones_legacy(self):
         source = (ROOT / "exportaciones.py").read_text(encoding="utf-8").lower()
         for token in ("procesos_litisconsorcio", "id_cliente", "id_demandado"):
