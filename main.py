@@ -1332,6 +1332,21 @@ def crm_guardar(
                 radicado = str(radicado_interno or "").strip() or None
                 ident = str(identificacion_deudor or "").strip() or None
 
+                if not obligacion_id and radicado:
+                    cur.execute(
+                        """
+                        SELECT po.obligacion_id
+                        FROM proceso_obligaciones po
+                        WHERE po.radicado_interno=%s
+                        ORDER BY po.es_principal DESC,po.id
+                        LIMIT 1
+                        """,
+                        (radicado,),
+                    )
+                    row_ob = cur.fetchone()
+                    if row_ob:
+                        obligacion_id = int(row_ob["obligacion_id"])
+
                 if obligacion_id:
                     cur.execute(
                         """
