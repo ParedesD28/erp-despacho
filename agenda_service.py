@@ -296,10 +296,16 @@ def _crear_router_agenda() -> APIRouter:
                     if obligacion_id:
                         cur.execute(
                             """
-                            SELECT o.id,o.deudor_contacto_id,c.identificacion
+                            SELECT o.id,
+                                   op.contacto_id,
+                                   c.identificacion
                             FROM obligaciones o
-                            JOIN contactos c ON c.id=o.deudor_contacto_id
+                            JOIN obligacion_partes op
+                              ON op.obligacion_id=o.id
+                             AND op.rol='DEUDOR'
+                            JOIN contactos c ON c.id=op.contacto_id
                             WHERE o.id=%s
+                              AND op.es_principal=TRUE
                             LIMIT 1
                             """,
                             (int(obligacion_id),),
