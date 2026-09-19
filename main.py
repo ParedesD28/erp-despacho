@@ -1815,7 +1815,120 @@ def _resolver_obligacion_ph(cur, inmueble_id: int, obligacion_id: int | None = N
     )
     rows = cur.fetchall()
     if not rows:
-        raise ValueError("El inmueble no tiene una obligación PH activa.")
+        cur.execute(
+            """
+            SELECT
+                p.radicado_interno,
+                p.tipo_proceso_id,
+                p.naturaleza,
+                p.estado,
+                COUNT(DISTINCT CASE WHEN UPPER(pp.rol)='DEMANDADO' THEN pp.contacto_id END) AS demandados
+            FROM procesos p
+            JOIN proceso_partes pp ON pp.radicado_interno=p.radicado_interno
+            WHERE p.inmueble_id=%s
+            GROUP BY p.radicado_interno,p.tipo_proceso_id,p.naturaleza,p.estado
+            ORDER BY p.radicado_interno DESC
+            LIMIT 5
+            """,
+            (int(inmueble_id),),
+        )
+        procesos_ph = cur.fetchall()
+        candidatos = [
+            row for row in procesos_ph
+            if str(row["naturaleza"] or "").upper() == "EJECUTIVO"
+            and str(row["estado"] or "ACTIVO").upper() != "INACTIVO"
+            and int(row["demandados"] or 0) >= 1
+        ]
+        if not candidatos:
+            raise ValueError(
+                "El inmueble no tiene una obligación PH activa y no existe un proceso ejecutivo "
+                "válido para crearla automáticamente."
+            )
+        if len(candidatos) > 1:
+            raise ValueError(
+                "El inmueble tiene varios procesos ejecutivos candidatos; debe seleccionarse "
+                "el expediente antes de crear la obligación PH."
+            )
+
+        proc = candidatos[0]
+        radicado = str(proc["radicado_interno"])
+
+        cur.execute(
+            """
+            SELECT id, identificacion, nombre
+            FROM contactos
+            WHERE id IN (
+                SELECT pp.contacto_id
+                FROM proceso_partes pp
+                WHERE pp.radicado_interno=%s
+                  AND UPPER(pp.rol)='DEMANDADO'
+            )
+            ORDER BY id
+            """,
+            (radicado,),
+        )
+        deudores = [dict(row) for row in cur.fetchall()]
+        if not deudores:
+            raise ValueError("El proceso ejecutivo no tiene demandados canónicos.")
+
+        cur.execute(
+            """
+            SELECT c.id, c.identificacion, c.nombre
+            FROM proceso_partes pp
+            JOIN contactos c ON c.id=pp.contacto_id
+            WHERE pp.radicado_interno=%s
+              AND UPPER(pp.rol)='DEMANDANTE'
+              AND pp.es_principal=TRUE
+            LIMIT 1
+            """,
+            (radicado,),
+        )
+        acreedor = cur.fetchone()
+        if not acreedor:
+            raise ValueError("El proceso ejecutivo no tiene demandante acreedor principal.")
+
+        cur.execute(
+            """
+            SELECT id, codigo, nombre, activo, requiere_documento,
+                   requiere_conjunto, requiere_inmueble, fuente_saldo
+            FROM tipos_obligacion
+            WHERE codigo='CUOTAS_ADMINISTRACION' AND activo=TRUE
+            LIMIT 1
+            """
+        )
+        tipo_obligacion = cur.fetchone()
+        if not tipo_obligacion:
+            raise ValueError("No está configurado el tipo de obligación CUOTAS_ADMINISTRACION.")
+
+        tipo_obligacion = dict(tipo_obligacion)
+        obligacion_id_nueva = obligaciones_service.crear_obligacion(
+            cur,
+            radicado_interno=radicado,
+            tipo_proceso_id=int(proc["tipo_proceso_id"]),
+            tipo_obligacion=tipo_obligacion,
+            deudor=deudores[0],
+            acreedor=dict(acreedor),
+            inmueble_id=int(inmueble_id),
+            numero_documento=None,
+            capital_inicial=0,
+            fecha_exigibilidad=None,
+        )
+        obligaciones_service.vincular_partes_obligacion(
+            cur,
+            obligacion_id=obligacion_id_nueva,
+            contactos_deudores=deudores,
+        )
+        obligaciones_service.vincular_obligacion_a_proceso(
+            cur,
+            radicado_interno=radicado,
+            obligacion_id=obligacion_id_nueva,
+            es_principal=True,
+        )
+        print(
+            f"[LIQUIDADOR] Reparación histórica: {radicado} -> obligación PH {obligacion_id_nueva}",
+            flush=True,
+        )
+        return int(obligacion_id_nueva)
     if len(rows) > 1:
         raise ValueError("El inmueble tiene más de una obligación PH activa; debe seleccionarse una obligación concreta.")
     row = rows[0]
@@ -2155,10 +2268,10 @@ async def carga_masiva_excel(
                                             f_vencimiento = f"{y}-{m:02d}-01"
                                             cur.execute("""
                                                 INSERT INTO expensas_ph
-                                                    (inmueble_id, concepto, periodo_mes, periodo_anio,
+                                                    (inmueble_id, obligation_id, concepto, periodo_mes, periodo_anio,
                                                      valor_capital, fecha_vencimiento, estado)
-                                                VALUES (%s, %s, %s, %s, %s, %s, 'En Mora')
-                                            """, (inmueble_id, concepto, m, y, valor_limpio, f_vencimiento))
+                                                VALUES (%s, %s, %s, %s, %s, %s, %s, 'En Mora')
+                                            """, (inmueble_id, obligacion_id, concepto, m, y, valor_limpio, f_vencimiento))
                                             cuotas_procesadas += 1
                 finally:
                     conn.release()
