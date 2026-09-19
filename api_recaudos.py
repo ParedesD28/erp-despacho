@@ -63,6 +63,12 @@ async def reportar_abono_agente(request: Request):
     except ValueError:
         raise HTTPException(status_code=422, detail="fecha_pago debe tener formato YYYY-MM-DD")
 
+    identificacion_reportante = str(
+        data.get("identificacion_deudor")
+        or data.get("identificacion")
+        or data.get("cedula")
+        or ""
+    ).strip()
     banco = str(data.get("banco") or "Transferencia bancaria").strip()
     referencia = str(data.get("referencia") or "Comprobante IA").strip()
     soporte_url = str(data.get("soporte_url") or "").strip()
@@ -87,25 +93,47 @@ async def reportar_abono_agente(request: Request):
                         """,
                         (obligacion_id,),
                     )
+                    ob = cur.fetchone()
                 else:
                     cur.execute(
                         """
-                        SELECT o.id,o.inmueble_id,o.fuente_saldo,o.estado,
-                               c.identificacion,c.nombre,c.telefono,
-                               i.conjunto_residencial,i.torre_apto
+                        SELECT o.id,o.inmueble_id,o.fuente_saldo,o.estado
                         FROM obligaciones o
-                        JOIN contactos c ON c.id=o.deudor_contacto_id
-                        LEFT JOIN inmuebles_ph i ON i.id=o.inmueble_id
                         WHERE o.inmueble_id=%s
                           AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
                         ORDER BY CASE WHEN UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH' THEN 0 ELSE 1 END,
                                  o.id DESC
-                        LIMIT 1
+                        LIMIT 2
                         """,
                         (inmueble_id,),
                     )
+                    candidates = cur.fetchall()
+                    if not candidates:
+                        ob = None
+                    elif len(candidates) > 1:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Debe indicar obligacion_id cuando existen varias obligaciones activas para el inmueble",
+                        )
+                    else:
+                        ob = candidates[0]
 
-                ob = cur.fetchone()
+                    if ob:
+                        cur.execute(
+                            """
+                            SELECT c.identificacion,c.nombre,c.telefono,
+                                   i.conjunto_residencial,i.torre_apto
+                            FROM obligaciones o
+                            JOIN contactos c ON c.id=o.deudor_contacto_id
+                            LEFT JOIN inmuebles_ph i ON i.id=o.inmueble_id
+                            WHERE o.id=%s
+                            LIMIT 1
+                            """,
+                            (ob["id"],),
+                        )
+                        ob = dict(ob) | dict(cur.fetchone() or {})
+
+                ob = dict(ob) if ob else None
                 if not ob:
                     raise HTTPException(status_code=404, detail="Obligación no encontrada")
 
@@ -115,6 +143,26 @@ async def reportar_abono_agente(request: Request):
 
                 if str(ob["estado"] or "ACTIVA").upper() in {"CANCELADA", "ANULADA"}:
                     raise HTTPException(status_code=409, detail="La obligación no está activa")
+
+                if identificacion_reportante:
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM obligacion_partes op
+                        JOIN contactos c ON c.id=op.contacto_id
+                        WHERE op.obligacion_id=%s
+                          AND op.rol='DEUDOR'
+                          AND REGEXP_REPLACE(COALESCE(c.identificacion::text,''),'[^0-9]','','g')
+                              = REGEXP_REPLACE(%s,'[^0-9]','','g')
+                        LIMIT 1
+                        """,
+                        (obligacion_id,identificacion_reportante),
+                    )
+                    if not cur.fetchone():
+                        raise HTTPException(
+                            status_code=409,
+                            detail="La identificación reportante no corresponde a un deudor de la obligación",
+                        )
 
                 inm = {
                     "id": inmueble_id,
