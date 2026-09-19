@@ -469,13 +469,15 @@ def cargar_procesos_general_sin_duplicados():
                         p.medidas_cautelares,
                         p.id_cliente,
                         COALESCE(
+                            NULLIF(TRIM(ppdemandante.nombres), ''),
                             NULLIF(TRIM(pdemandante.nombres), ''),
                             NULLIF(TRIM(p.id_cliente), ''),
                             'SIN REGISTRO'
                         ) AS demandante_nombre,
                         COALESCE(
-                            NULLIF(TRIM(pddo.nombres), ''),
+                            NULLIF(TRIM(ppddo.nombres), ''),
                             NULLIF(TRIM(plnames.nombres), ''),
+                            NULLIF(TRIM(pddo.nombres), ''),
                             NULLIF(TRIM(p.demandado), ''),
                             NULLIF(TRIM(p.id_demandado), ''),
                             'SIN REGISTRO'
@@ -483,6 +485,26 @@ def cargar_procesos_general_sin_duplicados():
                         a.nombre AS abogado_asignado
                     FROM procesos p
                     LEFT JOIN abogados a ON p.abogado_id = a.id
+                    LEFT JOIN LATERAL (
+                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
+                        FROM proceso_partes pp
+                        JOIN contactos c ON c.id=pp.contacto_id
+                        WHERE pp.radicado_interno=p.radicado_interno
+                          AND UPPER(pp.rol)='DEMANDANTE'
+                    ) ppdemandante ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
+                        FROM proceso_partes pp
+                        JOIN contactos c ON c.id=pp.contacto_id
+                        WHERE pp.radicado_interno=p.radicado_interno
+                          AND UPPER(pp.rol)='DEMANDADO'
+                    ) ppddo ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
+                        FROM procesos_litisconsorcio pl
+                        JOIN contactos c ON c.identificacion = pl.identificacion_demandado
+                        WHERE pl.radicado_interno = p.radicado_interno
+                    ) plnames ON TRUE
                     LEFT JOIN LATERAL (
                         SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
                         FROM UNNEST(
@@ -503,12 +525,6 @@ def cargar_procesos_general_sin_duplicados():
                         ) AS ids(identificacion)
                         JOIN contactos c ON c.identificacion = ids.identificacion
                     ) pddo ON TRUE
-                    LEFT JOIN LATERAL (
-                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
-                        FROM procesos_litisconsorcio pl
-                        JOIN contactos c ON c.identificacion = pl.identificacion_demandado
-                        WHERE pl.radicado_interno = p.radicado_interno
-                    ) plnames ON TRUE
                     ORDER BY p.radicado_interno DESC
                     """
                 )
