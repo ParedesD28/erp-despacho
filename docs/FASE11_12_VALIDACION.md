@@ -61,7 +61,7 @@ No se reinventó el pipeline PDF existente.
 
 ## Fase 12 — Pruebas integrales
 
-Estado: VALIDACIÓN TÉCNICA EJECUTADA. No hay release de producción todavía.
+Estado: CERRADA TÉCNICAMENTE. No hay release de producción todavía.
 
 ### CI
 
@@ -77,7 +77,7 @@ Segundo fallo de Fase 12: dos regresiones de la propia prueba:
 - un guardia textual detectaba la palabra `pretensiones` dentro de un comentario/documentación;
 - la prueba de traversal del PDF no había configurado el secreto HMAC y alcanzaba primero la respuesta 503.
 
-Ambos errores de prueba fueron corregidos en el código de tests. Debe verificarse el nuevo workflow sobre el commit posterior a estas correcciones antes de considerar CI cerrado.
+Ambos errores de prueba fueron corregidos en el código de tests. El workflow posterior a estas correcciones quedó verde en GitHub Actions: run #368.
 
 ### Pruebas incluidas
 
@@ -156,9 +156,9 @@ Los SMS históricos presentan `saldo_fuente`/ `saldo_verificado` sin poblar porq
 
 Rama v2 actual al documentar:
 
-`3819487f0a1dc58a5f3d2b3db5e2102f7ef666e2`
+`773224a24d282177092cbc0a1a0666944cebfc7b`
 
-Comparación contra `main`: 82 commits adelante, 0 atrás.
+Comparación contra `main`: 83 commits adelante, 0 atrás.
 
 PR #2 permanece abierto y en borrador. No fusionar todavía.
 
@@ -182,7 +182,7 @@ No se hicieron cambios DDL ni correcciones de datos en production durante estas 
 
 Antes de pasar a la transición productiva:
 
-1. Confirmar CI verde sobre el HEAD final de la rama v2.
+1. Mantener el run #368 como referencia CI verde del HEAD documentado.
 2. Ejecutar smoke test real del wizard SMS en ambiente técnico con una obligación existente, sin enviar desde SIM.
 3. Ejecutar smoke test del endpoint WhatsApp `/api/bot/liquidar` y del enlace PDF firmado en ambiente técnico.
 4. Ejecutar al menos una prueba de obligación genérica no PH; production actualmente no tiene obligaciones genéricas históricas, por lo que esa ruta aún no está ejercitada con datos reales.
