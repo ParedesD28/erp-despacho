@@ -431,7 +431,7 @@ def _audit(cur, radicado):
     return [{"id":_row_value(r,"id"),"fecha":_row_value(r,"fecha"),"usuario":_row_value(r,"usuario"),"accion":_row_value(r,"accion")} for r in cur.fetchall()]
 
 
-def cargar_procesos_general_sin_duplicados():
+def cargar_procesos_general_sin_duplicados(estado_filtro: str = "ACTIVOS"):
     hora = time.strftime("%H:%M:%S")
     print(f"[{hora} UTC] 📂 [EXPEDIENTES] Consultando base de datos...", flush=True)
     t0 = time.perf_counter()
@@ -470,8 +470,14 @@ def cargar_procesos_general_sin_duplicados():
                         WHERE pp.radicado_interno=p.radicado_interno
                           AND UPPER(pp.rol)='DEMANDADO'
                     ) ppdemandado ON TRUE
+                    WHERE (
+                        %s='TODOS'
+                        OR (%s='ACTIVOS' AND UPPER(COALESCE(p.estado,'ACTIVO'))<>'INACTIVO')
+                        OR (%s='INACTIVOS' AND UPPER(COALESCE(p.estado,'ACTIVO'))='INACTIVO')
+                    )
                     ORDER BY p.radicado_interno DESC
-                    """
+                    """,
+                    (str(estado_filtro or "ACTIVOS").upper(), str(estado_filtro or "ACTIVOS").upper(), str(estado_filtro or "ACTIVOS").upper()),
                 )
                 rows = cur.fetchall()
                 lista = []
