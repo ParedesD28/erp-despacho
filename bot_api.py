@@ -313,7 +313,7 @@ async def registrar_acuerdo_bot(request: Request):
                 if obligacion_id:
                     cur.execute(
                         """
-                        SELECT o.id,o.inmueble_id,o.deudor_contacto_id
+                        SELECT o.id,o.inmueble_id
                         FROM obligaciones o
                         WHERE o.id=%s
                         LIMIT 1
@@ -327,7 +327,7 @@ async def registrar_acuerdo_bot(request: Request):
                 elif inmueble_id:
                     cur.execute(
                         """
-                        SELECT o.id,o.deudor_contacto_id
+                        SELECT o.id
                         FROM obligaciones o
                         WHERE o.inmueble_id=%s
                           AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
@@ -347,9 +347,13 @@ async def registrar_acuerdo_bot(request: Request):
 
                 cur.execute(
                     """
-                    SELECT o.deudor_contacto_id,c.identificacion,c.nombre,c.telefono
+                    SELECT c.identificacion,c.nombre,c.telefono
                     FROM obligaciones o
-                    JOIN contactos c ON c.id=o.deudor_contacto_id
+                    JOIN obligacion_partes op
+                      ON op.obligacion_id=o.id
+                     AND op.rol='DEUDOR'
+                     AND op.es_principal=TRUE
+                    JOIN contactos c ON c.id=op.contacto_id
                     WHERE o.id=%s
                     LIMIT 1
                     """,
@@ -357,7 +361,7 @@ async def registrar_acuerdo_bot(request: Request):
                 )
                 deudor = cur.fetchone()
                 if not deudor:
-                    raise HTTPException(status_code=409, detail="La obligación no tiene un deudor válido")
+                    raise HTTPException(status_code=409, detail="La obligación no tiene un deudor principal válido")
 
                 cur.execute(
                     """
