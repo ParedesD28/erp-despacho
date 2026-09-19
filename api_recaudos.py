@@ -86,7 +86,11 @@ async def reportar_abono_agente(request: Request):
                                c.identificacion,c.nombre,c.telefono,
                                i.conjunto_residencial,i.torre_apto
                         FROM obligaciones o
-                        JOIN contactos c ON c.id=o.deudor_contacto_id
+                        JOIN obligacion_partes op
+                          ON op.obligacion_id=o.id
+                         AND op.rol='DEUDOR'
+                         AND op.es_principal=TRUE
+                        JOIN contactos c ON c.id=op.contacto_id
                         LEFT JOIN inmuebles_ph i ON i.id=o.inmueble_id
                         WHERE o.id=%s
                         LIMIT 1
@@ -124,7 +128,11 @@ async def reportar_abono_agente(request: Request):
                             SELECT c.identificacion,c.nombre,c.telefono,
                                    i.conjunto_residencial,i.torre_apto
                             FROM obligaciones o
-                            JOIN contactos c ON c.id=o.deudor_contacto_id
+                            JOIN obligacion_partes op
+                              ON op.obligacion_id=o.id
+                             AND op.rol='DEUDOR'
+                             AND op.es_principal=TRUE
+                            JOIN contactos c ON c.id=op.contacto_id
                             LEFT JOIN inmuebles_ph i ON i.id=o.inmueble_id
                             WHERE o.id=%s
                             LIMIT 1
