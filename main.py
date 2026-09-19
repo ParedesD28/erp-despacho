@@ -1623,10 +1623,51 @@ def descargar_excel():
 # ==============================================================================
 # LIQUIDADOR DE EXPENSAS PH
 # ==============================================================================
+def _resolver_obligacion_ph(cur, inmueble_id: int, obligacion_id: int | None = None) -> int:
+    if obligacion_id is not None:
+        cur.execute(
+            """
+            SELECT o.id
+            FROM obligaciones o
+            WHERE o.id=%s
+              AND o.inmueble_id=%s
+              AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+              AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+            LIMIT 1
+            """,
+            (int(obligacion_id), int(inmueble_id)),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("La obligación PH no pertenece al inmueble seleccionado o no está activa.")
+        return int(row["id"] if isinstance(row, dict) else row[0])
+
+    cur.execute(
+        """
+        SELECT o.id
+        FROM obligaciones o
+        WHERE o.inmueble_id=%s
+          AND UPPER(COALESCE(o.fuente_saldo,''))='EXPENSAS_PH'
+          AND UPPER(COALESCE(o.estado,'ACTIVA')) NOT IN ('CANCELADA','ANULADA')
+        ORDER BY o.id DESC
+        LIMIT 2
+        """,
+        (int(inmueble_id),),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        raise ValueError("El inmueble no tiene una obligación PH activa.")
+    if len(rows) > 1:
+        raise ValueError("El inmueble tiene más de una obligación PH activa; debe seleccionarse una obligación concreta.")
+    row = rows[0]
+    return int(row["id"] if isinstance(row, dict) else row[0])
+
+
 @app.get("/liquidador")
 def vista_liquidador(
     request: Request,
     inmueble_id: str | None = None,
+    obligacion_id: str | None = None,
     tipo_tasa: str = "Máxima Legal",
     tasa_fija: float = 2.5,
     honorarios_pct: float = 23.8,
@@ -1641,42 +1682,65 @@ def vista_liquidador(
         m = re.search(r"\d+", str(inmueble_id))
         if m:
             inm_id_clean = int(m.group(0))
+    ob_id_clean = None
+    if obligacion_id:
+        m_ob = re.search(r"\d+", str(obligacion_id))
+        if m_ob:
+            ob_id_clean = int(m_ob.group(0))
     if inm_id_clean:
         try:
+            conn = db.get_connection()
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    ob_id_clean = _resolver_obligacion_ph(cur, inm_id_clean, ob_id_clean)
+            finally:
+                conn.release()
             resultados, resumen, _ = liquidador.motor_calculo_judicial(
-                inm_id_clean, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte_obj
+                inm_id_clean, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte_obj,
+                obligacion_id=ob_id_clean,
             )
         except Exception as e:
             print(f"[LIQUIDADOR] Error en auto-cálculo: {e}", flush=True)
-    return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte_obj.strftime("%Y-%m-%d")}})
+    return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "obligacion_id": ob_id_clean, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte_obj.strftime("%Y-%m-%d")}})
 
 
 @app.post("/liquidador")
 def calcular_liquidador(
     request: Request,
     inmueble_id: int = Form(...),
+    obligacion_id: int | None = Form(None),
     tipo_tasa: str = Form(...),
     tasa_fija: float = Form(2.5),
     honorarios_pct: float = Form(23.8),
     gastos: float = Form(0.0),
     fecha_corte: date = Form(...),
 ):
+    conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
+    finally:
+        conn.release()
+
     resultados, resumen, _ = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        obligacion_id=obligacion_id,
     )
     if not resultados:
         return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "error": "No hay deudas.", "resultados": None})
-    return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
+    return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "obligacion_id": obligacion_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
 
 
 @app.post("/liquidador/actualizar")
 async def actualizar_cuotas(request: Request):
     form_data = await request.form()
     inmueble_id = int(form_data.get("inmueble_id"))
+    obligacion_id = int(form_data.get("obligacion_id")) if str(form_data.get("obligacion_id") or "").isdigit() else None
     conn = db.get_connection()
     try:
         with conn:
             with conn.cursor() as cur:
+                obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
                 for key, value in form_data.items():
                     if key.startswith(("ord_", "ext_", "gas_", "abo_")):
                         prefijo, y, m = key.split("_")
@@ -1690,17 +1754,19 @@ async def actualizar_cuotas(request: Request):
                         cur.execute("""
                             UPDATE expensas_ph
                             SET valor_capital = %s
-                            WHERE inmueble_id = %s AND concepto = %s
+                            WHERE inmueble_id = %s
+                              AND obligation_id = %s
+                              AND concepto = %s
                               AND periodo_anio = %s AND periodo_mes = %s
-                        """, (valor, inmueble_id, concepto, int(y), int(m)))
+                        """, (valor, inmueble_id, obligacion_id, concepto, int(y), int(m)))
                         if cur.rowcount == 0 and valor > 0:
                             f_vencimiento = f"{y}-{int(m):02d}-01"
                             cur.execute("""
                                 INSERT INTO expensas_ph
-                                    (inmueble_id, concepto, periodo_mes, periodo_anio,
+                                    (inmueble_id, obligation_id, concepto, periodo_mes, periodo_anio,
                                      valor_capital, fecha_vencimiento, estado)
-                                VALUES (%s, %s, %s, %s, %s, %s, 'Aplicado')
-                            """, (inmueble_id, concepto, int(m), int(y), valor, f_vencimiento))
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, 'Aplicado')
+                            """, (inmueble_id, obligation_id, concepto, int(m), int(y), valor, f_vencimiento))
     except Exception as e:
         print(f"[LIQUIDADOR] Error actualizando cuotas: {e}", flush=True)
     finally:
@@ -1712,6 +1778,7 @@ async def actualizar_cuotas(request: Request):
 async def exportar_pdf(
     request: Request,
     inmueble_id: int = Form(...),
+    obligacion_id: int | None = Form(None),
     tipo_tasa: str = Form(...),
     tasa_fija: float = Form(2.5),
     honorarios_pct: float = Form(23.8),
@@ -1726,8 +1793,16 @@ async def exportar_pdf(
     if fecha_corte is None:
         fecha_corte = date.today()
 
+    conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
+    finally:
+        conn.release()
+
     resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        obligacion_id=obligacion_id,
     )
     path = exportaciones.generar_pdf_liquidacion(inmueble_id, fecha_corte, resultados, resumen, inm_info)
     return FileResponse(
@@ -1741,14 +1816,23 @@ async def exportar_pdf(
 async def exportar_excel(
     request: Request,
     inmueble_id: int = Form(...),
+    obligacion_id: int | None = Form(None),
     tipo_tasa: str = Form(...),
     tasa_fija: float = Form(2.5),
     honorarios_pct: float = Form(23.8),
     gastos: float = Form(0.0),
     fecha_corte: date = Form(...),
 ):
+    conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
+    finally:
+        conn.release()
+
     resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        obligacion_id=obligacion_id,
     )
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -1836,6 +1920,7 @@ def descargar_plantilla_liquidador():
 async def carga_masiva_excel(
     request: Request,
     inmueble_id: int = Form(...),
+    obligacion_id: int | None = Form(None),
     tipo_tasa: str = Form(...),
     tasa_fija: float = Form(2.5),
     honorarios_pct: float = Form(23.8),
@@ -1874,6 +1959,7 @@ async def carga_masiva_excel(
                 try:
                     with conn:
                         with conn.cursor() as cur:
+                            obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
                             for index, row in df.iterrows():
                                 fecha = row['desde']
                                 if pd.isna(fecha):
@@ -1901,9 +1987,11 @@ async def carga_masiva_excel(
                                         cur.execute("""
                                             UPDATE expensas_ph
                                             SET valor_capital = %s
-                                            WHERE inmueble_id = %s AND concepto = %s
+                                            WHERE inmueble_id = %s
+                                              AND obligation_id = %s
+                                              AND concepto = %s
                                               AND periodo_anio = %s AND periodo_mes = %s
-                                        """, (valor_limpio, inmueble_id, concepto, y, m))
+                                        """, (valor_limpio, inmueble_id, obligacion_id, concepto, y, m))
                                         if cur.rowcount == 0:
                                             f_vencimiento = f"{y}-{m:02d}-01"
                                             cur.execute("""
@@ -1919,7 +2007,8 @@ async def carga_masiva_excel(
             print(f"[LIQUIDADOR] Error procesando carga masiva: {e}", flush=True)
 
     resultados, resumen, _ = liquidador.motor_calculo_judicial(
-        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte
+        inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
+        obligacion_id=obligacion_id,
     )
     lista_inmuebles = cargar_inmuebles_ph()
-    return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
+    return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "obligacion_id": obligacion_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
