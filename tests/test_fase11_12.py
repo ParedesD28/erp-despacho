@@ -117,6 +117,19 @@ class Fase11ContractsTests(unittest.TestCase):
 
 
 
+
+    def test_radicacion_ejecutivo_crea_y_vincula_obligacion(self):
+        source = (ROOT / "radicacion_service.py").read_text(encoding="utf-8")
+        self.assertIn('if naturaleza == "EJECUTIVO":', source)
+        self.assertIn('obligacion_id = obligaciones_service.crear_obligacion(', source)
+        self.assertIn('obligaciones_service.vincular_partes_obligacion(', source)
+        self.assertIn('obligaciones_service.vincular_obligacion_a_proceso(', source)
+
+    def test_preflight_detecta_no_verbal_sin_obligacion(self):
+        source = (ROOT / "schema_preflight.py").read_text(encoding="utf-8")
+        self.assertIn("procesos no-VERBAL sin obligación canónica", source)
+        self.assertIn("20260919_fase15_completar_obligaciones_ejecutivos_historicos", source)
+
     def test_carga_masiva_liquidador_persiste_obligation_id(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn(
