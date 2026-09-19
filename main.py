@@ -1303,6 +1303,7 @@ def crm_guardar(
     request: Request,
     radicado_interno: str | None = Form(None),
     inmueble_id: int | None = Form(None),
+    obligacion_id: int | None = Form(None),
     tipo_contacto: str = Form(...),
     resumen: str = Form(...),
     promesa_pago_fecha: date | None = Form(None),
@@ -1312,27 +1313,77 @@ def crm_guardar(
     try:
         with conn:
             with conn.cursor() as cur:
+                radicado = str(radicado_interno or "").strip() or None
+                ident = str(identificacion_deudor or "").strip() or None
+
+                if obligacion_id:
+                    cur.execute(
+                        """
+                        SELECT o.id,o.inmueble_id
+                        FROM obligaciones o
+                        WHERE o.id=%s
+                        LIMIT 1
+                        """,
+                        (int(obligacion_id),),
+                    )
+                    ob = cur.fetchone()
+                    if not ob:
+                        raise ValueError("La obligación indicada no existe.")
+                    if radicado:
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM proceso_obligaciones
+                            WHERE obligacion_id=%s AND radicado_interno=%s
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id),radicado),
+                        )
+                        if not cur.fetchone():
+                            raise ValueError("La obligación no pertenece al expediente indicado.")
+                    if inmueble_id is None and ob["inmueble_id"] is not None:
+                        inmueble_id = int(ob["inmueble_id"])
+
+                    if ident:
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM obligacion_partes op
+                            JOIN contactos c ON c.id=op.contacto_id
+                            WHERE op.obligacion_id=%s
+                              AND op.rol='DEUDOR'
+                              AND REGEXP_REPLACE(COALESCE(c.identificacion::text,''),'[^0-9]','','g')
+                                  = REGEXP_REPLACE(%s,'[^0-9]','','g')
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id),ident),
+                        )
+                        if not cur.fetchone():
+                            raise ValueError("La identificación no pertenece a un deudor de la obligación.")
+
                 cur.execute(
                     """
                     INSERT INTO gestiones_crm
                         (
                             radicado_interno,
                             inmueble_id,
+                            obligacion_id,
                             tipo_contacto,
                             resumen,
                             promesa_pago_fecha,
                             identificacion_deudor,
                             usuario
                         )
-                    VALUES (%s, %s, %s, %s, %s, %s, 'ERP')
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,'ERP')
                     """,
                     (
-                        str(radicado_interno or "").strip() or None,
+                        radicado,
                         inmueble_id,
+                        int(obligacion_id) if obligacion_id else None,
                         tipo_contacto.strip(),
                         resumen.strip(),
                         promesa_pago_fecha,
-                        identificacion_deudor,
+                        ident,
                     ),
                 )
 
