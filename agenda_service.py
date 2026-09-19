@@ -307,6 +307,22 @@ def _crear_router_agenda() -> APIRouter:
                         obligacion = cur.fetchone()
                         if not obligacion:
                             raise ValueError("La obligación indicada no existe.")
+
+                        cur.execute(
+                            """
+                            SELECT 1
+                            FROM obligacion_partes op
+                            JOIN contactos c ON c.id=op.contacto_id
+                            WHERE op.obligacion_id=%s
+                              AND op.rol='DEUDOR'
+                              AND REGEXP_REPLACE(COALESCE(c.identificacion::text,''),'[^0-9]','','g')
+                                  = REGEXP_REPLACE(%s,'[^0-9]','','g')
+                            LIMIT 1
+                            """,
+                            (int(obligacion_id), ident),
+                        )
+                        if not cur.fetchone():
+                            raise ValueError("La persona seleccionada no es deudora de la obligación.")
                         cur.execute(
                             """
                             SELECT 1
@@ -323,8 +339,6 @@ def _crear_router_agenda() -> APIRouter:
                         )
                         if not cur.fetchone():
                             raise ValueError("La obligación no pertenece al expediente indicado.")
-                        if str(obligacion["identificacion"]) != ident:
-                            raise ValueError("La persona seleccionada no es el deudor de la obligación.")
 
                     cur.execute("""
                         INSERT INTO acuerdos_pago
