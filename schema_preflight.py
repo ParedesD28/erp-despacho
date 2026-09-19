@@ -22,7 +22,7 @@ REQUIRED_COLUMNS = {
         "requiere_documento", "requiere_conjunto", "requiere_inmueble",
     },
     "obligaciones": {
-        "id", "tipo_obligacion_id", "deudor_contacto_id",
+        "id", "tipo_obligacion_id",
         "acreedor_contacto_id", "inmueble_id", "capital_inicial",
         "fuente_saldo", "proceso_id",
     },
@@ -158,6 +158,22 @@ def verify() -> None:
                 raise RuntimeError(
                     "[SCHEMA PREFLIGHT] No está registrada la migración "
                     "20260918_fase5_migracion_controlada"
+                )
+
+
+
+            cur.execute(
+                """
+                SELECT 1
+                FROM schema_migrations
+                WHERE version='20260919_fase14_eliminar_legacy_proceso_obligacion'
+                LIMIT 1
+                """
+            )
+            if not cur.fetchone():
+                raise RuntimeError(
+                    "[SCHEMA PREFLIGHT] No está registrada la migración "
+                    "20260919_fase14_eliminar_legacy_proceso_obligacion"
                 )
 
 
