@@ -17,6 +17,7 @@
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
         <!-- FORMULARIO DE CONFIGURACIÓN SUPERIOR -->
         <form id="form_liquidador" method="POST" action="/liquidador" class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-end" enctype="multipart/form-data">
+            <input type="hidden" name="obligacion_id" id="obligacion_id_form" value="{{ parametros.obligacion_id or '' }}">
             
             <!-- BUSCADOR INTELIGENTE PREMIUM -->
             <div class="lg:col-span-3">
@@ -132,6 +133,7 @@
 
         <!-- 3. TABLA INTERACTIVA ANCHA -->
         <form action="/liquidador/actualizar" method="POST">
+            <input type="hidden" name="obligacion_id" value="{{ parametros.obligacion_id or '' }}">
             <input type="hidden" name="inmueble_id" value="{{ parametros.inmueble_id }}">
             <input type="hidden" name="tipo_tasa" value="{{ parametros.tipo_tasa }}">
             <input type="hidden" name="tasa_fija" value="{{ parametros.tasa_fija }}">
