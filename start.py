@@ -71,9 +71,8 @@ if __name__ == "__main__":
     _verificar_dependencias_sms()
     sms_router._ensure_sms_schema()
 
-    # Las lecturas normalizadas son canónicas; no se ejecutan migraciones DDL
-    # desde el proceso de arranque.
-    proceso_partes_runtime.install()
+    # proceso_partes es la relación canónica persistida; Fase 14 eliminó
+    # el runtime de compatibilidad. No hay sincronizadores legacy al arrancar.
 
     # SMS agrega cartera procesal a la cartera PH sin usar pretensiones como saldo.
     sms_cartera_runtime.install()
