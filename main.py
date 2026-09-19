@@ -616,18 +616,18 @@ async def crear_expediente_completo(request: Request):
             )
         return vals, list(zip(ids, names))
 
-    demandantes, nuevos_dem = split_values(
-        "demandantes_existentes",
-        "nuevo_dem_id",
-        "nuevo_dem_nombre",
-    )
-    demandados, nuevos_ddo = split_values(
-        "demandados_existentes",
-        "nuevo_ddo_id",
-        "nuevo_ddo_nombre",
-    )
-
     try:
+        demandantes, nuevos_dem = split_values(
+            "demandantes_existentes",
+            "nuevo_dem_id",
+            "nuevo_dem_nombre",
+        )
+        demandados, nuevos_ddo = split_values(
+            "demandados_existentes",
+            "nuevo_ddo_id",
+            "nuevo_ddo_nombre",
+        )
+
         resultado = radicacion_service.radicar_proceso(
             naturaleza=naturaleza,
             tipo_obligacion_codigo=tipo_obligacion_codigo,
