@@ -799,6 +799,10 @@ async def guardar_expediente_estructurado(request: Request):
                     raise ValueError(
                         "Un proceso ejecutivo debe tener al menos una obligación financiera vinculada"
                     )
+                if naturaleza == "VERBAL" and obligaciones_actuales:
+                    raise ValueError(
+                        "No se puede convertir a VERBAL un proceso que ya tiene obligaciones financieras vinculadas"
+                    )
 
                 tipo_proceso_editado = catalogos_service.obtener_tipo_proceso(
                     cur,
