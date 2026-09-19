@@ -219,8 +219,9 @@ def generar_pdf_liquidacion(inmueble_id, fecha_corte, resultados, resumen, inm_i
 
 
 _REPORT_HEADERS = [
-    "radicado_interno", "radicado_rama", "naturaleza", "juzgado", "etapa_actual", "id_cliente",
-    "demandado", "id_demandado", "estado", "pretensiones", "medidas_cautelares", "abogado_id",
+    "radicado_interno", "radicado_rama", "naturaleza", "juzgado", "etapa_actual",
+    "demandante", "identificacion_demandante", "demandado", "identificacion_demandado",
+    "inmueble_id", "estado", "pretensiones", "medidas_cautelares", "abogado_id",
     "Historial_Actuaciones", "Gestiones_CRM",
 ]
 
@@ -309,17 +310,32 @@ def _build_executive_report(cur):
     cur.execute("""
         SELECT
             p.radicado_interno, p.radicado_rama, p.naturaleza, p.juzgado, p.etapa_actual,
-            p.id_cliente, p.inmueble_id,
-            CASE WHEN NULLIF(TRIM(COALESCE(p.demandado, '')), '') IS NOT NULL THEN p.demandado
-                 ELSE STRING_AGG(DISTINCT c_ddo.nombre, ' | ' ORDER BY c_ddo.nombre) END AS demandado,
-            CASE WHEN NULLIF(TRIM(COALESCE(p.id_demandado, '')), '') IS NOT NULL THEN p.id_demandado
-                 ELSE STRING_AGG(DISTINCT pl.identificacion_demandado, ' | ' ORDER BY pl.identificacion_demandado) END AS id_demandado,
-            p.estado, p.pretensiones, p.medidas_cautelares, p.abogado_id
+            COALESCE(ppdemandante.nombres, 'SIN REGISTRO') AS demandante,
+            COALESCE(ppdemandante.identificaciones, '') AS identificacion_demandante,
+            COALESCE(ppdemandado.nombres, 'SIN REGISTRO') AS demandado,
+            COALESCE(ppdemandado.identificaciones, '') AS identificacion_demandado,
+            p.inmueble_id,
+            COALESCE(p.estado, 'ACTIVO') AS estado,
+            p.pretensiones, p.medidas_cautelares, p.abogado_id
         FROM procesos p
-        LEFT JOIN procesos_litisconsorcio pl ON pl.radicado_interno = p.radicado_interno
-        LEFT JOIN contactos c_ddo ON c_ddo.identificacion = pl.identificacion_demandado
-        GROUP BY p.radicado_interno, p.radicado_rama, p.naturaleza, p.juzgado, p.etapa_actual,
-                 p.id_cliente, p.inmueble_id, p.demandado, p.id_demandado, p.estado, p.pretensiones, p.medidas_cautelares, p.abogado_id
+        LEFT JOIN LATERAL (
+            SELECT
+                STRING_AGG(DISTINCT c.identificacion, ' | ' ORDER BY c.identificacion) AS identificaciones,
+                STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
+            FROM proceso_partes pp
+            JOIN contactos c ON c.id=pp.contacto_id
+            WHERE pp.radicado_interno=p.radicado_interno
+              AND UPPER(pp.rol)='DEMANDANTE'
+        ) ppdemandante ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT
+                STRING_AGG(DISTINCT c.identificacion, ' | ' ORDER BY c.identificacion) AS identificaciones,
+                STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
+            FROM proceso_partes pp
+            JOIN contactos c ON c.id=pp.contacto_id
+            WHERE pp.radicado_interno=p.radicado_interno
+              AND UPPER(pp.rol)='DEMANDADO'
+        ) ppdemandado ON TRUE
         ORDER BY p.radicado_interno DESC
     """)
     procesos = _rows_as_dicts(cur)
@@ -405,7 +421,7 @@ def _build_executive_report(cur):
             crm_del_expediente.extend(crm_by_inmueble.get(str(inmueble_id), []))
 
         identificaciones = []
-        for value in (p.get("id_demandado"), p.get("id_cliente")):
+        for value in (p.get("identificacion_demandado"), p.get("identificacion_demandante")):
             identificaciones.extend(
                 x.strip() for x in str(value or "").split("|") if x.strip()
             )
