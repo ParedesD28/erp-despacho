@@ -292,6 +292,21 @@ def _get_process(cur, radicado):
     inmueble, propietarios = _get_inmueble_info(cur, proc.get("inmueble_id"))
     proc["inmueble"] = inmueble
     proc["propietarios_inmueble"] = propietarios
+    if _table_exists(cur, "proceso_inactivaciones"):
+        cur.execute(
+            """
+            SELECT motivo, fecha, usuario, accion
+            FROM proceso_inactivaciones
+            WHERE radicado_interno=%s AND accion='INACTIVAR'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(radicado),),
+        )
+        evento_inactivo = cur.fetchone()
+        proc["inactivacion"] = dict(evento_inactivo) if evento_inactivo else None
+    else:
+        proc["inactivacion"] = None
     if _table_exists(cur, "abogados") and proc.get("abogado_id"):
         cur.execute("SELECT nombre FROM abogados WHERE id=%s", (proc["abogado_id"],))
         ab_row = cur.fetchone()
