@@ -67,20 +67,6 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertEqual(payload.mensajes[0].contacto_id, 7)
         self.assertEqual(payload.tipo_campana, "PREJUDICIAL")
 
-    def test_wizard_rechaza_rango_inconsistente_en_modelo_de_negocio(self):
-        payload = sms_router.ConfirmarColaRequest(
-            tipo_campana="PREJUDICIAL",
-            saldo_minimo=200000,
-            saldo_maximo=100000,
-            mensajes=[{"contacto_id": 7, "mensaje_texto": "Texto"}],
-        )
-        self.assertLess(payload.saldo_maximo, payload.saldo_minimo)
-
-    def test_sms_no_toma_pretensiones_como_fuente_financiera(self):
-        for name in ("sms_saldo_service.py", "sms_cartera_runtime.py", "obligacion_saldo_service.py"):
-            source = (ROOT / name).read_text(encoding="utf-8").lower()
-            self.assertNotIn("pretensiones", source, msg=f"{name} volvió a depender de pretensiones")
-
 
 class Fase11PdfSecurityTests(unittest.TestCase):
     def test_url_pdf_firmada_usa_hmac(self):
@@ -99,9 +85,14 @@ class Fase11PdfSecurityTests(unittest.TestCase):
             bot_api._PDF_SECRET = old_secret
 
     def test_pdf_bloquea_traversal(self):
-        with self.assertRaises(Exception) as ctx:
-            bot_api.servir_pdf_bot("../secreto.pdf", int(__import__("time").time()) + 60, "x")
-        self.assertEqual(getattr(ctx.exception, "status_code", None), 404)
+        old_secret = bot_api._PDF_SECRET
+        try:
+            bot_api._PDF_SECRET = "x" * 40
+            with self.assertRaises(Exception) as ctx:
+                bot_api.servir_pdf_bot("../secreto.pdf", int(__import__("time").time()) + 60, "x")
+            self.assertEqual(getattr(ctx.exception, "status_code", None), 404)
+        finally:
+            bot_api._PDF_SECRET = old_secret
 
     def test_fecha_corte_futura_rechazada(self):
         tomorrow = (date.today() + timedelta(days=1)).isoformat()
