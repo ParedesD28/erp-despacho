@@ -218,6 +218,12 @@ def _candidatos_cartera(
         "c.telefono IS NOT NULL",
         "TRIM(c.telefono) <> ''",
         "NOT EXISTS ("
+        " SELECT 1 FROM proceso_obligaciones po_inact"
+        " JOIN procesos p_inact ON p_inact.radicado_interno=po_inact.radicado_interno"
+        " WHERE po_inact.obligacion_id=o.id"
+        "   AND UPPER(COALESCE(p_inact.estado,'ACTIVO'))='INACTIVO'"
+        ")",
+        "NOT EXISTS ("
         " SELECT 1 FROM sms_cola_envios prev"
         " WHERE prev.contacto_id = c.id"
         "   AND prev.estado = 'ENVIADO'"
@@ -581,6 +587,13 @@ def _reclamar_lote(cur, limite: int):
         FROM sms_cola_envios
         WHERE estado='PENDIENTE'
           AND COALESCE(saldo_verificado,FALSE)=TRUE
+          AND NOT EXISTS (
+              SELECT 1
+              FROM proceso_obligaciones po
+              JOIN procesos p ON p.radicado_interno=po.radicado_interno
+              WHERE po.obligacion_id=sms_cola_envios.obligacion_id
+                AND UPPER(COALESCE(p.estado,'ACTIVO'))='INACTIVO'
+          )
         ORDER BY id ASC
         LIMIT %s
         FOR UPDATE SKIP LOCKED;
@@ -918,7 +931,14 @@ def vista_sms(
                            SUM(saldo_calculado) FILTER (WHERE estado IN ('PENDIENTE','EN_PROCESO') AND COALESCE(saldo_verificado,FALSE)=TRUE),
                            0
                        ) AS total_saldo_pendiente
-                FROM sms_cola_envios;
+                FROM sms_cola_envios s
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM proceso_obligaciones po
+                    JOIN procesos p ON p.radicado_interno=po.radicado_interno
+                    WHERE po.obligacion_id=s.obligacion_id
+                      AND UPPER(COALESCE(p.estado,'ACTIVO'))='INACTIVO'
+                );
                 """
             )
             metricas = cur.fetchone() or {
@@ -930,11 +950,18 @@ def vista_sms(
             }
             cur.execute(
                 """
-                SELECT id,identificacion,nombre,conjunto_residencial,torre_apto,
+                SELECT id,obligacion_id,identificacion,nombre,conjunto_residencial,torre_apto,
                        telefono,saldo_calculado,saldo_fuente,saldo_verificado,
                        saldo_calculado_en,mensaje_texto,tipo_campana,estado,
                        fecha_creacion,fecha_proceso,fecha_envio,error_detalle
-                FROM sms_cola_envios
+                FROM sms_cola_envios s
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM proceso_obligaciones po
+                    JOIN procesos p ON p.radicado_interno=po.radicado_interno
+                    WHERE po.obligacion_id=s.obligacion_id
+                      AND UPPER(COALESCE(p.estado,'ACTIVO'))='INACTIVO'
+                )
                 ORDER BY id DESC LIMIT 50;
                 """
             )
