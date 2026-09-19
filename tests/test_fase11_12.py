@@ -76,6 +76,30 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertEqual(payload.mensajes[0].contacto_id, 7)
         self.assertEqual(payload.tipo_campana, "PREJUDICIAL")
 
+    def test_codigo_no_referencia_relaciones_legacy_de_proceso_obligacion(self):
+        archivos = {
+            "main.py",
+            "expedientes_service.py",
+            "radicacion_service.py",
+            "obligaciones_service.py",
+            "agenda_service.py",
+            "api_recaudos.py",
+            "bot_api.py",
+            "sms_router.py",
+        }
+        prohibidas = (
+            "id_cliente",
+            "id_demandado",
+            "demandante =",
+            "demandado =",
+            "procesos_litisconsorcio",
+            "deudor_contacto_id",
+        )
+        for name in archivos:
+            source = (ROOT / name).read_text(encoding="utf-8").lower()
+            for token in prohibidas:
+                self.assertNotIn(token, source, msg=f"{name} conserva referencia legacy: {token}")
+
 
 class Fase11PdfSecurityTests(unittest.TestCase):
     def test_url_pdf_firmada_usa_hmac(self):
