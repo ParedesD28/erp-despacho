@@ -59,6 +59,15 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertEqual(result["saldo_total"], 1175000.0)
         self.assertEqual(result["saldo_fuente"], "OBLIGACION_MOVIMIENTOS")
 
+    def test_ley_2300_bloquea_contacto_previo_en_siete_dias(self):
+        cur = FakeCursor([{
+            "fecha": "2026-09-18 10:00:00",
+            "tipo_contacto": "WhatsApp",
+            "resumen": "Contacto de cobranza",
+        }])
+        motivo = sms_router._contacto_bloqueado_por_ley_2300(cur, 99, 7)
+        self.assertIn("WhatsApp", motivo)
+
     def test_wizard_requiere_mensaje_y_campana_validos(self):
         payload = sms_router.ConfirmarColaRequest(
             tipo_campana="PREJUDICIAL",
