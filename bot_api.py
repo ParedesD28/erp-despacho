@@ -358,12 +358,27 @@ async def registrar_acuerdo_bot(request: Request):
                 deudor = cur.fetchone()
                 if not deudor:
                     raise HTTPException(status_code=409, detail="La obligación no tiene un deudor válido")
-                if str(deudor["identificacion"]).strip() != identificacion:
-                    raise HTTPException(status_code=409, detail="La identificación no corresponde al deudor de la obligación")
+
+                cur.execute(
+                    """
+                    SELECT c.identificacion,c.nombre,c.telefono
+                    FROM obligacion_partes op
+                    JOIN contactos c ON c.id=op.contacto_id
+                    WHERE op.obligacion_id=%s
+                      AND op.rol='DEUDOR'
+                      AND REGEXP_REPLACE(COALESCE(c.identificacion::text,''),'[^0-9]','','g')
+                          = REGEXP_REPLACE(%s,'[^0-9]','','g')
+                    LIMIT 1
+                    """,
+                    (obligacion_id, identificacion),
+                )
+                deudor_reportante = cur.fetchone()
+                if not deudor_reportante:
+                    raise HTTPException(status_code=409, detail="La identificación no corresponde a un deudor de la obligación")
                 if not nombre_deudor:
-                    nombre_deudor = str(deudor["nombre"] or "")
+                    nombre_deudor = str(deudor_reportante["nombre"] or deudor["nombre"] or "")
                 if not telefono:
-                    telefono = str(deudor["telefono"] or "")
+                    telefono = str(deudor_reportante["telefono"] or deudor["telefono"] or "")
 
                 cur.execute(
                     """
