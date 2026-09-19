@@ -96,6 +96,13 @@ def _install_candidate_query() -> None:
                 LIMIT 1
             ) pob ON TRUE
             WHERE pob.obligacion_id IS NOT NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM obligacion_partes op_deudor
+                  WHERE op_deudor.obligacion_id = pob.obligacion_id
+                    AND op_deudor.contacto_id = pp.contacto_id
+                    AND op_deudor.rol = 'DEUDOR'
+              )
               AND {' AND '.join(where)}
             ORDER BY pp.contacto_id, p.radicado_interno DESC;
             """,
