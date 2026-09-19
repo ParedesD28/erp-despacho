@@ -22,7 +22,7 @@
             <!-- BUSCADOR INTELIGENTE PREMIUM -->
             <div class="lg:col-span-3">
                 <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">1. Buscar Deudor / Inmueble</label>
-                <select name="inmueble_id" id="select_inmueble_liq" required placeholder="🔍 Escribe cédula, nombre o exp..." class="w-full">
+                <select name="inmueble_id" id="select_inmueble_liq" onchange="document.getElementById('obligacion_id_form').value=this.options[this.selectedIndex]?.dataset.obligacionId || '';" required placeholder="🔍 Escribe cédula, nombre o exp..." class="w-full">
                     <option value="">Selecciona un deudor...</option>
                     {% for i in inmuebles %}
                     <option value="{{ i.id }}" data-obligacion-id="{{ i.obligacion_id or '' }}" {% if parametros and parametros.inmueble_id|string == i.id|string %}selected{% endif %}>
