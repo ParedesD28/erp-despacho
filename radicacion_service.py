@@ -342,11 +342,7 @@ def radicar_proceso(
                     ),
                     "juzgado": juzgado_db,
                     "estado": "Activo",
-                    "id_demandado": " | ".join(demandados),
-                    "demandado": " | ".join(contacts[x]["nombre"] for x in demandados),
                     "inmueble_id": inmueble_id,
-                    "id_cliente": " | ".join(demandantes),
-                    "demandante": " | ".join(contacts[x]["nombre"] for x in demandantes),
                     "pretensiones": pretensiones,
                     "medidas_cautelares": medidas,
                     "abogado_id": abogado_id,
@@ -427,25 +423,6 @@ def radicar_proceso(
                         radicado_interno=radicado_interno,
                         obligacion_id=obligacion_id,
                     )
-
-                if expedientes_service._table_exists(cur, "procesos_litisconsorcio"):
-                    lit_cols = expedientes_service._cols(cur, "procesos_litisconsorcio")
-                    for ident in demandados:
-                        payload = {
-                            "radicado_interno": radicado_interno,
-                            "identificacion_demandado": ident,
-                        }
-                        use = [c for c in payload if c in lit_cols]
-                        if use:
-                            cur.execute(
-                                f"""
-                                INSERT INTO procesos_litisconsorcio ({', '.join(use)})
-                                VALUES ({', '.join(['%s'] * len(use))})
-                                ON CONFLICT (radicado_interno,identificacion_demandado)
-                                DO NOTHING
-                                """,
-                                [payload[c] for c in use],
-                            )
 
                 if tipo_cartera == "JURIDICO":
                     _crear_actuacion_inicial(cur, radicado_interno)
