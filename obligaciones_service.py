@@ -54,7 +54,7 @@ def crear_obligacion(
     capital_inicial: Decimal | int | float | None,
     fecha_exigibilidad: date | str | None,
 ) -> int:
-    """Crea una obligación y conserva compatibilidad con el esquema legacy."""
+    """Crea una obligación; la multiplicidad de deudores vive en obligacion_partes."""
 
     if not tipo_obligacion:
         raise ValueError("Tipo de obligación no válido")
@@ -93,7 +93,6 @@ def crear_obligacion(
             proceso_id,
             tipo_proceso_id,
             tipo_obligacion_id,
-            deudor_contacto_id,
             acreedor_contacto_id,
             inmueble_id,
             capital_inicial,
@@ -102,7 +101,7 @@ def crear_obligacion(
         VALUES (
             %s,%s,%s,%s,NULLIF(%s,''),
             'ACTIVA',
-            %s,%s,%s,%s,%s,%s,%s,%s
+            %s,%s,%s,%s,%s,%s,%s
         )
         RETURNING id
         """,
@@ -115,7 +114,6 @@ def crear_obligacion(
             radicado_interno,
             tipo_proceso_id,
             tipo_obligacion["id"],
-            deudor["id"],
             (acreedor or {}).get("id"),
             inmueble_id,
             monto,
@@ -233,11 +231,10 @@ def sincronizar_deudores_obligacion(
     cur.execute(
         """
         UPDATE obligaciones
-        SET deudor_contacto_id=%s,
-            identificacion_deudor=%s
+        SET identificacion_deudor=%s
         WHERE id=%s
         """,
-        (principal_id, principal_identificacion, int(obligacion_id)),
+        (principal_identificacion, int(obligacion_id)),
     )
 
 
@@ -269,7 +266,6 @@ def obtener_obligaciones_proceso(cur, radicado_interno: str) -> list[dict]:
             tob.codigo AS tipo_obligacion_codigo,
             tob.nombre AS tipo_obligacion_nombre,
             o.identificacion_deudor,
-            o.deudor_contacto_id,
             o.acreedor_contacto_id,
             o.inmueble_id,
             o.numero_documento,
