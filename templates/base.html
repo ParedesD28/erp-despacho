@@ -15,7 +15,7 @@
  <i data-lucide="scale" class="w-7 h-7 text-blue-500 flex-shrink-0"></i>
  <h1 class="text-white font-bold text-lg tracking-wide ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap">Firma Digital</h1>
  </div>
- <nav class="flex-1 px-3 py-6 space-y-2 overflow-x-hidden pointer-events-auto" aria-label="Navegación principal">
+ <nav class="flex-1 px-3 py-6 space-y-2 overflow-x-hidden overflow-y-auto pointer-events-auto" aria-label="Navegación principal">
  {% set path = request.url.path %}
  <a href="/dashboard" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if path in ['/', '/dashboard'] %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="layout-dashboard" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Dashboard</span></a>
  <a href="/expedientes" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/expedientes' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="folder-open" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Expedientes</span></a>
@@ -26,12 +26,8 @@
  <a href="/contactos" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/contactos' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="book-user" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Directorio</span></a>
  <a href="/conjuntos" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/conjuntos' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="building-2" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Conjuntos</span></a>
  <a href="/procesos" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/procesos' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="gavel" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Radicar Proceso</span></a>
+ <a href="/sms" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/sms' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="message-square-text" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">SMS Cobranza</span></a>
  <a href="/logout" class="relative z-30 flex items-center px-3 py-3 mt-8 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-lg transition-colors font-medium border border-transparent hover:border-red-100 whitespace-nowrap"><i data-lucide="log-out" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Cerrar Sesión</span></a>
- <!-- Enlace Módulo SMS Cobranza -->
-<a href="/sms" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/sms' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
-    <i data-lucide="message-square-text" class="w-5 h-5 flex-shrink-0"></i>
-    <span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">SMS Cobranza</span>
-</a>
  </nav>
  </aside>
  <main class="flex-1 flex flex-col h-screen bg-slate-50 overflow-y-auto relative">
