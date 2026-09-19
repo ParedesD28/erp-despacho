@@ -270,8 +270,7 @@ def _get_process(cur, radicado):
     wanted = [
         "radicado_interno", "radicado_rama", "estado_rama", "tipo_cartera",
         "tipo_proceso_id", "naturaleza", "juzgado", "etapa_actual", "estado",
-        "pretensiones", "medidas_cautelares", "id_cliente", "demandante",
-        "id_demandado", "demandado", "abogado_id", "inmueble_id",
+        "pretensiones", "medidas_cautelares", "abogado_id", "inmueble_id",
         "fecha_radicacion", "torre_apto",
     ]
     avail = [c for c in wanted if c in cols]
@@ -296,65 +295,43 @@ def _get_demandantes(cur, proceso):
     if not proceso:
         return []
     radicado = str(proceso.get("radicado_interno") or "").strip()
-    if _table_exists(cur, "proceso_partes") and _table_exists(cur, "contactos") and radicado:
-        cur.execute(
-            """
-            SELECT c.identificacion, c.nombre, c.tipo, c.telefono, c.email, c.direccion, c.ciudad,
-                   pp.es_principal
-            FROM proceso_partes pp
-            JOIN contactos c ON c.id=pp.contacto_id
-            WHERE pp.radicado_interno=%s
-              AND UPPER(pp.rol)='DEMANDANTE'
-            ORDER BY pp.es_principal DESC, c.nombre ASC
-            """,
-            (radicado,),
-        )
-        rows = [dict(r) for r in cur.fetchall()]
-        if rows:
-            return rows
-    raw = proceso.get("id_cliente")
-    ids = [str(x).strip() for x in str(raw or "").split("|") if str(x).strip()]
-    if not ids or not _table_exists(cur, "contactos"):
+    if not radicado:
         return []
-    placeholders = ",".join(["%s"] * len(ids))
+
     cur.execute(
-        f"SELECT identificacion,nombre,tipo,telefono,email,direccion,ciudad FROM contactos WHERE identificacion IN ({placeholders}) ORDER BY nombre ASC",
-        ids,
+        """
+        SELECT c.identificacion, c.nombre, c.tipo, c.telefono, c.email,
+               c.direccion, c.ciudad, pp.es_principal
+        FROM proceso_partes pp
+        JOIN contactos c ON c.id = pp.contacto_id
+        WHERE pp.radicado_interno=%s
+          AND UPPER(pp.rol)='DEMANDANTE'
+        ORDER BY pp.es_principal DESC, pp.id ASC
+        """,
+        (radicado,),
     )
     return [dict(r) for r in cur.fetchall()]
+
 
 def _get_demandados(cur, radicado):
     radicado = str(radicado or "").strip()
     if not radicado:
         return []
-    if _table_exists(cur, "proceso_partes") and _table_exists(cur, "contactos"):
-        cur.execute(
-            """
-            SELECT c.identificacion, c.nombre, c.tipo, c.telefono, c.email, c.direccion, c.ciudad,
-                   pp.es_principal
-            FROM proceso_partes pp
-            JOIN contactos c ON c.id=pp.contacto_id
-            WHERE pp.radicado_interno=%s
-              AND UPPER(pp.rol)='DEMANDADO'
-            ORDER BY pp.es_principal DESC, c.nombre ASC
-            """,
-            (radicado,),
-        )
-        rows = [dict(r) for r in cur.fetchall()]
-        if rows:
-            return rows
-    cur.execute("SELECT id_demandado,demandado FROM procesos WHERE radicado_interno=%s LIMIT 1", (radicado,))
-    row = cur.fetchone()
-    if not row:
-        return []
-    raw_ids = _row_value(row, "id_demandado", _row_value(row, 0))
-    raw_names = _row_value(row, "demandado", _row_value(row, 1))
-    ids = [str(x).strip() for x in str(raw_ids or "").split("|") if str(x).strip()]
-    names = [str(x).strip() for x in str(raw_names or "").split("|") if str(x).strip()]
-    return [
-        {"identificacion": ident, "nombre": names[i] if i < len(names) else ident}
-        for i, ident in enumerate(ids)
-    ]
+
+    cur.execute(
+        """
+        SELECT c.identificacion, c.nombre, c.tipo, c.telefono, c.email,
+               c.direccion, c.ciudad, pp.es_principal
+        FROM proceso_partes pp
+        JOIN contactos c ON c.id = pp.contacto_id
+        WHERE pp.radicado_interno=%s
+          AND UPPER(pp.rol)='DEMANDADO'
+        ORDER BY pp.es_principal DESC, pp.id ASC
+        """,
+        (radicado,),
+    )
+    return [dict(r) for r in cur.fetchall()]
+
 
 def _get_actuaciones(cur, radicado):
     if not _table_exists(cur, "actuaciones"):
@@ -454,7 +431,6 @@ def cargar_procesos_general_sin_duplicados():
     try:
         with conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                _cols(cur, "procesos")
                 cur.execute(
                     """
                     SELECT
@@ -467,21 +443,8 @@ def cargar_procesos_general_sin_duplicados():
                         p.estado,
                         p.pretensiones,
                         p.medidas_cautelares,
-                        p.id_cliente,
-                        COALESCE(
-                            NULLIF(TRIM(ppdemandante.nombres), ''),
-                            NULLIF(TRIM(pdemandante.nombres), ''),
-                            NULLIF(TRIM(p.id_cliente), ''),
-                            'SIN REGISTRO'
-                        ) AS demandante_nombre,
-                        COALESCE(
-                            NULLIF(TRIM(ppddo.nombres), ''),
-                            NULLIF(TRIM(plnames.nombres), ''),
-                            NULLIF(TRIM(pddo.nombres), ''),
-                            NULLIF(TRIM(p.demandado), ''),
-                            NULLIF(TRIM(p.id_demandado), ''),
-                            'SIN REGISTRO'
-                        ) AS demandado_nombre,
+                        COALESCE(ppdemandante.nombres, 'SIN REGISTRO') AS demandante_nombre,
+                        COALESCE(ppdemandado.nombres, 'SIN REGISTRO') AS demandado_nombre,
                         a.nombre AS abogado_asignado
                     FROM procesos p
                     LEFT JOIN abogados a ON p.abogado_id = a.id
@@ -498,33 +461,7 @@ def cargar_procesos_general_sin_duplicados():
                         JOIN contactos c ON c.id=pp.contacto_id
                         WHERE pp.radicado_interno=p.radicado_interno
                           AND UPPER(pp.rol)='DEMANDADO'
-                    ) ppddo ON TRUE
-                    LEFT JOIN LATERAL (
-                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
-                        FROM procesos_litisconsorcio pl
-                        JOIN contactos c ON c.identificacion = pl.identificacion_demandado
-                        WHERE pl.radicado_interno = p.radicado_interno
-                    ) plnames ON TRUE
-                    LEFT JOIN LATERAL (
-                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
-                        FROM UNNEST(
-                            string_to_array(
-                                replace(COALESCE(p.id_cliente,''), ' ', ''),
-                                '|'
-                            )
-                        ) AS ids(identificacion)
-                        JOIN contactos c ON c.identificacion = ids.identificacion
-                    ) pdemandante ON TRUE
-                    LEFT JOIN LATERAL (
-                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
-                        FROM UNNEST(
-                            string_to_array(
-                                replace(COALESCE(p.id_demandado,''), ' ', ''),
-                                '|'
-                            )
-                        ) AS ids(identificacion)
-                        JOIN contactos c ON c.identificacion = ids.identificacion
-                    ) pddo ON TRUE
+                    ) ppdemandado ON TRUE
                     ORDER BY p.radicado_interno DESC
                     """
                 )
