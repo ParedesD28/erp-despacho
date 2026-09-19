@@ -1,0 +1,113 @@
+"""Regresiones ligeras de Fases 11 y 12.
+
+No requieren Neon ni credenciales: validan contratos puros y protegen
+reglas que no deben volver a romperse en el CI.
+"""
+from __future__ import annotations
+
+import os
+import sys
+import unittest
+from datetime import date, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import bot_api
+import sms_router
+from obligacion_saldo_service import _saldo_generico
+
+
+class FakeCursor:
+    def __init__(self, rows):
+        self.rows = list(rows)
+        self.queries = []
+
+    def execute(self, sql, params=None):
+        self.queries.append((sql, params))
+
+    def fetchone(self):
+        return self.rows.pop(0) if self.rows else None
+
+
+class Fase11ContractsTests(unittest.TestCase):
+    def test_normaliza_telefono_colombiano(self):
+        self.assertEqual(sms_router.normalizar_telefono("573106927812"), "3106927812")
+        self.assertEqual(sms_router.normalizar_telefono("+57 310 692 7812"), "3106927812")
+        self.assertIsNone(sms_router.normalizar_telefono("6015551234"))
+
+    def test_balance_generico_usa_capital_y_movimientos(self):
+        cur = FakeCursor([
+            {
+                "id": 99,
+                "capital_inicial": 1000000,
+                "estado": "ACTIVA",
+                "fuente_saldo": "OBLIGACION",
+                "tipo_obligacion_codigo": "PAGARE",
+            },
+            {"variacion": 175000},
+        ])
+        result = _saldo_generico(cur, 99)
+        self.assertTrue(result["saldo_verificado"])
+        self.assertEqual(result["saldo_total"], 1175000.0)
+        self.assertEqual(result["saldo_fuente"], "OBLIGACION_MOVIMIENTOS")
+
+    def test_wizard_requiere_mensaje_y_campana_validos(self):
+        payload = sms_router.ConfirmarColaRequest(
+            tipo_campana="PREJUDICIAL",
+            mensajes=[{"contacto_id": 7, "mensaje_texto": "Texto de prueba"}],
+        )
+        self.assertEqual(payload.mensajes[0].contacto_id, 7)
+        self.assertEqual(payload.tipo_campana, "PREJUDICIAL")
+
+    def test_wizard_rechaza_rango_inconsistente_en_modelo_de_negocio(self):
+        payload = sms_router.ConfirmarColaRequest(
+            tipo_campana="PREJUDICIAL",
+            saldo_minimo=200000,
+            saldo_maximo=100000,
+            mensajes=[{"contacto_id": 7, "mensaje_texto": "Texto"}],
+        )
+        self.assertLess(payload.saldo_maximo, payload.saldo_minimo)
+
+    def test_sms_no_toma_pretensiones_como_fuente_financiera(self):
+        for name in ("sms_saldo_service.py", "sms_cartera_runtime.py", "obligacion_saldo_service.py"):
+            source = (ROOT / name).read_text(encoding="utf-8").lower()
+            self.assertNotIn("pretensiones", source, msg=f"{name} volvió a depender de pretensiones")
+
+
+class Fase11PdfSecurityTests(unittest.TestCase):
+    def test_url_pdf_firmada_usa_hmac(self):
+        old_secret = bot_api._PDF_SECRET
+        try:
+            bot_api._PDF_SECRET = "x" * 40
+            url = bot_api.build_signed_pdf_url("Estado_Cuenta_7_demo.pdf", "https://erp.example")
+            self.assertIn("/api/bot/pdf/Estado_Cuenta_7_demo.pdf?", url)
+            query = url.split("?", 1)[1]
+            values = dict(item.split("=", 1) for item in query.split("&"))
+            self.assertEqual(
+                values["token"],
+                bot_api._sign("Estado_Cuenta_7_demo.pdf", int(values["expires"])),
+            )
+        finally:
+            bot_api._PDF_SECRET = old_secret
+
+    def test_pdf_bloquea_traversal(self):
+        with self.assertRaises(Exception) as ctx:
+            bot_api.servir_pdf_bot("../secreto.pdf", int(__import__("time").time()) + 60, "x")
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 404)
+
+    def test_fecha_corte_futura_rechazada(self):
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        with self.assertRaises(Exception) as ctx:
+            bot_api._parse_payload({
+                "obligacion_id": 1,
+                "fecha_corte": tomorrow,
+            })
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 422)
+
+
+if __name__ == "__main__":
+    unittest.main()
