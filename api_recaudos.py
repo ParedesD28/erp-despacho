@@ -130,7 +130,8 @@ async def reportar_abono_agente(request: Request):
                         raise HTTPException(status_code=409, detail="La obligación PH no tiene inmueble")
 
                     _, resumen_prev, _ = liquidador.motor_calculo_judicial(
-                        inmueble_id, "usura", 2.5, 23.8, 0.0, fecha_pago
+                        inmueble_id, "usura", 2.5, 23.8, 0.0, fecha_pago,
+                        obligacion_id=obligacion_id,
                     )
                     saldo_int = float(resumen_prev.get("intereses", 0.0))
                     saldo_cap = float(resumen_prev.get("capital", 0.0))
@@ -276,7 +277,8 @@ async def reportar_abono_agente(request: Request):
                 saldo_restante = None
                 if fuente == "EXPENSAS_PH":
                     _, resumen_post_ph, _ = liquidador.motor_calculo_judicial(
-                        inmueble_id,"usura",2.5,23.8,0.0,date.today()
+                        inmueble_id,"usura",2.5,23.8,0.0,date.today(),
+                        obligacion_id=obligacion_id,
                     )
                     saldo_restante = float(resumen_post_ph.get("gran_total",0.0))
                     if saldo_restante <= 100.0:
