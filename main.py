@@ -1157,6 +1157,7 @@ def crm(
                         p.pretensiones,
                         p.inmueble_id,
                         COALESCE(ppddo.identificaciones, '') AS identificaciones_demandado,
+                        COALESCE(ppddo.nombres, '') AS demandado,
                         pob.obligacion_id,
                         i.conjunto_residencial,
                         i.torre_apto
@@ -1170,7 +1171,9 @@ def crm(
                         LIMIT 1
                     ) pob ON TRUE
                     LEFT JOIN LATERAL (
-                        SELECT STRING_AGG(DISTINCT c.identificacion, '|' ORDER BY c.identificacion) AS identificaciones
+                        SELECT
+                            STRING_AGG(DISTINCT c.identificacion, '|' ORDER BY c.identificacion) AS identificaciones,
+                            STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
                         FROM proceso_partes pp
                         JOIN contactos c ON c.id=pp.contacto_id
                         WHERE pp.radicado_interno=p.radicado_interno
