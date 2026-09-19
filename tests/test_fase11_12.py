@@ -76,6 +76,15 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertEqual(payload.mensajes[0].contacto_id, 7)
         self.assertEqual(payload.tipo_campana, "PREJUDICIAL")
 
+
+    def test_bootstrap_no_requiere_modulos_legacy_eliminados(self):
+        start_source = (ROOT / "start.py").read_text(encoding="utf-8").lower()
+        schema_source = (ROOT / "schema_preflight.py").read_text(encoding="utf-8").lower()
+        self.assertNotIn("proceso_partes_runtime", start_source)
+        self.assertNotIn("proceso_partes_service", start_source)
+        self.assertNotIn("deudor_contacto_id", schema_source)
+        self.assertIn("20260919_fase14_eliminar_legacy_proceso_obligacion", schema_source)
+
     def test_codigo_no_referencia_relaciones_legacy_de_proceso_obligacion(self):
         archivos = {
             "main.py",
@@ -86,6 +95,8 @@ class Fase11ContractsTests(unittest.TestCase):
             "api_recaudos.py",
             "bot_api.py",
             "sms_router.py",
+            "schema_preflight.py",
+            "start.py",
         }
         prohibidas = (
             "id_cliente",
