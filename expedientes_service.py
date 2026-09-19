@@ -67,7 +67,11 @@ def _ensure_inmueble_propietarios_schema(cur):
             """,
             (table,),
         )
-        actual = {str(row[0]) for row in cur.fetchall()}
+        actual = {
+            str(_row_value(row, "column_name"))
+            for row in cur.fetchall()
+            if _row_value(row, "column_name") is not None
+        }
         if not actual:
             raise RuntimeError(f"[SCHEMA PREFLIGHT] Falta tabla: {table}")
         missing = sorted(expected - actual)
@@ -87,7 +91,11 @@ def _ensure_cartera_schema(cur):
         WHERE table_schema='public' AND table_name='procesos'
         """
     )
-    actual = {str(row[0]) for row in cur.fetchall()}
+    actual = {
+        str(_row_value(row, "column_name"))
+        for row in cur.fetchall()
+        if _row_value(row, "column_name") is not None
+    }
     missing = sorted(required - actual)
     if missing:
         raise RuntimeError(
