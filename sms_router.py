@@ -100,8 +100,58 @@ def _ensure_sms_schema() -> None:
         conn.release()
 
 
+def _domingo_pascua(anio: int) -> datetime:
+    """Calcula el Domingo de Pascua para el calendario gregoriano."""
+    a = anio % 19
+    b = anio // 100
+    c = anio % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    j = c % 4
+    k = c % 7
+    l = (32 + 2 * e + 2 * i - h - j) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    mes = (h + l - 7 * m + 114) // 31
+    dia = ((h + l - 7 * m + 114) % 31) + 1
+    return datetime(anio, mes, dia)
+
+
+def _es_festivo_colombia(fecha: datetime) -> bool:
+    """Calendario legal colombiano, incluyendo traslados al lunes."""
+    anio = fecha.year
+    fijas_no_movilizadas = {
+        (1, 1), (5, 1), (7, 20), (8, 7), (12, 8), (12, 25),
+    }
+    festivos = {datetime(anio, mes, dia).date() for mes, dia in fijas_no_movilizadas}
+
+    # Ley 51 de 1983: estas festividades se trasladan al lunes siguiente.
+    for mes, dia in ((1, 6), (3, 19), (6, 29), (8, 15), (10, 12), (11, 1), (11, 11)):
+        candidato = datetime(anio, mes, dia)
+        while candidato.weekday() != 0:
+            candidato += timedelta(days=1)
+        festivos.add(candidato.date())
+
+    pascua = _domingo_pascua(anio)
+    # Jueves y Viernes Santos.
+    festivos.add((pascua - timedelta(days=3)).date())
+    festivos.add((pascua - timedelta(days=2)).date())
+    # Ascensión, Corpus Christi y Sagrado Corazón: su descanso legal se
+    # traslada al lunes siguiente al día religioso correspondiente.
+    for dias_despues in (43, 64, 72):
+        festivos.add((pascua + timedelta(days=dias_despues)).date())
+
+    return fecha.date() in festivos
+
+
 def validar_horario_ley_2300() -> Tuple[bool, str]:
     ahora = datetime.now(TZ_COLOMBIA)
+    if _es_festivo_colombia(ahora):
+        return False, f"Día festivo ({ahora:%Y-%m-%d}): Prohibida la gestión según Ley 2300 de 2023."
+
     dia = ahora.weekday()
     hora = ahora.hour + ahora.minute / 60.0
     if dia == 6:
