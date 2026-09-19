@@ -47,9 +47,11 @@ def motor_calculo_judicial(
     fecha_corte,
     *,
     autocausar: bool = True,
+    obligacion_id: int | None = None,
 ):
     """Calcula la liquidación de crédito de expensas comunes conforme al régimen legal colombiano."""
     inmueble_id = int(inmueble_id)
+    obligacion_id = int(obligacion_id) if obligacion_id is not None else None
     fecha_corte = (
         date.fromisoformat(str(fecha_corte))
         if not isinstance(fecha_corte, date)
@@ -65,10 +67,12 @@ def motor_calculo_judicial(
                     cur.execute("""
                         SELECT periodo_anio, periodo_mes, valor_capital
                         FROM expensas_ph
-                        WHERE inmueble_id = %s AND concepto = 'Expensa Ordinaria'
+                        WHERE inmueble_id = %s
+                          AND (%s IS NULL OR obligation_id = %s)
+                          AND concepto = 'Expensa Ordinaria'
                         ORDER BY periodo_anio DESC, periodo_mes DESC
                         LIMIT 1
-                    """, (inmueble_id,))
+                    """, (inmueble_id, obligacion_id, obligacion_id))
                     ultima = cur.fetchone()
                     if ultima:
                         u_anio = ultima["periodo_anio"] if isinstance(ultima, dict) else ultima[0]
@@ -86,18 +90,21 @@ def motor_calculo_judicial(
                             cur.execute("""
                                 SELECT 1
                                 FROM expensas_ph
-                                WHERE inmueble_id=%s AND concepto='Expensa Ordinaria'
+                                WHERE inmueble_id=%s
+                                  AND (%s IS NULL OR obligation_id = %s)
+                                  AND concepto='Expensa Ordinaria'
                                   AND periodo_anio=%s AND periodo_mes=%s
                                 LIMIT 1
-                            """, (inmueble_id, sig_anio, sig_mes))
+                            """, (inmueble_id, obligacion_id, obligacion_id, sig_anio, sig_mes))
                             if not cur.fetchone():
                                 cur.execute("""
                                     INSERT INTO expensas_ph
-                                        (inmueble_id, concepto, periodo_mes, periodo_anio,
+                                        (inmueble_id, obligation_id, concepto, periodo_mes, periodo_anio,
                                          valor_capital, fecha_vencimiento, estado)
-                                    VALUES (%s, 'Expensa Ordinaria', %s, %s, %s, %s, 'En Mora')
+                                    VALUES (%s, %s, 'Expensa Ordinaria', %s, %s, %s, %s, 'En Mora')
                                 """, (
                                     inmueble_id,
+                                    obligacion_id,
                                     sig_mes,
                                     sig_anio,
                                     u_valor,
@@ -121,9 +128,10 @@ def motor_calculo_judicial(
             SELECT concepto, periodo_mes, periodo_anio, valor_capital
             FROM expensas_ph
             WHERE inmueble_id = %s
+              AND (%s IS NULL OR obligation_id = %s)
             """,
             conn,
-            params=(inmueble_id,),
+            params=(inmueble_id, obligacion_id, obligacion_id),
         )
         with conn.cursor() as cur:
             cur.execute("""
