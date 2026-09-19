@@ -701,9 +701,15 @@ async def crear_proceso_cascada_compat(request: Request):
 # EXPEDIENTES Y DETALLE
 # ==============================================================================
 @app.get("/expedientes")
-def ver_expedientes(request: Request):
-    procesos_lista = expedientes_service.cargar_procesos_general_sin_duplicados()
-    return render_template("expedientes.html", {"request": request, "procesos": procesos_lista})
+def ver_expedientes(request: Request, estado: str = "ACTIVOS"):
+    estado_filtro = str(estado or "ACTIVOS").strip().upper()
+    if estado_filtro not in {"ACTIVOS", "INACTIVOS", "TODOS"}:
+        estado_filtro = "ACTIVOS"
+    procesos_lista = expedientes_service.cargar_procesos_general_sin_duplicados(estado_filtro)
+    return render_template(
+        "expedientes.html",
+        {"request": request, "procesos": procesos_lista, "estado_filtro": estado_filtro},
+    )
 
 
 @app.get("/expediente/{radicado}", include_in_schema=False)
@@ -988,6 +994,67 @@ async def guardar_expediente_estructurado(request: Request):
         conn.release()
 
 
+@app.post("/expediente/estado", include_in_schema=False)
+def cambiar_estado_expediente(
+    request: Request,
+    radicado_interno: str = Form(...),
+    accion: str = Form(...),
+    motivo: str = Form(""),
+):
+    radicado = str(radicado_interno or "").strip()
+    accion = str(accion or "").strip().upper()
+    motivo = str(motivo or "").strip()
+
+    if accion not in {"INACTIVAR", "ACTIVAR"}:
+        return _redirect(f"/expediente/{radicado}", error="Accion+de+estado+no+valida")
+    if accion == "INACTIVAR" and len(motivo) < 5:
+        return _redirect(f"/expediente/{radicado}", error="Debe+indicar+un+motivo+de+inactivacion")
+
+    conn = db.get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT estado FROM procesos WHERE radicado_interno=%s FOR UPDATE", (radicado,))
+                actual = cur.fetchone()
+                if not actual:
+                    raise HTTPException(status_code=404, detail="Expediente no encontrado")
+                estado_actual = (actual["estado"] if isinstance(actual, dict) else actual[0]) or "ACTIVO"
+                nuevo_estado = "INACTIVO" if accion == "INACTIVAR" else "Activo"
+
+                if accion == "INACTIVAR" and str(estado_actual).upper() == "INACTIVO":
+                    return _redirect(f"/expediente/{radicado}", mensaje="El+expediente+ya+estaba+inactivo")
+                if accion == "ACTIVAR" and str(estado_actual).upper() != "INACTIVO":
+                    return _redirect(f"/expediente/{radicado}", mensaje="El+expediente+ya+estaba+activo")
+
+                if not expedientes_service._table_exists(cur, "proceso_inactivaciones"):
+                    raise RuntimeError("La migracion de historial de inactivacion aun no esta aplicada")
+
+                cur.execute(
+                    "UPDATE procesos SET estado=%s WHERE radicado_interno=%s",
+                    (nuevo_estado, radicado),
+                )
+                usuario = str(getattr(request.state, "user_id", None) or "ERP")
+                cur.execute(
+                    """
+                    INSERT INTO proceso_inactivaciones
+                        (radicado_interno, accion, motivo, usuario)
+                    VALUES (%s,%s,%s,%s)
+                    """,
+                    (radicado, accion, motivo or None, usuario),
+                )
+        return _redirect(
+            f"/expediente/{radicado}",
+            mensaje=("Expediente+inactivado" if accion == "INACTIVAR" else "Expediente+activado"),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[EXPEDIENTE][ESTADO] Error {radicado}: {exc!r}", flush=True)
+        return _redirect(f"/expediente/{radicado}", error="No+fue+posible+cambiar+el+estado+del+expediente")
+    finally:
+        conn.release()
+
+
 @app.post("/actuacion/nueva")
 async def nueva_actuacion(request: Request):
     form = await request.form()
@@ -1179,7 +1246,8 @@ def crm(
                         WHERE pp.radicado_interno=p.radicado_interno
                           AND UPPER(pp.rol)='DEMANDADO'
                     ) ppddo ON TRUE
-                    WHERE EXISTS (
+                    WHERE UPPER(COALESCE(p.estado,'ACTIVO')) <> 'INACTIVO'
+                      AND EXISTS (
                         SELECT 1
                         FROM proceso_partes pp
                         JOIN contactos c ON c.id=pp.contacto_id
