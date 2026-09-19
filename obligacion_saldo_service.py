@@ -119,6 +119,7 @@ def _saldo_ph(obligacion: dict, fecha_corte: Optional[date]) -> dict:
             GASTOS_PH,
             fecha_corte or ahora_colombia().date(),
             autocausar=False,
+            obligacion_id=int(obligacion["id"]),
         )
     except Exception as exc:
         return {
