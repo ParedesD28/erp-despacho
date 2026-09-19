@@ -12,6 +12,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+from jinja2 import DictLoader, Environment
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -78,6 +80,23 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertEqual(payload.tipo_campana, "PREJUDICIAL")
 
 
+
+
+    def test_template_expediente_compila_y_cierra_bloques(self):
+        base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+        detalle = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8")
+        env = Environment(loader=DictLoader({"base.html": base, "detalle_expediente_v4.html": detalle}))
+        env.get_template("detalle_expediente_v4.html")
+
+    def test_navegacion_sms_visible_antes_de_cerrar_sesion(self):
+        base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+        self.assertLess(base.index('href="/sms"'), base.index('href="/logout"'))
+        self.assertIn("overflow-y-auto", base.split("<nav", 1)[1].split(">", 1)[0])
+
+    def test_detalle_expediente_no_referencia_campos_legacy(self):
+        detalle = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8").lower()
+        for token in ("id_cliente", "id_demandado", "proceso.demandante", "proceso.demandado"):
+            self.assertNotIn(token, detalle)
 
     def test_row_value_soporta_cursor_dict_y_tupla(self):
         self.assertEqual(expedientes_service._row_value({"column_name": "tipo_cartera"}, "column_name"), "tipo_cartera")
