@@ -81,7 +81,11 @@ def _parse_payload(payload: Any) -> tuple[int | None, int | None, date]:
     return obligacion_id, inmueble_id, fecha_corte
 
 
-def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[list[dict], dict, tuple]:
+def _obtener_datos_liquidacion(
+    inmueble_id: int,
+    fecha_corte: date,
+    obligacion_id: int | None = None,
+) -> tuple[list[dict], dict, tuple]:
     resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
         inmueble_id,
         "usura",
@@ -89,6 +93,7 @@ def _obtener_datos_liquidacion(inmueble_id: int, fecha_corte: date) -> tuple[lis
         23.8,
         0.0,
         fecha_corte,
+        obligacion_id=obligacion_id,
     )
     if not inm_info:
         raise HTTPException(status_code=404, detail="No existe información del inmueble")
@@ -185,7 +190,11 @@ async def liquidar_para_bot(request: Request):
         raise HTTPException(status_code=404, detail="La obligación no tiene inmueble PH")
 
     try:
-        resultados, resumen, inm_info = _obtener_datos_liquidacion(inmueble_id, fecha_corte)
+        resultados, resumen, inm_info = _obtener_datos_liquidacion(
+            inmueble_id,
+            fecha_corte,
+            obligacion_id=obligacion_id,
+        )
         url_pdf = _generar_pdf_unificado(inmueble_id, fecha_corte, resultados, resumen, inm_info)
         tasas_aplicadas, fuente_tasas = _resumen_tasas(resultados)
 
