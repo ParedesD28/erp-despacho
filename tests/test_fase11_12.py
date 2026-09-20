@@ -130,6 +130,19 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertIn("procesos no-VERBAL sin obligación canónica", source)
         self.assertIn("20260919_fase15_completar_obligaciones_ejecutivos_historicos", source)
 
+    def test_guardar_recalcular_liquidacion_persiste_por_clave_natural(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("def _guardar_cambios_liquidacion", source)
+        self.assertIn("SET valor_capital = %s,", source)
+        self.assertIn("obligation_id = %s", source)
+        self.assertIn("WHERE inmueble_id = %s", source)
+        self.assertIn("AND concepto = %s", source)
+        self.assertIn("motor_calculo_judicial(", source)
+        self.assertNotIn("RedirectResponse(url="/liquidador", status_code=307)", source)
+        template = (ROOT / "templates" / "liquidador.html").read_text(encoding="utf-8")
+        self.assertIn("{% if mensaje %}", template)
+        self.assertIn("Liquidación actualizada correctamente.", source)
+
     def test_carga_masiva_liquidador_persiste_obligation_id(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn(
