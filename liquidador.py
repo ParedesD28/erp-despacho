@@ -169,8 +169,9 @@ def motor_calculo_judicial(
     # Saldos pendientes: sí se afectan por los abonos.
     cap_acumulado = 0.0
     int_acumulado = 0.0
-    # Acumulados históricos: NO se reducen por abonos. Son la base contractual
-    # para calcular honorarios sobre la totalidad de capital + intereses causados.
+    # Acumulados históricos: NO se reducen por abonos. La base de honorarios
+    # corresponde a la sumatoria histórica de cuotas + intereses causados.
+    # Los gastos globales/periódicos quedan fuera de esta base.
     capital_historico = 0.0
     intereses_historicos = 0.0
     primer_anio = int(df_agrupado["periodo_anio"].min())
@@ -209,7 +210,7 @@ def motor_calculo_judicial(
         abo_val = float(fila["Abono"].values[0]) if not fila.empty else 0.0
 
         cap_mes = ord_val + ext_val + gas_val
-        capital_historico += cap_mes
+        capital_historico += ord_val + ext_val
         cap_acumulado += cap_mes
 
         if es_fija:
@@ -270,8 +271,8 @@ def motor_calculo_judicial(
             fecha_actual_loop = date(y, m + 1, 1)
 
     # El saldo de la deuda sí refleja pagos, pero los honorarios se calculan
-    # sobre la sumatoria histórica de capital + intereses causados, sin reducir
-    # esa base por los abonos registrados.
+    # sobre la sumatoria histórica de cuotas (ordinarias + extraordinarias)
+    # + intereses causados, sin reducir esa base por los abonos registrados.
     total_capital = cap_acumulado
     total_intereses = int_acumulado
     base_honorarios = capital_historico + intereses_historicos
