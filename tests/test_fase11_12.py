@@ -130,6 +130,16 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertIn("procesos no-VERBAL sin obligación canónica", source)
         self.assertIn("20260919_fase15_completar_obligaciones_ejecutivos_historicos", source)
 
+    def test_honorarios_liquidador_usan_base_historica_no_reducida_por_abonos(self):
+        source = (ROOT / "liquidador.py").read_text(encoding="utf-8")
+        self.assertIn("capital_historico", source)
+        self.assertIn("intereses_historicos", source)
+        self.assertIn("base_honorarios = capital_historico + intereses_historicos", source)
+        self.assertIn("capital_historico += ord_val + ext_val", source)
+        self.assertIn("intereses_historicos += interes_mes", source)
+        self.assertIn('"base_honorarios": base_honorarios', source)
+        self.assertNotIn("total_honorarios = (total_capital + total_intereses)", source)
+
     def test_guardar_recalcular_liquidacion_persiste_por_clave_natural(self):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn("def _guardar_cambios_liquidacion", source)
