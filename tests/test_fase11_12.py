@@ -138,7 +138,7 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertIn("WHERE inmueble_id = %s", source)
         self.assertIn("AND concepto = %s", source)
         self.assertIn("motor_calculo_judicial(", source)
-        self.assertNotIn("RedirectResponse(url="/liquidador", status_code=307)", source)
+        self.assertNotIn('RedirectResponse(url="/liquidador", status_code=307)', source)
         template = (ROOT / "templates" / "liquidador.html").read_text(encoding="utf-8")
         self.assertIn("{% if mensaje %}", template)
         self.assertIn("Liquidación actualizada correctamente.", source)
