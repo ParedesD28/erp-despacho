@@ -101,6 +101,11 @@
             <i data-lucide="alert-circle" class="w-4 h-4 mt-0.5"></i> {{ error }}
         </div>
         {% endif %}
+        {% if mensaje %}
+        <div class="mt-4 bg-emerald-50 text-emerald-800 p-3 rounded-md text-sm border border-emerald-200 flex items-start gap-2">
+            <i data-lucide="check-circle" class="w-4 h-4 mt-0.5"></i> {{ mensaje }}
+        </div>
+        {% endif %}
     </div>
 
     <!-- RESULTADOS -->
