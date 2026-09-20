@@ -2003,47 +2003,180 @@ def calcular_liquidador(
     return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "obligacion_id": obligacion_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
 
 
+def _parsear_fecha_corte_liquidacion(valor) -> date:
+    if isinstance(valor, date):
+        return valor
+    try:
+        return date.fromisoformat(str(valor or "").strip())
+    except (TypeError, ValueError):
+        return date.today()
+
+
+def _float_form_value(valor, default: float = 0.0) -> float:
+    if valor is None or str(valor).strip() == "":
+        return float(default)
+    texto = str(valor).strip().replace("$", "").replace(" ", "")
+    if "," in texto and "." in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    elif "," in texto:
+        texto = texto.replace(",", ".")
+    return float(texto)
+
+
+def _guardar_cambios_liquidacion(cur, inmueble_id: int, obligacion_id: int, form_data):
+    """Persiste las celdas editables usando la clave única actual de expensas_ph.
+
+    La tabla tiene unicidad por inmueble + concepto + período (no por obligación).
+    Por eso primero se actualiza esa clave natural y se fuerza obligation_id al vínculo
+    actualmente seleccionado. Así evitamos fallos por una fila histórica con obligación
+    distinta y evitamos depender de un UPDATE que pueda terminar en INSERT duplicado.
+    """
+    cambios = 0
+    inserciones = 0
+    for key, value in form_data.items():
+        if not key.startswith(("ord_", "ext_", "gas_", "abo_")):
+            continue
+        partes = key.split("_")
+        if len(partes) != 3:
+            raise ValueError(f"Campo de liquidación inválido: {key}")
+        prefijo, y, m = partes
+        concepto = {
+            "ord": "Expensa Ordinaria",
+            "ext": "Cuota Extraordinaria",
+            "gas": "Gastos",
+            "abo": "Abono",
+        }[prefijo]
+        anio = int(y)
+        mes = int(m)
+        valor = _float_form_value(value)
+
+        cur.execute(
+            """
+            UPDATE expensas_ph
+               SET valor_capital = %s,
+                   obligation_id = %s
+             WHERE inmueble_id = %s
+               AND concepto = %s
+               AND periodo_anio = %s
+               AND periodo_mes = %s
+            """,
+            (valor, obligacion_id, inmueble_id, concepto, anio, mes),
+        )
+        if cur.rowcount:
+            cambios += cur.rowcount
+            continue
+
+        if valor == 0:
+            continue
+
+        f_vencimiento = f"{anio}-{mes:02d}-01"
+        cur.execute(
+            """
+            INSERT INTO expensas_ph
+                (inmueble_id, obligation_id, concepto, periodo_mes, periodo_anio,
+                 valor_capital, fecha_vencimiento, estado)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'En Mora')
+            """,
+            (inmueble_id, obligacion_id, concepto, mes, anio, valor, f_vencimiento),
+        )
+        inserciones += 1
+
+    return cambios, inserciones
+
+
 @app.post("/liquidador/actualizar")
 async def actualizar_cuotas(request: Request):
     form_data = await request.form()
-    inmueble_id = int(form_data.get("inmueble_id"))
-    obligacion_id = int(form_data.get("obligacion_id")) if str(form_data.get("obligacion_id") or "").isdigit() else None
+    try:
+        inmueble_id = int(form_data.get("inmueble_id"))
+    except (TypeError, ValueError):
+        return render_template(
+            "liquidador.html",
+            {"request": request, "inmuebles": cargar_inmuebles_ph(),
+             "resultados": None, "resumen": {},
+             "error": "No se pudo identificar el inmueble de la liquidación."},
+            status_code=400,
+        )
+
+    obligacion_id_raw = str(form_data.get("obligacion_id") or "").strip()
+    obligacion_id = int(obligacion_id_raw) if obligacion_id_raw.isdigit() else None
+    tipo_tasa = str(form_data.get("tipo_tasa") or "Superfinanciera")
+    tasa_fija = _float_form_value(form_data.get("tasa_fija"), 2.5)
+    honorarios_pct = _float_form_value(form_data.get("honorarios_pct"), 23.8)
+    gastos = _float_form_value(form_data.get("gastos"), 0.0)
+    fecha_corte = _parsear_fecha_corte_liquidacion(form_data.get("fecha_corte"))
+
     conn = db.get_connection()
     try:
         with conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 obligacion_id = _resolver_obligacion_ph(cur, inmueble_id, obligacion_id)
-                for key, value in form_data.items():
-                    if key.startswith(("ord_", "ext_", "gas_", "abo_")):
-                        prefijo, y, m = key.split("_")
-                        concepto = {
-                            "ord": "Expensa Ordinaria",
-                            "ext": "Cuota Extraordinaria",
-                            "gas": "Gastos",
-                            "abo": "Abono",
-                        }[prefijo]
-                        valor = float(value) if value else 0.0
-                        cur.execute("""
-                            UPDATE expensas_ph
-                            SET valor_capital = %s
-                            WHERE inmueble_id = %s
-                              AND obligation_id = %s
-                              AND concepto = %s
-                              AND periodo_anio = %s AND periodo_mes = %s
-                        """, (valor, inmueble_id, obligacion_id, concepto, int(y), int(m)))
-                        if cur.rowcount == 0 and valor > 0:
-                            f_vencimiento = f"{y}-{int(m):02d}-01"
-                            cur.execute("""
-                                INSERT INTO expensas_ph
-                                    (inmueble_id, obligation_id, concepto, periodo_mes, periodo_anio,
-                                     valor_capital, fecha_vencimiento, estado)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, 'Aplicado')
-                            """, (inmueble_id, obligation_id, concepto, int(m), int(y), valor, f_vencimiento))
+                cambios, inserciones = _guardar_cambios_liquidacion(
+                    cur, inmueble_id, obligacion_id, form_data
+                )
+
+        resultados, resumen, _ = liquidador.motor_calculo_judicial(
+            inmueble_id,
+            tipo_tasa,
+            tasa_fija,
+            honorarios_pct,
+            gastos,
+            fecha_corte,
+            obligacion_id=obligacion_id,
+        )
+        lista_inmuebles = cargar_inmuebles_ph()
+        return render_template(
+            "liquidador.html",
+            {
+                "request": request,
+                "inmuebles": lista_inmuebles,
+                "resultados": resultados,
+                "resumen": resumen,
+                "mensaje": (
+                    f"Liquidación actualizada correctamente. "
+                    f"{cambios} registro(s) actualizado(s)"
+                    + (f" y {inserciones} creado(s)." if inserciones else ".")
+                ),
+                "parametros": {
+                    "inmueble_id": inmueble_id,
+                    "obligacion_id": obligacion_id,
+                    "tipo_tasa": tipo_tasa,
+                    "tasa_fija": tasa_fija,
+                    "honorarios_pct": honorarios_pct,
+                    "gastos": gastos,
+                    "fecha_corte": fecha_corte.strftime("%Y-%m-%d"),
+                },
+            },
+        )
     except Exception as e:
-        print(f"[LIQUIDADOR] Error actualizando cuotas: {e}", flush=True)
+        print(
+            f"[LIQUIDADOR][GUARDAR] Error inmueble={inmueble_id} "
+            f"obligacion={obligacion_id}: {e!r}",
+            flush=True,
+        )
+        lista_inmuebles = cargar_inmuebles_ph()
+        return render_template(
+            "liquidador.html",
+            {
+                "request": request,
+                "inmuebles": lista_inmuebles,
+                "resultados": None,
+                "resumen": {},
+                "error": f"No fue posible guardar la liquidación: {e}",
+                "parametros": {
+                    "inmueble_id": inmueble_id,
+                    "obligacion_id": obligacion_id,
+                    "tipo_tasa": tipo_tasa,
+                    "tasa_fija": tasa_fija,
+                    "honorarios_pct": honorarios_pct,
+                    "gastos": gastos,
+                    "fecha_corte": fecha_corte.strftime("%Y-%m-%d"),
+                },
+            },
+            status_code=400,
+        )
     finally:
         conn.release()
-    return RedirectResponse(url="/liquidador", status_code=307)
 
 
 @app.post("/liquidador/exportar/pdf")
