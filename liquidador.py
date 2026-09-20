@@ -166,8 +166,13 @@ def motor_calculo_judicial(
     df_agrupado = df_agrupado.sort_values(by=["periodo_anio", "periodo_mes"])
 
     resultados = []
+    # Saldos pendientes: sí se afectan por los abonos.
     cap_acumulado = 0.0
     int_acumulado = 0.0
+    # Acumulados históricos: NO se reducen por abonos. Son la base contractual
+    # para calcular honorarios sobre la totalidad de capital + intereses causados.
+    capital_historico = 0.0
+    intereses_historicos = 0.0
     primer_anio = int(df_agrupado["periodo_anio"].min())
     primer_mes = int(
         df_agrupado[df_agrupado["periodo_anio"] == primer_anio]["periodo_mes"].min()
@@ -204,6 +209,7 @@ def motor_calculo_judicial(
         abo_val = float(fila["Abono"].values[0]) if not fila.empty else 0.0
 
         cap_mes = ord_val + ext_val + gas_val
+        capital_historico += cap_mes
         cap_acumulado += cap_mes
 
         if es_fija:
@@ -226,6 +232,9 @@ def motor_calculo_judicial(
             cap_acumulado * tasa_mensual * (dias / 30.0)
             if cap_acumulado > 0 else 0.0
         )
+        # El interés causado del período se acumula históricamente para
+        # honorarios, pero el saldo de intereses sí puede disminuir por pagos.
+        intereses_historicos += interes_mes
         int_acumulado += interes_mes
 
         if abo_val > 0:
@@ -260,13 +269,20 @@ def motor_calculo_judicial(
         else:
             fecha_actual_loop = date(y, m + 1, 1)
 
+    # El saldo de la deuda sí refleja pagos, pero los honorarios se calculan
+    # sobre la sumatoria histórica de capital + intereses causados, sin reducir
+    # esa base por los abonos registrados.
     total_capital = cap_acumulado
     total_intereses = int_acumulado
-    total_honorarios = (total_capital + total_intereses) * (float(honorarios_pct) / 100.0)
+    base_honorarios = capital_historico + intereses_historicos
+    total_honorarios = base_honorarios * (float(honorarios_pct) / 100.0)
     gran_total = total_capital + total_intereses + total_honorarios + float(gastos_globales)
     resumen = {
         "capital": total_capital,
         "intereses": total_intereses,
+        "capital_historico": capital_historico,
+        "intereses_historicos": intereses_historicos,
+        "base_honorarios": base_honorarios,
         "honorarios_pct": honorarios_pct,
         "honorarios": total_honorarios,
         "gastos": float(gastos_globales),
