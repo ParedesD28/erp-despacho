@@ -303,8 +303,8 @@
         return '<div class="p-3 rounded-xl border border-emerald-200 bg-emerald-50/40 text-xs">' +
           '<div class="flex justify-between gap-2"><div><b>🤝 ' + escapeHtml(e.titulo) + '</b>' +
           '<div class="text-[11px] text-slate-500">' + escapeHtml(e.inmueble || '') + ' · $' + Number(e.valor || 0).toLocaleString('es-CO') + '</div></div>' +
-          '<form method="POST" action="/acuerdos/anular" onsubmit="return confirm(\'¿Anular todo el acuerdo y sus cuotas?\');">' +
-          '<input type="hidden" name="acuerdo_id" value="' + e.acuerdo_id + '"><button class="px-2 py-1 rounded bg-red-600 text-white font-bold text-[10px]">Anular</button></form></div>' +
+          '<form method="POST" action="/acuerdos/eliminar" onsubmit="return confirm(\'¿Eliminar todo el acuerdo y sus cuotas?\');">' +
+          '<input type="hidden" name="acuerdo_id" value="' + e.acuerdo_id + '"><input type="hidden" name="next" value="/vencimientos"><button class="px-2 py-1 rounded bg-red-600 text-white font-bold text-[10px]">Eliminar</button></form></div>' +
           '<div class="mt-2 flex items-center justify-between"><span>Fecha: <b>' + escapeHtml(e.fecha) + '</b></span>' +
           (e.estado === 'CUMPLIDO'
             ? '✅ Cumplida'

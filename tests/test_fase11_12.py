@@ -302,6 +302,58 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertEqual(totales["total_actualizado"], 185700.0)
         self.assertEqual(totales["obligaciones_incluidas"], 2)
 
+    def test_soft_delete_acuerdo_oculta_crm_y_cuotas(self):
+        import agenda_service
+        from unittest.mock import MagicMock
+
+        class RecordingCursor:
+            def __init__(self):
+                self.statements = []
+                self._fetch = {
+                    "id": 7,
+                    "identificacion_deudor": "123",
+                    "nombre_deudor": "Prueba",
+                    "inmueble_id": 9,
+                    "estado": "PENDIENTE",
+                }
+
+            def execute(self, sql, params=None):
+                self.statements.append((" ".join(str(sql).split()), params))
+
+            def fetchone(self):
+                # Primer SELECT del acuerdo; luego SELECT nombre abogado puede devolver None
+                if any("FROM acuerdos_pago WHERE id" in s[0] for s in self.statements[-1:]):
+                    return self._fetch
+                return None
+
+        cur = RecordingCursor()
+        request = MagicMock()
+        request.state.user_id = None
+
+        # Forzar tablas existentes
+        original = agenda_service._table_exists
+        agenda_service._table_exists = lambda _cur, name: name in {
+            "acuerdos_pago_cuotas",
+            "vencimientos",
+            "gestiones_crm",
+        }
+        try:
+            result = agenda_service._soft_delete_acuerdo(cur, request, 7)
+        finally:
+            agenda_service._table_exists = original
+
+        self.assertEqual(result["id"], 7)
+        joined = " | ".join(s[0] for s in cur.statements)
+        self.assertIn("estado='ANULADO'", joined)
+        self.assertIn("acuerdos_pago_cuotas", joined)
+        self.assertIn("gestiones_crm", joined)
+        self.assertTrue(
+            any(
+                (params or ()) and "ELIMINAR_ACUERDO" in params
+                for _, params in cur.statements
+            )
+        )
+
 
 class Fase11PdfSecurityTests(unittest.TestCase):
     def test_url_pdf_firmada_usa_hmac(self):

@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<div class="p-6 md:p-8 space-y-6 h-full overflow-y-auto bg-slate-50/50">
+    <header class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+        <div>
+            <div class="flex items-center gap-2 mb-1">
+                <span class="text-xs font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                    Acuerdos de pago
+                </span>
+            </div>
+            <h1 class="text-2xl font-bold text-slate-900">Listado de acuerdos</h1>
+            <p class="text-xs text-slate-500 mt-1">Solo se muestran acuerdos vigentes. Al eliminar quedan ocultos del dashboard, agenda e informes.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="/vencimientos" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-xs">
+                <i data-lucide="calendar-plus" class="w-4 h-4"></i>
+                <span>Crear en agenda</span>
+            </a>
+            <a href="/dashboard" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs">
+                Volver al dashboard
+            </a>
+        </div>
+    </header>
+
+    {% if duplicados %}
+    <section class="bg-amber-50 border border-amber-200 rounded-2xl p-5 shadow-xs">
+        <div class="flex items-start gap-3">
+            <div class="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+                <i data-lucide="copy" class="w-4 h-4"></i>
+            </div>
+            <div class="min-w-0">
+                <h2 class="text-sm font-bold text-amber-900">Auditoría: posibles duplicados</h2>
+                <p class="text-xs text-amber-800 mt-1">Misma obligación + misma fecha de compromiso con más de un acuerdo pendiente/activo.</p>
+                <ul class="mt-3 space-y-2">
+                    {% for d in duplicados %}
+                    <li class="text-xs text-amber-950 bg-white/70 border border-amber-100 rounded-xl px-3 py-2">
+                        <span class="font-bold">{{ d.nombre_deudor or d.identificacion_deudor }}</span>
+                        · Obligación #{{ d.obligacion_id or '—' }}
+                        · Fecha {{ d.fecha_compromiso }}
+                        · {{ d.cantidad }} registros (ids: {{ d.ids }})
+                        · Total ${{ "{:,.0f}".format(d.suma_valores or 0) }}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-4 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between gap-3">
+            <div>
+                <h2 class="text-sm font-bold text-slate-900">Acuerdos visibles</h2>
+                <p class="text-xs text-slate-500">{{ acuerdos|length }} registro(s) · eliminados ocultos: {{ eliminados_ocultos }}</p>
+            </div>
+        </div>
+
+        {% if acuerdos %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                    <tr>
+                        <th class="text-left font-bold px-4 py-3">ID</th>
+                        <th class="text-left font-bold px-4 py-3">Deudor</th>
+                        <th class="text-left font-bold px-4 py-3">Inmueble</th>
+                        <th class="text-left font-bold px-4 py-3">Compromiso</th>
+                        <th class="text-right font-bold px-4 py-3">Valor</th>
+                        <th class="text-left font-bold px-4 py-3">Estado</th>
+                        <th class="text-left font-bold px-4 py-3">Origen</th>
+                        <th class="text-right font-bold px-4 py-3">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for a in acuerdos %}
+                    <tr class="hover:bg-slate-50/80">
+                        <td class="px-4 py-3 font-mono text-xs text-slate-500">#{{ a.id }}</td>
+                        <td class="px-4 py-3">
+                            <div class="font-bold text-slate-900">{{ a.nombre_deudor or 'Sin nombre' }}</div>
+                            <div class="text-xs text-slate-500">CC {{ a.identificacion_deudor }}{% if a.telefono %} · {{ a.telefono }}{% endif %}</div>
+                        </td>
+                        <td class="px-4 py-3 text-xs text-slate-600">
+                            {{ a.conjunto_residencial or '—' }}{% if a.torre_apto %} · {{ a.torre_apto }}{% endif %}
+                            {% if a.obligacion_id %}<div class="text-[10px] text-slate-400 mt-0.5">Oblig. #{{ a.obligacion_id }}</div>{% endif %}
+                        </td>
+                        <td class="px-4 py-3 font-medium text-slate-800">{{ a.fecha_compromiso }}</td>
+                        <td class="px-4 py-3 text-right font-bold text-emerald-700">${{ "{:,.0f}".format(a.valor_acordado or 0) }}</td>
+                        <td class="px-4 py-3">
+                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full border
+                                {% if a.estado == 'PENDIENTE' %}bg-amber-50 text-amber-800 border-amber-200
+                                {% elif a.estado == 'CUMPLIDO' %}bg-emerald-50 text-emerald-800 border-emerald-200
+                                {% elif a.estado == 'INCUMPLIDO' %}bg-rose-50 text-rose-800 border-rose-200
+                                {% else %}bg-slate-100 text-slate-600 border-slate-200{% endif %}">
+                                {{ a.estado }}
+                            </span>
+                            {% if a.numero_cuotas and a.numero_cuotas > 1 %}
+                            <div class="text-[10px] text-slate-400 mt-1">Cuota {{ a.cuota_actual or 1 }}/{{ a.numero_cuotas }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-xs text-slate-500">{{ a.origen or '—' }}</td>
+                        <td class="px-4 py-3 text-right">
+                            <form method="POST" action="/acuerdos/eliminar" class="inline"
+                                  onsubmit="return confirm('¿Eliminar el acuerdo #{{ a.id }}? Quedará oculto y no aparecerá en informes ni en el dashboard.');">
+                                <input type="hidden" name="acuerdo_id" value="{{ a.id }}">
+                                <input type="hidden" name="next" value="/acuerdos">
+                                <button type="submit" class="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs">
+                                    Eliminar
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-10 text-center text-slate-400">
+            <div class="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-2">
+                <i data-lucide="handshake" class="w-6 h-6"></i>
+            </div>
+            <p class="text-sm font-semibold text-slate-700">No hay acuerdos visibles</p>
+            <p class="text-xs text-slate-500 mt-1">Los eliminados permanecen en base de datos pero no se listan ni se informan.</p>
+        </div>
+        {% endif %}
+    </section>
+
+    <section class="bg-white rounded-2xl border border-rose-200 p-5 shadow-xs">
+        <h2 class="text-sm font-bold text-rose-800">Zona de limpieza (datos de prueba)</h2>
+        <p class="text-xs text-slate-500 mt-1">Borra definitivamente todos los acuerdos, sus cuotas y oculta vencimientos/CRM asociados. Escribe exactamente <b>ELIMINAR TODOS</b> para confirmar.</p>
+        <form method="POST" action="/acuerdos/purgar-todos" class="mt-4 flex flex-col sm:flex-row gap-3 items-stretch sm:items-end"
+              onsubmit="return confirm('Esta acción borra TODOS los acuerdos de pago de Neon. ¿Continuar?');">
+            <div class="flex-1">
+                <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Confirmación</label>
+                <input type="text" name="confirmacion" required placeholder="ELIMINAR TODOS"
+                       class="w-full rounded-xl border border-rose-200 px-3 py-2 text-sm">
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs">
+                Purgar todos los acuerdos
+            </button>
+        </form>
+    </section>
+</div>
+
+<script>
+    if (window.lucide) lucide.createIcons();
+</script>
+{% endblock %}

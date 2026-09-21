@@ -23,14 +23,20 @@ import main
 
 AGENDA_ROUTE_NAMES = {
     "agenda_vencimientos",
+    "agenda_listar_acuerdos",
     "agenda_guardar_acuerdo",
     "agenda_cumplir_acuerdo",
     "agenda_anular_acuerdo",
+    "agenda_eliminar_acuerdo",
+    "agenda_purgar_acuerdos",
     "agenda_guardar_vencimiento",
     "agenda_completar_vencimiento",
     "agenda_anular_vencimiento",
     "agenda_log_xlsx",
 }
+
+# Estados que no deben verse en UI operativa ni alimentar métricas/informes.
+_ESTADOS_ACUERDO_OCULTOS = ("ANULADO", "ELIMINADO")
 _REGISTERED = False
 
 
@@ -136,8 +142,163 @@ def _fecha_json(value) -> str:
     return str(value)[:10]
 
 
+def _soft_delete_acuerdo(cur, request: Request, acuerdo_id: int) -> dict:
+    """Marca el acuerdo como ANULADO (oculto). El botón de UI se llama Eliminar."""
+    cur.execute(
+        """
+        SELECT id, identificacion_deudor, nombre_deudor, inmueble_id, estado
+        FROM acuerdos_pago WHERE id=%s
+        """,
+        (acuerdo_id,),
+    )
+    a = cur.fetchone()
+    if not a:
+        raise HTTPException(status_code=404, detail="Acuerdo no encontrado")
+
+    cur.execute(
+        """
+        UPDATE acuerdos_pago
+        SET estado='ANULADO', updated_at=CURRENT_TIMESTAMP
+        WHERE id=%s
+        """,
+        (acuerdo_id,),
+    )
+    if _table_exists(cur, "acuerdos_pago_cuotas"):
+        cur.execute(
+            """
+            UPDATE acuerdos_pago_cuotas
+            SET estado='ANULADO', anulado=TRUE, updated_at=CURRENT_TIMESTAMP
+            WHERE acuerdo_id=%s
+            """,
+            (acuerdo_id,),
+        )
+    if _table_exists(cur, "vencimientos"):
+        cur.execute(
+            """
+            UPDATE vencimientos
+            SET anulado=TRUE
+            WHERE tipo='ACUERDO_PAGO'
+              AND observaciones ILIKE %s
+            """,
+            (f"%Acuerdo #{acuerdo_id}%",),
+        )
+    if _table_exists(cur, "gestiones_crm"):
+        # Oculta la nota CRM vinculada para que no salga en informes.
+        try:
+            cur.execute(
+                """
+                UPDATE gestiones_crm
+                SET anulado=TRUE, estado='ANULADO'
+                WHERE resumen ILIKE %s
+                """,
+                (f"%[ACUERDO DE PAGO #{acuerdo_id}]%",),
+            )
+        except Exception:
+            cur.execute(
+                """
+                UPDATE gestiones_crm
+                SET anulado=TRUE
+                WHERE resumen ILIKE %s
+                """,
+                (f"%[ACUERDO DE PAGO #{acuerdo_id}]%",),
+            )
+
+    _audit(
+        cur,
+        request,
+        "ELIMINAR_ACUERDO",
+        "ACUERDO_PAGO",
+        acuerdo_id,
+        None,
+        a["identificacion_deudor"],
+        a["nombre_deudor"],
+        a["inmueble_id"],
+        "Acuerdo ocultado (soft-delete); no visible en dashboard/agenda/informes",
+    )
+    return dict(a)
+
+
+def _auditoria_duplicados(cur) -> list[dict]:
+    """Detecta grupos con misma obligación + fecha y más de un acuerdo no oculto."""
+    cur.execute(
+        """
+        SELECT
+            obligacion_id,
+            fecha_compromiso,
+            COUNT(*) AS cantidad,
+            STRING_AGG(id::text, ', ' ORDER BY id) AS ids,
+            MAX(identificacion_deudor) AS identificacion_deudor,
+            MAX(nombre_deudor) AS nombre_deudor,
+            COALESCE(SUM(valor_acordado), 0) AS suma_valores
+        FROM acuerdos_pago
+        WHERE UPPER(COALESCE(estado, 'PENDIENTE')) NOT IN ('ANULADO', 'ELIMINADO')
+          AND obligacion_id IS NOT NULL
+        GROUP BY obligacion_id, fecha_compromiso
+        HAVING COUNT(*) > 1
+        ORDER BY cantidad DESC, fecha_compromiso DESC
+        LIMIT 50
+        """
+    )
+    rows = []
+    for r in cur.fetchall():
+        item = dict(r)
+        if item.get("fecha_compromiso"):
+            item["fecha_compromiso"] = str(item["fecha_compromiso"])[:10]
+        item["suma_valores"] = float(item.get("suma_valores") or 0)
+        rows.append(item)
+    return rows
+
+
 def _crear_router_agenda() -> APIRouter:
     router = APIRouter()
+
+    @router.get("/acuerdos", name="agenda_listar_acuerdos")
+    def agenda_listar_acuerdos(request: Request):
+        ensure_schema()
+        conn = db.get_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT a.*, i.conjunto_residencial, i.torre_apto
+                    FROM acuerdos_pago a
+                    LEFT JOIN inmuebles_ph i ON i.id = a.inmueble_id
+                    WHERE UPPER(COALESCE(a.estado, 'PENDIENTE')) NOT IN ('ANULADO', 'ELIMINADO')
+                    ORDER BY a.fecha_compromiso DESC NULLS LAST, a.id DESC
+                    LIMIT 500
+                    """
+                )
+                acuerdos = []
+                for r in cur.fetchall():
+                    item = dict(r)
+                    if item.get("fecha_compromiso"):
+                        item["fecha_compromiso"] = str(item["fecha_compromiso"])[:10]
+                    if item.get("valor_acordado") is not None:
+                        item["valor_acordado"] = float(item["valor_acordado"])
+                    acuerdos.append(item)
+
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM acuerdos_pago
+                    WHERE UPPER(COALESCE(estado, 'PENDIENTE')) IN ('ANULADO', 'ELIMINADO')
+                    """
+                )
+                ocultos = cur.fetchone()
+                eliminados_ocultos = int((ocultos or {}).get("total") or 0)
+                duplicados = _auditoria_duplicados(cur)
+
+            return main.render_template(
+                "acuerdos.html",
+                {
+                    "request": request,
+                    "acuerdos": acuerdos,
+                    "duplicados": duplicados,
+                    "eliminados_ocultos": eliminados_ocultos,
+                },
+            )
+        finally:
+            conn.release()
 
     @router.get("/vencimientos", name="agenda_vencimientos")
     def agenda_vencimientos(request: Request):
@@ -431,21 +592,80 @@ def _crear_router_agenda() -> APIRouter:
             conn.release()
 
     @router.post("/acuerdos/anular", name="agenda_anular_acuerdo")
-    def agenda_anular_acuerdo(request: Request, acuerdo_id: int = Form(...)):
+    @router.post("/acuerdos/eliminar", name="agenda_eliminar_acuerdo")
+    def agenda_anular_acuerdo(
+        request: Request,
+        acuerdo_id: int = Form(...),
+        next: str = Form("/acuerdos"),
+    ):
+        ensure_schema()
+        dest = str(next or "/acuerdos").strip() or "/acuerdos"
+        if not dest.startswith("/"):
+            dest = "/acuerdos"
+        conn = db.get_connection()
+        try:
+            with conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    _soft_delete_acuerdo(cur, request, acuerdo_id)
+            return main._redirect(dest, mensaje="Acuerdo+eliminado")
+        finally:
+            conn.release()
+
+    @router.post("/acuerdos/purgar-todos", name="agenda_purgar_acuerdos")
+    def agenda_purgar_acuerdos(request: Request, confirmacion: str = Form(...)):
+        """Borra definitivamente todos los acuerdos (uso: limpiar datos de prueba)."""
+        if str(confirmacion or "").strip().upper() != "ELIMINAR TODOS":
+            return main._redirect("/acuerdos", error="Confirmacion+incorrecta")
         ensure_schema()
         conn = db.get_connection()
         try:
             with conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("SELECT identificacion_deudor,nombre_deudor,inmueble_id FROM acuerdos_pago WHERE id=%s", (acuerdo_id,))
-                    a = cur.fetchone()
-                    if not a:
-                        raise HTTPException(status_code=404, detail="Acuerdo no encontrado")
-                    cur.execute("UPDATE acuerdos_pago SET estado='ANULADO',updated_at=CURRENT_TIMESTAMP WHERE id=%s", (acuerdo_id,))
-                    cur.execute("UPDATE acuerdos_pago_cuotas SET estado='ANULADO',anulado=TRUE,updated_at=CURRENT_TIMESTAMP WHERE acuerdo_id=%s", (acuerdo_id,))
-                    cur.execute("UPDATE vencimientos SET anulado=TRUE WHERE tipo='ACUERDO_PAGO' AND observaciones ILIKE %s", (f"%Acuerdo #{acuerdo_id}%",))
-                    _audit(cur,request,"ANULAR_ACUERDO","ACUERDO_PAGO",acuerdo_id,None,a["identificacion_deudor"],a["nombre_deudor"],a["inmueble_id"],"Acuerdo y cuotas anulados")
-            return main._redirect("/vencimientos", mensaje="Acuerdo+anulado")
+                    cur.execute("SELECT COUNT(*) AS total FROM acuerdos_pago")
+                    antes = int((cur.fetchone() or {}).get("total") or 0)
+                    if _table_exists(cur, "acuerdos_pago_cuotas"):
+                        cur.execute("DELETE FROM acuerdos_pago_cuotas")
+                    if _table_exists(cur, "vencimientos"):
+                        cur.execute(
+                            """
+                            UPDATE vencimientos
+                            SET anulado=TRUE
+                            WHERE tipo='ACUERDO_PAGO'
+                               OR COALESCE(observaciones,'') ILIKE '%Acuerdo #%'
+                            """
+                        )
+                    if _table_exists(cur, "gestiones_crm"):
+                        try:
+                            cur.execute(
+                                """
+                                UPDATE gestiones_crm
+                                SET anulado=TRUE, estado='ANULADO'
+                                WHERE resumen ILIKE '%[ACUERDO DE PAGO #%'
+                                   OR COALESCE(tipo_contacto,'') ILIKE '%Acuerdo%'
+                                """
+                            )
+                        except Exception:
+                            cur.execute(
+                                """
+                                UPDATE gestiones_crm
+                                SET anulado=TRUE
+                                WHERE resumen ILIKE '%[ACUERDO DE PAGO #%'
+                                """
+                            )
+                    cur.execute("DELETE FROM acuerdos_pago")
+                    _audit(
+                        cur,
+                        request,
+                        "PURGAR_ACUERDOS",
+                        "ACUERDO_PAGO",
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        f"Purga total de acuerdos de prueba: {antes} eliminados",
+                    )
+            return main._redirect("/acuerdos", mensaje=f"Se+eliminaron+{antes}+acuerdos")
         finally:
             conn.release()
 

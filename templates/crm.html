@@ -2,10 +2,18 @@
 
 {% block contenido %}
 <div class="p-6 md:p-8 space-y-6 h-full overflow-y-auto bg-slate-50/50">
-    <header>
-        <p class="text-xs font-bold uppercase tracking-wider text-blue-600">Gestión de cartera</p>
-        <h1 class="text-2xl font-bold text-slate-900">CRM</h1>
-        <p class="text-sm text-slate-500 mt-1">Seleccione un solo conjunto residencial. El ERP identifica automáticamente su persona jurídica y carga sus cuentas.</p>
+                <header>
+        <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+            <div>
+                <p class="text-xs font-bold uppercase tracking-wider text-blue-600">Gestión de cartera</p>
+                <h1 class="text-2xl font-bold text-slate-900">CRM</h1>
+                <p class="text-sm text-slate-500 mt-1">Seleccione un solo conjunto residencial. El ERP identifica automáticamente su persona jurídica y carga sus cuentas.</p>
+            </div>
+            <a href="/acuerdos" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs">
+                <i data-lucide="handshake" class="w-4 h-4"></i>
+                Ver acuerdos
+            </a>
+        </div>
     </header>
 
     <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">

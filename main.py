@@ -1618,6 +1618,7 @@ def vencimientos(request: Request):
                     SELECT a.*, i.conjunto_residencial, i.torre_apto
                     FROM acuerdos_pago a
                     LEFT JOIN inmuebles_ph i ON a.inmueble_id = i.id
+                    WHERE UPPER(COALESCE(a.estado, 'PENDIENTE')) NOT IN ('ANULADO', 'ELIMINADO')
                     ORDER BY a.fecha_compromiso DESC LIMIT 200
                 """)
                 acuerdos = [dict(r) for r in cur.fetchall()]
@@ -1625,6 +1626,8 @@ def vencimientos(request: Request):
             # Eventos unificados para el calendario
             eventos_calendario = []
             for v in pendientes:
+                if v.get("anulado"):
+                    continue
                 eventos_calendario.append({
                     "id": f"v-{v['id']}",
                     "tipo": "TERMINO_JUDICIAL",
@@ -1635,6 +1638,9 @@ def vencimientos(request: Request):
                     "completado": v.get("completado", False),
                 })
             for a in acuerdos:
+                estado = str(a.get("estado") or "PENDIENTE").upper()
+                if estado in {"ANULADO", "ELIMINADO"}:
+                    continue
                 val = float(a.get("valor_acordado") or 0)
                 eventos_calendario.append({
                     "id": f"a-{a['id']}",
@@ -1647,6 +1653,7 @@ def vencimientos(request: Request):
                     "telefono": a.get("telefono") or "",
                     "inmueble": f"{a.get('conjunto_residencial') or ''} {a.get('torre_apto') or ''}".strip(),
                     "observaciones": a.get("observaciones") or "",
+                    "acuerdo_id": a.get("id"),
                 })
 
         return render_template(
