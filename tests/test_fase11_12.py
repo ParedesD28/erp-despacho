@@ -222,6 +222,86 @@ class Fase11ContractsTests(unittest.TestCase):
             for token in prohibidas:
                 self.assertNotIn(token, source, msg=f"{name} conserva referencia legacy: {token}")
 
+    def test_totales_cartera_agrega_capital_intereses_honorarios(self):
+        import obligacion_saldo_service as saldo_svc
+        from unittest.mock import patch
+
+        class MultiRowCursor:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def execute(self, sql, params=None):
+                return None
+
+            def fetchall(self):
+                return self._rows
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class FakeConn:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def cursor(self, cursor_factory=None):
+                return MultiRowCursor(self._rows)
+
+            def release(self):
+                return None
+
+        rows = [
+            {
+                "id": 1,
+                "inmueble_id": 10,
+                "fuente_saldo": "EXPENSAS_PH",
+                "estado": "ACTIVA",
+                "tipo_obligacion_codigo": "CUOTAS_ADMINISTRACION",
+            },
+            {
+                "id": 2,
+                "inmueble_id": 20,
+                "fuente_saldo": "EXPENSAS_PH",
+                "estado": "ACTIVA",
+                "tipo_obligacion_codigo": "CUOTAS_ADMINISTRACION",
+            },
+        ]
+        liquidaciones = [
+            {
+                "saldo_verificado": True,
+                "saldo_total": 123800.0,
+                "detalle_liquidacion": {
+                    "capital": 100000.0,
+                    "intereses": 10000.0,
+                    "honorarios": 13800.0,
+                    "gran_total": 123800.0,
+                },
+            },
+            {
+                "saldo_verificado": True,
+                "saldo_total": 61900.0,
+                "detalle_liquidacion": {
+                    "capital": 50000.0,
+                    "intereses": 5000.0,
+                    "honorarios": 6900.0,
+                    "gran_total": 61900.0,
+                },
+            },
+        ]
+
+        with patch.object(saldo_svc.db, "get_connection", return_value=FakeConn(rows)):
+            with patch.object(saldo_svc, "_saldo_ph", side_effect=liquidaciones):
+                totales = saldo_svc.calcular_totales_cartera(fecha_corte=date(2026, 9, 21))
+
+        self.assertEqual(totales["capital"], 150000.0)
+        self.assertEqual(totales["intereses"], 15000.0)
+        self.assertEqual(totales["honorarios"], 20700.0)
+        self.assertEqual(totales["valor_cartera"], 185700.0)
+        self.assertEqual(totales["total_actualizado"], 185700.0)
+        self.assertEqual(totales["obligaciones_incluidas"], 2)
+
 
 class Fase11PdfSecurityTests(unittest.TestCase):
     def test_url_pdf_firmada_usa_hmac(self):

@@ -54,6 +54,7 @@ import exportaciones
 import expedientes_service
 import catalogos_service
 import obligaciones_service
+import obligacion_saldo_service
 import radicacion_service
 import bot_api
 import agent_supervision
@@ -343,6 +344,38 @@ def vista_dashboard(request: Request):
                 """)
                 terminos_proximos = [dict(r) for r in cur.fetchall()]
 
+            # 5. Totales de cartera actualizada (capital + intereses + honorarios)
+            # Se calcula fuera del cursor activo para no retener la conexión
+            # del dashboard mientras el liquidador abre conexiones propias.
+            t_cartera = time.perf_counter()
+            try:
+                totales_cartera = obligacion_saldo_service.calcular_totales_cartera(
+                    fecha_corte=hoy,
+                )
+            except Exception as exc:
+                log_msg("⚠️ [DASHBOARD CARTERA]", f"No se pudieron calcular totales: {exc}")
+                totales_cartera = {
+                    "capital": 0.0,
+                    "intereses": 0.0,
+                    "honorarios": 0.0,
+                    "valor_cartera": 0.0,
+                    "total_actualizado": 0.0,
+                    "obligaciones_incluidas": 0,
+                    "obligaciones_sin_deuda": 0,
+                    "obligaciones_error": 0,
+                }
+            log_msg(
+                "💰 [DASHBOARD CARTERA]",
+                (
+                    f"Cartera={totales_cartera.get('valor_cartera')} | "
+                    f"Capital={totales_cartera.get('capital')} | "
+                    f"Intereses={totales_cartera.get('intereses')} | "
+                    f"Honorarios={totales_cartera.get('honorarios')} | "
+                    f"Incluidas={totales_cartera.get('obligaciones_incluidas')}"
+                ),
+                ms=round((time.perf_counter() - t_cartera) * 1000, 1),
+            )
+
             log_msg("📊 [DASHBOARD BD]", f"Procesos={total_procesos} | Inmuebles={total_inmuebles} | Acuerdos Hoy={len(acuerdos_hoy)}")
 
             t_render = time.perf_counter()
@@ -357,6 +390,7 @@ def vista_dashboard(request: Request):
                     "acuerdos_proximos": acuerdos_proximos,
                     "monto_acuerdos_vigentes": monto_acuerdos_vigentes,
                     "terminos_proximos": terminos_proximos,
+                    "totales_cartera": totales_cartera,
                     "hoy": str(hoy),
                 },
             )
