@@ -242,3 +242,103 @@ def enriquecer_candidatos(candidatos):
         salida.append(item)
 
     return salida
+
+
+def calcular_totales_cartera(
+    *,
+    fecha_corte: Optional[date] = None,
+    conn=None,
+) -> dict:
+    """Agrega capital, intereses, honorarios y total actualizado de cartera PH.
+
+    Usa una obligación EXPENSAS_PH activa por inmueble (la de mayor id) y el
+    mismo motor de liquidación del liquidador judicial.
+    """
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db.get_connection()
+
+    capital = 0.0
+    intereses = 0.0
+    honorarios = 0.0
+    valor_cartera = 0.0
+    incluidas = 0
+    errores = 0
+    sin_deuda = 0
+    obligaciones: list[dict] = []
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (o.inmueble_id)
+                    o.id,
+                    o.inmueble_id,
+                    o.fuente_saldo,
+                    o.estado,
+                    tob.codigo AS tipo_obligacion_codigo
+                FROM obligaciones o
+                LEFT JOIN tipos_obligacion tob ON tob.id = o.tipo_obligacion_id
+                WHERE o.inmueble_id IS NOT NULL
+                  AND (
+                        UPPER(COALESCE(o.fuente_saldo, '')) = 'EXPENSAS_PH'
+                     OR tob.codigo = 'CUOTAS_ADMINISTRACION'
+                  )
+                  AND UPPER(COALESCE(o.estado, 'ACTIVA')) NOT IN (
+                        'CANCELADA', 'ANULADA', 'PAGADA', 'INACTIVO', 'INACTIVA'
+                  )
+                ORDER BY o.inmueble_id, o.id DESC
+                """
+            )
+            obligaciones = [
+                _as_dict(
+                    row,
+                    ["id", "inmueble_id", "fuente_saldo", "estado", "tipo_obligacion_codigo"],
+                )
+                for row in cur.fetchall()
+            ]
+    finally:
+        # Liberar antes de liquidar: el motor abre conexiones propias.
+        if owns_conn and conn is not None:
+            conn.release()
+            conn = None
+
+    corte = fecha_corte or ahora_colombia().date()
+    for ob in obligaciones:
+        result = _saldo_ph(ob, corte)
+        if not result.get("saldo_verificado"):
+            fuente = str(result.get("saldo_fuente") or "")
+            if fuente == "EXPENSAS_PH_SIN_DEUDA":
+                sin_deuda += 1
+            else:
+                errores += 1
+            continue
+
+        detalle = result.get("detalle_liquidacion") or {}
+        cap = float(detalle.get("capital") or 0)
+        ints = float(detalle.get("intereses") or 0)
+        hon = float(detalle.get("honorarios") or 0)
+        total = float(
+            detalle.get("gran_total")
+            if detalle.get("gran_total") is not None
+            else (result.get("saldo_total") or 0)
+        )
+
+        capital += cap
+        intereses += ints
+        honorarios += hon
+        valor_cartera += total
+        incluidas += 1
+
+    return {
+        "capital": round(capital, 2),
+        "intereses": round(intereses, 2),
+        "honorarios": round(honorarios, 2),
+        "valor_cartera": round(valor_cartera, 2),
+        "total_actualizado": round(valor_cartera, 2),
+        "obligaciones_incluidas": incluidas,
+        "obligaciones_sin_deuda": sin_deuda,
+        "obligaciones_error": errores,
+        "saldo_calculado_en": ahora_colombia(),
+        "fecha_corte": corte,
+    }
