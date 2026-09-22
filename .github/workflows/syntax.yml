@@ -19,4 +19,8 @@ jobs:
       - name: Compile Python modules
         run: python -m compileall -q .
       - name: Run regression tests
+        env:
+          # Valor ficticio: security.py exige el secreto en import time y los tests
+          # importan main/agenda_service. El secreto real vive en Render.
+          ERP_SESSION_SECRET: ci-dummy-secret-not-used-in-production-000000
         run: python -m unittest discover -s tests -p "test_*.py" -v
