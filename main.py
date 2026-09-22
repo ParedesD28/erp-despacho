@@ -14,7 +14,7 @@ import os
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Optional
 from urllib.parse import urlencode
 
 import openpyxl
@@ -67,6 +67,9 @@ from estado_cuenta_pdf_service import (
     MAX_ARCHIVOS_LOTE,
     MAX_PDF_BYTES,
 )
+import permisos
+import usuarios_service
+import usuarios_router
 
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
@@ -92,6 +95,7 @@ app.include_router(bot_api.router)
 app.include_router(agent_supervision.router)
 app.include_router(sms_router.router)
 app.include_router(cartas_cobro_router.router)
+app.include_router(usuarios_router.router)
 
 # Configuración global de observabilidad y captura de excepciones
 observability.install_exception_handling(app)
@@ -113,6 +117,22 @@ def _is_public_path(path: str) -> bool:
     return False
 
 
+def _aplicar_contexto_permisos(request: Request, user_id: str) -> Optional[RedirectResponse]:
+    """Carga perfil/permisos en request.state. Devuelve redirect si la cuenta está inactiva."""
+    ctx = usuarios_service.contexto_auth_usuario(user_id)
+    if not ctx.get("activo", True):
+        response = RedirectResponse(url="/login", status_code=303)
+        clear_session_cookie(response)
+        return response
+    request.state.user_id = ctx["user_id"]
+    request.state.user_nombre = ctx.get("nombre") or ""
+    request.state.user_email = ctx.get("email") or ""
+    request.state.perfil_codigo = ctx.get("perfil_codigo") or permisos.PERFIL_ADMIN
+    request.state.perfil_nombre = ctx.get("perfil_nombre") or ""
+    request.state.permisos = ctx.get("permisos") or permisos.permisos_de_perfil(permisos.PERFIL_ADMIN)
+    return None
+
+
 @app.middleware("http")
 async def production_security_middleware(request: Request, call_next):
     path = request.url.path
@@ -126,24 +146,22 @@ async def production_security_middleware(request: Request, call_next):
             if not email or not password:
                 return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
 
-            conn = db.get_connection()
-            try:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(
-                        "SELECT id, email, password FROM abogados WHERE LOWER(email)=LOWER(%s) LIMIT 1",
-                        (email,),
-                    )
-                    usuario = cur.fetchone()
-            finally:
-                conn.release()
-
+            usuario = usuarios_service.obtener_usuario_por_email(email)
             if not usuario or not verify_password(password, usuario.get("password")):
                 _json_log("INFO", "login_failed")
                 return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
 
+            if usuario.get("activo") is False:
+                _json_log("INFO", "login_inactive")
+                return render_template(
+                    "login.html",
+                    {"request": request, "error": "Esta cuenta está desactivada. Contacta al administrador."},
+                    status_code=401,
+                )
+
             response = RedirectResponse(url="/dashboard", status_code=303)
             set_session_cookie(response, str(usuario["id"]))
-            _json_log("INFO", "login_success")
+            _json_log("INFO", "login_success", perfil=usuario.get("perfil_codigo") or "ADMIN")
             return response
         except Exception:
             _json_log("ERROR", "login_error")
@@ -160,7 +178,20 @@ async def production_security_middleware(request: Request, call_next):
             response = RedirectResponse(url="/login", status_code=303)
             clear_session_cookie(response)
             return response
-        request.state.user_id = user_id
+        bloqueo = _aplicar_contexto_permisos(request, user_id)
+        if bloqueo is not None:
+            return bloqueo
+        if permisos.denegar_acceso(request.state.permisos, request.method, path):
+            _json_log(
+                "INFO",
+                "permiso_denegado",
+                path=path,
+                method=request.method,
+                perfil=getattr(request.state, "perfil_codigo", None),
+            )
+            if path.startswith("/api/") or path.startswith("/sms/api/") or path.startswith("/sms/wizard/"):
+                return JSONResponse({"error": "No autorizado"}, status_code=403)
+            return _redirect("/dashboard", error="No tienes permiso para esa pantalla")
 
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
