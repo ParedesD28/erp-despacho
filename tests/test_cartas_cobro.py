@@ -60,22 +60,50 @@ class CartasCobroUnitTests(unittest.TestCase):
             fecha_carta=date(2026, 9, 22),
         )
         self.assertTrue(data.startswith(b"PK"))
-        # Lectura vía python-docx
         from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.shared import Pt
 
         doc = Document(BytesIO(data))
         texto = "\n".join(p.text for p in doc.paragraphs)
+        self.assertIn("Señor(a)", texto)
         self.assertIn("ANA PEREZ", texto)
         self.assertIn("C.C. 123456", texto)
-        self.assertIn("T1-101", texto)
-        self.assertIn("Altos del Parque", texto)
+        self.assertIn("Propietario(a) del (T1-101) (Altos del Parque) Pereira.", texto)
         self.assertIn("Atn. JUAN PEREZ", texto)
-        self.assertIn("REQUERIMIENTO DE PAGO PREJURÍDICO - PH Altos del Parque", texto)
-        self.assertIn("310 6927812", texto)
-        self.assertIn("notificacionesdiegoparedes@outlook.com", texto)
+        self.assertIn("REF: REQUERIMIENTO DE PAGO PREJURÍDICO - PH Altos del Parque", texto)
+        self.assertIn("Respetado(a) señor(a),", texto)
+        self.assertIn("Actuando en mi calidad de apoderado legal de PH Altos del Parque", texto)
+        self.assertIn("suma total de $ 1.500.000", texto)
+        self.assertIn("El bienestar y mantenimiento", texto)
+        self.assertIn("Le otorgamos un plazo máximo hasta el 27 de septiembre de 2026", texto)
+        self.assertIn("• Teléfono / WhatsApp: 310 6927812", texto)
+        self.assertIn("• Correo electrónico: notificacionesdiegoparedes@outlook.com", texto)
+        self.assertIn("Hacemos de su conocimiento que", texto)
+        self.assertIn("Confiamos en su voluntad", texto)
         self.assertIn("Diego Alejandro Paredes García", texto)
-        self.assertIn("$ 1.500.000", texto)
-        self.assertIn("27 de septiembre de 2026", texto)
+        self.assertIn("Abogado Apoderado", texto)
+        # Sin encabezado de ciudad/fecha de carta
+        self.assertNotIn("Pereira, 22 de septiembre", texto)
+
+        # Tipografía y justificación del cuerpo
+        runs_arial = []
+        for p in doc.paragraphs:
+            for run in p.runs:
+                if run.text.strip():
+                    self.assertEqual(run.font.name, "Arial")
+                    self.assertEqual(run.font.size, Pt(11))
+                    runs_arial.append(run)
+        self.assertTrue(runs_arial)
+        justificados = [
+            p for p in doc.paragraphs
+            if p.text.startswith("Actuando en mi calidad")
+            or p.text.startswith("A la fecha")
+            or p.text.startswith("El bienestar")
+        ]
+        self.assertTrue(justificados)
+        for p in justificados:
+            self.assertEqual(p.alignment, WD_ALIGN_PARAGRAPH.JUSTIFY)
 
     def test_docx_sin_codeudor_no_incluye_atn(self):
         candidato = {
@@ -101,6 +129,8 @@ class CartasCobroUnitTests(unittest.TestCase):
         )
         texto = "\n".join(p.text for p in doc.paragraphs)
         self.assertNotIn("Atn.", texto)
+        self.assertIn("Respetado(a) señor(a),", texto)
+        self.assertIn("• Teléfono / WhatsApp: 310 6927812", texto)
 
     def test_paquete_zip_varias_cartas(self):
         items = [
