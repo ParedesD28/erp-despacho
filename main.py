@@ -163,8 +163,8 @@ async def production_security_middleware(request: Request, call_next):
             set_session_cookie(response, str(usuario["id"]))
             _json_log("INFO", "login_success", perfil=usuario.get("perfil_codigo") or "ADMIN")
             return response
-        except Exception:
-            _json_log("ERROR", "login_error")
+        except Exception as exc:
+            _json_log("ERROR", "login_error", error=repr(exc))
             return render_template("login.html", {"request": request, "error": "No fue posible iniciar sesión."}, status_code=500)
 
     if path == "/logout":
