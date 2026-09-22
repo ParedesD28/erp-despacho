@@ -326,9 +326,19 @@ class PooledCursor:
         exc_value,
         traceback,
     ):
+        # Solo descartar la conexión ante errores del driver PostgreSQL.
+        # KeyError/TypeError de la app (p.ej. RealDictRow[0]) no deben
+        # marcar la conexión como rota ni agotar el pool.
+        if exc_type is not None and exc_value is not None:
+            try:
+                from psycopg2 import Error as PgError
 
-        if exc_type:
-            self._owner._failed = True
+                if isinstance(exc_value, PgError):
+                    self._owner._failed = True
+            except Exception:
+                mod = getattr(exc_type, "__module__", "") or ""
+                if mod.startswith("psycopg2"):
+                    self._owner._failed = True
 
         return self._raw.__exit__(
             exc_type,

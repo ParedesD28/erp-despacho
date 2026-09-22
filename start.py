@@ -63,7 +63,7 @@ def _ejecutar_mantenimiento_segundo_plano() -> None:
             migrados_admin=perfiles.get("migrados_admin", 0),
         )
     except Exception as exc:
-        log_msg("⚠️ [PERFILES]", f"Aviso al asegurar perfiles: {exc}")
+        log_msg("⚠️ [PERFILES]", f"Aviso al asegurar perfiles: {exc!r}")
     log_msg("✅ [BACKGROUND]", "Mantenimiento no estructural completado")
 
 

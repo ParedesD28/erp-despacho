@@ -18,6 +18,27 @@ class UsuariosError(ValueError):
     """Error de validación de negocio al administrar usuarios."""
 
 
+def _cell(row: Any, key: str, index: int = 0, default: Any = None) -> Any:
+    """Lee una celda tanto de tupla como de RealDictRow/dict.
+
+    RealDictCursor no permite índices enteros (KeyError); siempre preferir nombre.
+    """
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        if key in row:
+            return row[key]
+        # Excluir la clave meta RealDictRow (type) si aparece.
+        values = [v for k, v in row.items() if not isinstance(k, type)]
+        if 0 <= index < len(values):
+            return values[index]
+        return default
+    try:
+        return row[index]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def _columns(cur, table: str) -> set[str]:
     cur.execute(
         """
@@ -27,13 +48,18 @@ def _columns(cur, table: str) -> set[str]:
         """,
         (table,),
     )
-    return {str(r[0]).lower() for r in cur.fetchall()}
+    names: set[str] = set()
+    for r in cur.fetchall():
+        val = _cell(r, "column_name", 0)
+        if val is not None:
+            names.add(str(val).lower())
+    return names
 
 
 def _table_exists(cur, table: str) -> bool:
     cur.execute(
         """
-        SELECT 1 FROM information_schema.tables
+        SELECT 1 AS ok FROM information_schema.tables
         WHERE table_schema='public' AND table_name=%s
         LIMIT 1
         """,
@@ -42,8 +68,23 @@ def _table_exists(cur, table: str) -> bool:
     return cur.fetchone() is not None
 
 
+def _cols_para_select_usuario(cur) -> set[str]:
+    """Columnas útiles para SELECT de login; no hace JOIN si falta tabla perfiles."""
+    cols = _columns(cur, "abogados")
+    if "perfil_id" in cols and not _table_exists(cur, "perfiles"):
+        # Columna huérfana sin catálogo: login sigue sin JOIN.
+        cols = set(cols)
+        cols.discard("perfil_id")
+    return cols
+
+
 def ensure_perfiles_schema(conn=None) -> dict[str, Any]:
-    """Crea perfiles, columnas en abogados y asigna ADMIN a usuarios sin perfil."""
+    """Crea perfiles, columnas en abogados y asigna ADMIN a usuarios sin perfil.
+
+    Idempotente. Ante fallo hace rollback y libera la conexión sin dejarla
+    en transacción abortada (el pool no debe marcarla como 'rota' por errores
+    de aplicación al leer filas RealDict).
+    """
     external = conn is not None
     if not external:
         conn = db.get_connection()
@@ -51,6 +92,11 @@ def ensure_perfiles_schema(conn=None) -> dict[str, Any]:
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if not _table_exists(cur, "abogados"):
+                if not external:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                 return resultado
 
             cur.execute(
@@ -105,13 +151,14 @@ def ensure_perfiles_schema(conn=None) -> dict[str, Any]:
             cur.execute("SELECT id FROM perfiles WHERE codigo=%s LIMIT 1", (permisos.PERFIL_ADMIN,))
             admin = cur.fetchone()
             if admin:
+                admin_id = _cell(admin, "id", 0)
                 cur.execute(
                     """
                     UPDATE abogados
                     SET perfil_id=%s
                     WHERE perfil_id IS NULL
                     """,
-                    (admin["id"],),
+                    (admin_id,),
                 )
                 resultado["migrados_admin"] = cur.rowcount or 0
 
@@ -161,6 +208,38 @@ def _select_usuario_sql(cols: set[str]) -> str:
     """
 
 
+def _obtener_usuario_minimo(cur, *, email: Optional[str] = None, user_id: Optional[str] = None) -> Optional[dict]:
+    """Fallback de login sin columnas/tablas de perfiles (migración incompleta)."""
+    if email is not None:
+        cur.execute(
+            """
+            SELECT id, email, nombre, password,
+                   NULL::integer AS perfil_id, TRUE AS activo,
+                   NULL::text AS perfil_codigo, NULL::text AS perfil_nombre
+            FROM abogados
+            WHERE LOWER(email)=LOWER(%s)
+            LIMIT 1
+            """,
+            (email.strip(),),
+        )
+    elif user_id is not None:
+        cur.execute(
+            """
+            SELECT id, email, nombre, password,
+                   NULL::integer AS perfil_id, TRUE AS activo,
+                   NULL::text AS perfil_codigo, NULL::text AS perfil_nombre
+            FROM abogados
+            WHERE id=%s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+    else:
+        return None
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
 def obtener_usuario_por_id(user_id: str, conn=None) -> Optional[dict]:
     external = conn is not None
     if not external:
@@ -169,11 +248,18 @@ def obtener_usuario_por_id(user_id: str, conn=None) -> Optional[dict]:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if not _table_exists(cur, "abogados"):
                 return None
-            cols = _columns(cur, "abogados")
-            sql = _select_usuario_sql(cols) + " WHERE a.id=%s LIMIT 1"
-            cur.execute(sql, (user_id,))
-            row = cur.fetchone()
-            return dict(row) if row else None
+            try:
+                cols = _cols_para_select_usuario(cur)
+                sql = _select_usuario_sql(cols) + " WHERE a.id=%s LIMIT 1"
+                cur.execute(sql, (user_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return _obtener_usuario_minimo(cur, user_id=user_id)
     finally:
         if not external and conn:
             conn.release()
@@ -187,11 +273,19 @@ def obtener_usuario_por_email(email: str, conn=None) -> Optional[dict]:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if not _table_exists(cur, "abogados"):
                 return None
-            cols = _columns(cur, "abogados")
-            sql = _select_usuario_sql(cols) + " WHERE LOWER(a.email)=LOWER(%s) LIMIT 1"
-            cur.execute(sql, (email.strip(),))
-            row = cur.fetchone()
-            return dict(row) if row else None
+            try:
+                cols = _cols_para_select_usuario(cur)
+                sql = _select_usuario_sql(cols) + " WHERE LOWER(a.email)=LOWER(%s) LIMIT 1"
+                cur.execute(sql, (email.strip(),))
+                row = cur.fetchone()
+                return dict(row) if row else None
+            except Exception:
+                # Migración incompleta o introspection fallida: no bloquear login.
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return _obtener_usuario_minimo(cur, email=email)
     finally:
         if not external and conn:
             conn.release()
@@ -277,7 +371,7 @@ def listar_usuarios(incluir_inactivos: bool = True, conn=None) -> list[dict]:
         conn = db.get_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cols = _columns(cur, "abogados")
+            cols = _cols_para_select_usuario(cur)
             sql = _select_usuario_sql(cols)
             if not incluir_inactivos and "activo" in cols:
                 sql += " WHERE COALESCE(a.activo, TRUE)=TRUE"
@@ -303,7 +397,7 @@ def _perfil_id_por_codigo(cur, codigo: str) -> int:
     row = cur.fetchone()
     if not row:
         raise UsuariosError(f"Perfil desconocido: {codigo}")
-    return int(row["id"] if isinstance(row, dict) else row[0])
+    return int(_cell(row, "id", 0))
 
 
 def _contar_admins_activos(cur, excluir_id: Optional[Any] = None) -> int:
@@ -319,7 +413,7 @@ def _contar_admins_activos(cur, excluir_id: Optional[Any] = None) -> int:
         params.append(excluir_id)
     cur.execute(sql, params)
     row = cur.fetchone()
-    return int((row["n"] if isinstance(row, dict) else row[0]) or 0)
+    return int(_cell(row, "n", 0, 0) or 0)
 
 
 def crear_usuario(
