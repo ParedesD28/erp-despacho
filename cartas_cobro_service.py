@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.oxml.ns import qn
 from docx.shared import Pt, Cm
 from psycopg2.extras import RealDictCursor
 
@@ -245,13 +246,26 @@ def resolver_seleccion(
     return seleccionados
 
 
+def _aplicar_fuente_arial(run, *, size_pt: float = 11, bold: bool = False) -> None:
+    """Fuerza Arial en ascii/hAnsi/eastAsia para que Word no sustituya la fuente."""
+    run.bold = bold
+    run.font.name = "Arial"
+    run.font.size = Pt(size_pt)
+    rpr = run._element.get_or_add_rPr()
+    rfonts = rpr.get_or_add_rFonts()
+    rfonts.set(qn("w:ascii"), "Arial")
+    rfonts.set(qn("w:hAnsi"), "Arial")
+    rfonts.set(qn("w:cs"), "Arial")
+    rfonts.set(qn("w:eastAsia"), "Arial")
+
+
 def construir_carta_docx(
     candidato: dict,
     *,
     fecha_limite: date,
     fecha_carta: Optional[date] = None,
 ) -> bytes:
-    """Genera un .docx en memoria para un candidato."""
+    """Genera un .docx en memoria (Arial 11, justificado, plantilla prejurídica)."""
     doc = Document()
     for section in doc.sections:
         section.top_margin = Cm(2.5)
@@ -260,12 +274,21 @@ def construir_carta_docx(
         section.right_margin = Cm(3)
 
     style = doc.styles["Normal"]
-    style.font.name = "Times New Roman"
-    style.font.size = Pt(12)
+    style.font.name = "Arial"
+    style.font.size = Pt(11)
     style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
     style.paragraph_format.space_after = Pt(0)
+    style.paragraph_format.space_before = Pt(0)
+    rpr = style.element.get_or_add_rPr()
+    rfonts = rpr.get_or_add_rFonts()
+    rfonts.set(qn("w:ascii"), "Arial")
+    rfonts.set(qn("w:hAnsi"), "Arial")
+    rfonts.set(qn("w:cs"), "Arial")
+    rfonts.set(qn("w:eastAsia"), "Arial")
 
-    fecha = fecha_carta or date.today()
+    # fecha_carta se conserva en la firma del API por compatibilidad; la plantilla
+    # oficial no imprime ciudad/fecha en el encabezado.
+    _ = fecha_carta or date.today()
     nombre = (candidato.get("deudor_nombre") or "SIN NOMBRE").strip()
     cedula = (candidato.get("deudor_identificacion") or "SIN CÉDULA").strip()
     torre = (candidato.get("torre_apto") or "SIN UNIDAD").strip()
@@ -273,27 +296,37 @@ def construir_carta_docx(
     nombre_ph = (candidato.get("nombre_ph") or conjunto).strip()
     monto = _fmt_money(candidato.get("saldo_total"))
     codeudor = (candidato.get("codeudor_nombre") or "").strip()
+    fecha_limite_txt = _fmt_fecha_es(fecha_limite)
 
-    def add_para(text: str = "", *, bold: bool = False, align=None, space_after: float = 6):
+    def add_para(
+        text: str = "",
+        *,
+        bold: bool = False,
+        align=WD_ALIGN_PARAGRAPH.LEFT,
+        space_after: float = 0,
+        space_before: float = 0,
+    ):
         p = doc.add_paragraph()
         run = p.add_run(text)
-        run.bold = bold
-        run.font.name = "Times New Roman"
-        run.font.size = Pt(12)
-        if align is not None:
-            p.alignment = align
+        _aplicar_fuente_arial(run, bold=bold)
+        p.alignment = align
         p.paragraph_format.space_after = Pt(space_after)
-        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_before = Pt(space_before)
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
         return p
 
-    add_para(f"{CIUDAD}, {_fmt_fecha_es(fecha)}.", space_after=18)
-    add_para("Señor(a)", space_after=2)
-    add_para(nombre, bold=True, space_after=2)
-    add_para(f"C.C. {cedula}", space_after=2)
-    add_para(
-        f"Propietario(a) del ({torre}) ({conjunto}) {CIUDAD}.",
-        space_after=6,
-    )
+    def add_justificado(text: str, *, space_after: float = 12):
+        return add_para(
+            text,
+            align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+            space_after=space_after,
+        )
+
+    # --- Encabezado destinatario (espaciado compacto) ---
+    add_para("Señor(a)")
+    add_para(nombre)
+    add_para(f"C.C. {cedula}")
+    add_para(f"Propietario(a) del ({torre}) ({conjunto}) {CIUDAD}.")
     if codeudor:
         add_para(f"Atn. {codeudor}", space_after=12)
     else:
@@ -302,41 +335,64 @@ def construir_carta_docx(
     add_para(
         f"REF: REQUERIMIENTO DE PAGO PREJURÍDICO - {nombre_ph}",
         bold=True,
-        space_after=14,
+        space_after=12,
     )
 
-    cuerpo = (
-        f"Por medio de la presente, y obrando como apoderado de {nombre_ph}, "
-        f"me permito requerirle el pago de la suma de {monto}, correspondiente "
-        f"al total adeudado por concepto de cuotas de administración y demás "
-        f"cargos asociados a la unidad ({torre}) del conjunto {conjunto}."
-    )
-    p_cuerpo = add_para(cuerpo, space_after=10)
-    p_cuerpo.paragraph_format.first_line_indent = Cm(1.25)
-    p_cuerpo.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    # --- Cuerpo ---
+    add_justificado("Respetado(a) señor(a),")
 
-    plazo = (
-        f"Se le concede como fecha límite de pago el día {_fmt_fecha_es(fecha_limite)}. "
-        "Vencido dicho plazo sin que se acredite el pago total, se adelantarán "
-        "las gestiones prejurídicas y jurídicas a que haya lugar, con cargo de "
-        "costas, intereses y honorarios."
+    add_justificado(
+        f"Actuando en mi calidad de apoderado legal de {nombre_ph}, me dirijo "
+        f"respetuosamente a usted con el fin de requerirle el pago de las "
+        f"obligaciones pendientes a cargo de la unidad ({torre}) del conjunto "
+        f"{conjunto}, ubicado en {CIUDAD}."
     )
-    p_plazo = add_para(plazo, space_after=10)
-    p_plazo.paragraph_format.first_line_indent = Cm(1.25)
-    p_plazo.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
-    canales = (
-        f"Para efectos de pago, información o radicación de acuerdos, puede "
-        f"comunicarse al Tel/WhatsApp {TELEFONO_DESPACHO} o al correo "
-        f"{CORREO_DESPACHO}."
+    add_justificado(
+        f"A la fecha, revisada la liquidación de cartera correspondiente, se "
+        f"advierte una mora que asciende a la suma total de {monto}."
     )
-    p_canales = add_para(canales, space_after=18)
-    p_canales.paragraph_format.first_line_indent = Cm(1.25)
-    p_canales.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
-    add_para("Atentamente,", space_after=36)
-    add_para(FIRMANTE_NOMBRE, bold=True, space_after=2)
-    add_para(FIRMANTE_CARGO, space_after=2)
+    add_justificado(
+        "El bienestar y mantenimiento de la copropiedad dependen del pago "
+        "oportuno de las cuotas de administración y demás conceptos a cargo de "
+        "cada propietario. Su colaboración es indispensable para preservar los "
+        "servicios comunes y evitar mayores costos para la comunidad."
+    )
+
+    add_justificado(
+        f"Le otorgamos un plazo máximo hasta el {fecha_limite_txt} para "
+        "cancelar la totalidad de la suma adeudada o para formalizar un "
+        "acuerdo de pago viable con este despacho."
+    )
+
+    add_justificado(
+        "Para gestionar su pago, aclarar saldos o radicar propuestas de "
+        "acuerdo, puede comunicarse a través de los siguientes canales:"
+    )
+    add_para(f"• Teléfono / WhatsApp: {TELEFONO_DESPACHO}", space_after=0)
+    add_para(
+        f"• Correo electrónico: {CORREO_DESPACHO}",
+        space_after=12,
+    )
+
+    add_justificado(
+        "Hacemos de su conocimiento que, de no recibirse el pago o una "
+        "propuesta seria dentro del plazo indicado, se adelantarán las "
+        "gestiones prejurídicas y jurídicas pertinentes, con cargo de "
+        "intereses, costas y honorarios a que haya lugar."
+    )
+
+    add_justificado(
+        "Confiamos en su voluntad de normalizar esta situación de manera "
+        "pronta y cordial, evitando mayores inconvenientes."
+    )
+
+    add_para("Atentamente,", space_after=24)
+    add_para("")
+    add_para("")
+    add_para(FIRMANTE_NOMBRE)
+    add_para(FIRMANTE_CARGO)
 
     buffer = io.BytesIO()
     doc.save(buffer)
