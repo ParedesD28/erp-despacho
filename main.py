@@ -6,6 +6,7 @@ liquidador de expensas PH, supervisión de agente y administración de expedient
 from __future__ import annotations
 
 import sms_router
+import cartas_cobro_router
 import asyncio
 import io
 import json
@@ -90,6 +91,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(bot_api.router)
 app.include_router(agent_supervision.router)
 app.include_router(sms_router.router)
+app.include_router(cartas_cobro_router.router)
 
 # Configuración global de observabilidad y captura de excepciones
 observability.install_exception_handling(app)

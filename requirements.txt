@@ -11,3 +11,4 @@ bcrypt
 requests
 reportlab
 pypdf
+python-docx
