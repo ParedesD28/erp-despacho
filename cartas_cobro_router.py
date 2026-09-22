@@ -46,13 +46,67 @@ def _listar_conjuntos() -> list[dict]:
         conn.release()
 
 
-def _cargar_plantillas(tipo_cartera: str) -> tuple[list[dict], list[dict]]:
+def _cargar_plantillas(tipo_cartera: str) -> tuple[list[dict], list[dict], list[dict]]:
     todas = cartas_cobro_service.listar_plantillas(solo_activas=True)
+    cartera = (tipo_cartera or "PREJURIDICO").upper()
     filtradas = [
         p for p in todas
-        if str(p.get("tipo_cartera") or "").upper() == (tipo_cartera or "PREJURIDICO").upper()
+        if str(p.get("tipo_cartera") or "").upper() == cartera
     ]
-    return todas, filtradas
+    otras = [
+        p for p in todas
+        if str(p.get("tipo_cartera") or "").upper() != cartera
+    ]
+    return todas, filtradas, otras
+
+
+def _contexto_base(
+    *,
+    request,
+    conjuntos,
+    conjunto_id,
+    cartera,
+    fecha_corte,
+    fecha_limite,
+    saldo_minimo,
+    candidatos,
+    plantillas,
+    plantillas_todas,
+    plantillas_otras,
+    plantilla_id,
+    error,
+    mensaje,
+):
+    plantilla_activa = None
+    if plantilla_id:
+        plantilla_activa = next(
+            (p for p in plantillas if int(p["id"]) == int(plantilla_id)),
+            None,
+        )
+    return {
+        "request": request,
+        "conjuntos": conjuntos,
+        "conjunto_id": int(conjunto_id) if conjunto_id else None,
+        "tipo_cartera": cartera,
+        "fecha_corte": fecha_corte,
+        "fecha_limite": fecha_limite,
+        "saldo_minimo": saldo_minimo or 0,
+        "candidatos": candidatos,
+        "plantillas": plantillas,
+        "plantillas_todas": plantillas_todas,
+        "plantillas_otras": plantillas_otras,
+        "plantilla_id": int(plantilla_id) if plantilla_id else None,
+        "plantilla_activa": plantilla_activa,
+        "variables": cartas_cobro_service.PLANTILLA_VARIABLES,
+        "cuerpo_nuevo": (
+            cartas_cobro_service.DEFAULT_CUERPO_JURIDICO
+            if cartera == "JURIDICO"
+            else cartas_cobro_service.DEFAULT_CUERPO_PREJURIDICO
+        ),
+        "error": error,
+        "mensaje": mensaje,
+        "max_lote": cartas_cobro_service.MAX_LOTE,
+    }
 
 
 @router.get("/cartas-cobro")
@@ -71,9 +125,9 @@ def vista_cartas_cobro(
     cartera = (tipo_cartera or "PREJURIDICO").upper()
     hoy = date.today()
     try:
-        plantillas_todas, plantillas = _cargar_plantillas(cartera)
+        plantillas_todas, plantillas, plantillas_otras = _cargar_plantillas(cartera)
     except Exception:
-        plantillas_todas, plantillas = [], []
+        plantillas_todas, plantillas, plantillas_otras = [], [], []
         error = error or "No fue posible cargar las plantillas de cartas."
 
     try:
@@ -84,25 +138,22 @@ def vista_cartas_cobro(
     except ValueError as exc:
         return _render(
             "cartas_cobro.html",
-            {
-                "request": request,
-                "conjuntos": conjuntos,
-                "conjunto_id": conjunto_id,
-                "tipo_cartera": cartera,
-                "fecha_corte": hoy.isoformat(),
-                "fecha_limite": cartas_cobro_service.fecha_limite_default(hoy).isoformat(),
-                "saldo_minimo": saldo_minimo or 0,
-                "candidatos": [],
-                "plantillas": plantillas,
-                "plantillas_todas": plantillas_todas,
-                "plantilla_id": plantilla_id,
-                "plantilla_editar": None,
-                "variables": cartas_cobro_service.PLANTILLA_VARIABLES,
-                "cuerpo_nuevo": cartas_cobro_service.DEFAULT_CUERPO_PREJURIDICO,
-                "error": str(exc),
-                "mensaje": mensaje,
-                "max_lote": cartas_cobro_service.MAX_LOTE,
-            },
+            _contexto_base(
+                request=request,
+                conjuntos=conjuntos,
+                conjunto_id=conjunto_id,
+                cartera=cartera,
+                fecha_corte=hoy.isoformat(),
+                fecha_limite=cartas_cobro_service.fecha_limite_default(hoy).isoformat(),
+                saldo_minimo=saldo_minimo or 0,
+                candidatos=[],
+                plantillas=plantillas,
+                plantillas_todas=plantillas_todas,
+                plantillas_otras=plantillas_otras,
+                plantilla_id=plantilla_id,
+                error=str(exc),
+                mensaje=mensaje,
+            ),
         )
 
     candidatos: list[dict] = []
@@ -127,29 +178,22 @@ def vista_cartas_cobro(
 
     return _render(
         "cartas_cobro.html",
-        {
-            "request": request,
-            "conjuntos": conjuntos,
-            "conjunto_id": int(conjunto_id) if conjunto_id else None,
-            "tipo_cartera": cartera,
-            "fecha_corte": corte.isoformat(),
-            "fecha_limite": limite.isoformat(),
-            "saldo_minimo": saldo_minimo or 0,
-            "candidatos": candidatos,
-            "plantillas": plantillas,
-            "plantillas_todas": plantillas_todas,
-            "plantilla_id": plantilla_id,
-            "plantilla_editar": None,
-            "variables": cartas_cobro_service.PLANTILLA_VARIABLES,
-            "cuerpo_nuevo": (
-                cartas_cobro_service.DEFAULT_CUERPO_JURIDICO
-                if cartera == "JURIDICO"
-                else cartas_cobro_service.DEFAULT_CUERPO_PREJURIDICO
-            ),
-            "error": err,
-            "mensaje": mensaje,
-            "max_lote": cartas_cobro_service.MAX_LOTE,
-        },
+        _contexto_base(
+            request=request,
+            conjuntos=conjuntos,
+            conjunto_id=conjunto_id,
+            cartera=cartera,
+            fecha_corte=corte.isoformat(),
+            fecha_limite=limite.isoformat(),
+            saldo_minimo=saldo_minimo or 0,
+            candidatos=candidatos,
+            plantillas=plantillas,
+            plantillas_todas=plantillas_todas,
+            plantillas_otras=plantillas_otras,
+            plantilla_id=plantilla_id,
+            error=err,
+            mensaje=mensaje,
+        ),
     )
 
 
@@ -295,7 +339,7 @@ async def generar_cartas_cobro(
                 raise ValueError("La plantilla no coincide con el tipo de cartera.")
             cuerpo = plantilla["cuerpo"]
         else:
-            _, filtradas = _cargar_plantillas(tipo_cartera or "PREJURIDICO")
+            _, filtradas, _ = _cargar_plantillas(tipo_cartera or "PREJURIDICO")
             if filtradas:
                 cuerpo = filtradas[0]["cuerpo"]
             else:
