@@ -130,6 +130,17 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertIn("procesos no-VERBAL sin obligación canónica", source)
         self.assertIn("20260919_fase15_completar_obligaciones_ejecutivos_historicos", source)
 
+    def test_bot_liquidar_usa_realdictcursor(self):
+        """Evita TypeError al indexar ob['fuente_saldo'] / ob['id'] en /api/bot/liquidar."""
+        source = (ROOT / "bot_api.py").read_text(encoding="utf-8")
+        self.assertIn("from psycopg2.extras import RealDictCursor", source)
+        self.assertIn("async def liquidar_para_bot", source)
+        # El bloque de lectura de obligación debe usar dict rows, no tuplas.
+        liquidar = source.split("async def liquidar_para_bot", 1)[1].split(
+            "async def ", 1
+        )[0]
+        self.assertIn("cursor_factory=RealDictCursor", liquidar)
+
     def test_honorarios_liquidador_usan_base_historica_no_reducida_por_abonos(self):
         source = (ROOT / "liquidador.py").read_text(encoding="utf-8")
         self.assertIn("capital_historico", source)
