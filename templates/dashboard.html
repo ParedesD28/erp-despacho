@@ -34,10 +34,24 @@
             <div>
                 <h2 class="text-sm font-bold uppercase tracking-wider text-slate-700">Cartera Actualizada</h2>
                 <p class="text-xs text-slate-500 mt-0.5">
-                    Totales al {{ hoy }} · {{ totales_cartera.obligaciones_incluidas }} obligación(es) liquidada(s)
+                    {% if totales_cartera.saldo_calculado_en %}
+                    Última actualización: {{ totales_cartera.saldo_calculado_en }}
+                    · {{ totales_cartera.obligaciones_incluidas }} obligación(es)
+                    {% else %}
+                    Aún no se ha calculado. Pulse <b>Actualizar cartera</b> para liquidar.
+                    {% endif %}
                 </p>
             </div>
-            <a href="/liquidador" class="text-xs font-bold text-emerald-700 hover:text-emerald-900">Abrir liquidador →</a>
+            <div class="flex flex-wrap items-center gap-2">
+                <form method="POST" action="/dashboard/actualizar-cartera"
+                      onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Actualizando…';">
+                    <button type="submit" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                        Actualizar cartera
+                    </button>
+                </form>
+                <a href="/liquidador" class="text-xs font-bold text-emerald-700 hover:text-emerald-900">Abrir liquidador →</a>
+            </div>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <div class="bg-white rounded-2xl border border-emerald-200 p-5 shadow-xs relative overflow-hidden">
@@ -47,7 +61,7 @@
                         <i data-lucide="wallet" class="w-4 h-4"></i>
                     </div>
                 </div>
-                <div class="text-2xl lg:text-3xl font-bold text-emerald-700 mt-3">${{ "{:,.0f}".format(totales_cartera.valor_cartera) }}</div>
+                <div class="text-2xl lg:text-3xl font-bold text-emerald-700 mt-3">${{ "{:,.0f}".format(totales_cartera.valor_cartera or 0) }}</div>
                 <p class="text-xs text-slate-500 mt-1">Total actualizado (capital + intereses + honorarios)</p>
             </div>
 
@@ -58,7 +72,7 @@
                         <i data-lucide="landmark" class="w-4 h-4"></i>
                     </div>
                 </div>
-                <div class="text-2xl lg:text-3xl font-bold text-slate-900 mt-3">${{ "{:,.0f}".format(totales_cartera.capital) }}</div>
+                <div class="text-2xl lg:text-3xl font-bold text-slate-900 mt-3">${{ "{:,.0f}".format(totales_cartera.capital or 0) }}</div>
                 <p class="text-xs text-slate-500 mt-1">Saldo de capital pendiente de recaudo</p>
             </div>
 
@@ -69,7 +83,7 @@
                         <i data-lucide="percent" class="w-4 h-4"></i>
                     </div>
                 </div>
-                <div class="text-2xl lg:text-3xl font-bold text-amber-700 mt-3">${{ "{:,.0f}".format(totales_cartera.intereses) }}</div>
+                <div class="text-2xl lg:text-3xl font-bold text-amber-700 mt-3">${{ "{:,.0f}".format(totales_cartera.intereses or 0) }}</div>
                 <p class="text-xs text-slate-500 mt-1">Intereses causados a la fecha de corte</p>
             </div>
 
@@ -80,7 +94,7 @@
                         <i data-lucide="briefcase" class="w-4 h-4"></i>
                     </div>
                 </div>
-                <div class="text-2xl lg:text-3xl font-bold text-indigo-700 mt-3">${{ "{:,.0f}".format(totales_cartera.honorarios) }}</div>
+                <div class="text-2xl lg:text-3xl font-bold text-indigo-700 mt-3">${{ "{:,.0f}".format(totales_cartera.honorarios or 0) }}</div>
                 <p class="text-xs text-slate-500 mt-1">Honorarios sobre base histórica liquidada</p>
             </div>
         </div>

@@ -344,60 +344,75 @@ def vista_dashboard(request: Request):
                 """)
                 terminos_proximos = [dict(r) for r in cur.fetchall()]
 
-            # 5. Totales de cartera actualizada (capital + intereses + honorarios)
-            # Se calcula fuera del cursor activo para no retener la conexión
-            # del dashboard mientras el liquidador abre conexiones propias.
-            t_cartera = time.perf_counter()
-            try:
-                totales_cartera = obligacion_saldo_service.calcular_totales_cartera(
-                    fecha_corte=hoy,
-                )
-            except Exception as exc:
-                log_msg("⚠️ [DASHBOARD CARTERA]", f"No se pudieron calcular totales: {exc}")
-                totales_cartera = {
-                    "capital": 0.0,
-                    "intereses": 0.0,
-                    "honorarios": 0.0,
-                    "valor_cartera": 0.0,
-                    "total_actualizado": 0.0,
-                    "obligaciones_incluidas": 0,
-                    "obligaciones_sin_deuda": 0,
-                    "obligaciones_error": 0,
-                }
-            log_msg(
-                "💰 [DASHBOARD CARTERA]",
-                (
-                    f"Cartera={totales_cartera.get('valor_cartera')} | "
-                    f"Capital={totales_cartera.get('capital')} | "
-                    f"Intereses={totales_cartera.get('intereses')} | "
-                    f"Honorarios={totales_cartera.get('honorarios')} | "
-                    f"Incluidas={totales_cartera.get('obligaciones_incluidas')}"
-                ),
-                ms=round((time.perf_counter() - t_cartera) * 1000, 1),
-            )
+        # 5. Totales de cartera: snapshot (sin liquidar en cada refresh).
+        try:
+            totales_cartera = obligacion_saldo_service.leer_snapshot_cartera()
+        except Exception as exc:
+            log_msg("⚠️ [DASHBOARD CARTERA]", f"No se pudo leer snapshot: {exc}")
+            totales_cartera = {
+                "capital": 0.0,
+                "intereses": 0.0,
+                "honorarios": 0.0,
+                "valor_cartera": 0.0,
+                "total_actualizado": 0.0,
+                "obligaciones_incluidas": 0,
+                "obligaciones_sin_deuda": 0,
+                "obligaciones_error": 0,
+                "saldo_calculado_en": None,
+                "fecha_corte": None,
+                "actualizado": False,
+            }
 
-            log_msg("📊 [DASHBOARD BD]", f"Procesos={total_procesos} | Inmuebles={total_inmuebles} | Acuerdos Hoy={len(acuerdos_hoy)}")
+        log_msg("📊 [DASHBOARD BD]", f"Procesos={total_procesos} | Inmuebles={total_inmuebles} | Acuerdos Hoy={len(acuerdos_hoy)}")
 
-            t_render = time.perf_counter()
-            resp = render_template(
-                "dashboard.html",
-                {
-                    "request": request,
-                    "total_procesos": total_procesos,
-                    "total_inmuebles": total_inmuebles,
-                    "acuerdos_hoy": acuerdos_hoy,
-                    "acuerdos_vencidos": acuerdos_vencidos,
-                    "acuerdos_proximos": acuerdos_proximos,
-                    "monto_acuerdos_vigentes": monto_acuerdos_vigentes,
-                    "terminos_proximos": terminos_proximos,
-                    "totales_cartera": totales_cartera,
-                    "hoy": str(hoy),
-                },
-            )
-            log_msg("🎨 [DASHBOARD HTML]", "Plantilla generada exitosamente", ms=round((time.perf_counter() - t_render) * 1000, 1))
-            return resp
+        t_render = time.perf_counter()
+        resp = render_template(
+            "dashboard.html",
+            {
+                "request": request,
+                "total_procesos": total_procesos,
+                "total_inmuebles": total_inmuebles,
+                "acuerdos_hoy": acuerdos_hoy,
+                "acuerdos_vencidos": acuerdos_vencidos,
+                "acuerdos_proximos": acuerdos_proximos,
+                "monto_acuerdos_vigentes": monto_acuerdos_vigentes,
+                "terminos_proximos": terminos_proximos,
+                "totales_cartera": totales_cartera,
+                "hoy": str(hoy),
+            },
+        )
+        log_msg("🎨 [DASHBOARD HTML]", "Plantilla generada exitosamente", ms=round((time.perf_counter() - t_render) * 1000, 1))
+        return resp
     finally:
         conn.release()
+
+
+@app.post("/dashboard/actualizar-cartera")
+def dashboard_actualizar_cartera(request: Request):
+    """Recalcula capital/intereses/honorarios y guarda el snapshot del dashboard."""
+    from observability import log_msg
+    import time
+
+    t0 = time.perf_counter()
+    try:
+        user_id = str(getattr(request.state, "user_id", "") or "").strip() or None
+        totales = obligacion_saldo_service.actualizar_snapshot_cartera(
+            fecha_corte=date.today(),
+            actualizado_por=user_id,
+        )
+        log_msg(
+            "💰 [DASHBOARD CARTERA UPDATE]",
+            (
+                f"Cartera={totales.get('valor_cartera')} | "
+                f"Capital={totales.get('capital')} | "
+                f"Incluidas={totales.get('obligaciones_incluidas')}"
+            ),
+            ms=round((time.perf_counter() - t0) * 1000, 1),
+        )
+        return _redirect("/dashboard", mensaje="Cartera+actualizada")
+    except Exception as exc:
+        log_msg("⚠️ [DASHBOARD CARTERA UPDATE]", f"Error: {exc}")
+        return _redirect("/dashboard", error="No+fue+posible+actualizar+la+cartera")
 
 
 @app.get("/logout")
