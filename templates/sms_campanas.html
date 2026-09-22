@@ -29,11 +29,21 @@
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-4 mb-4 shadow-sm">
     <a class="navbar-brand fw-bold" href="/dashboard"><i class="bi bi-shield-check"></i> ERP Despacho</a>
-    <div class="navbar-nav ms-auto">
+    <div class="navbar-nav ms-auto align-items-lg-center flex-wrap">
         <a class="nav-link" href="/dashboard">Dashboard</a>
         <a class="nav-link" href="/expedientes">Expedientes</a>
+        <div class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle active fw-bold" href="#" id="navCobroSms" role="button" data-bs-toggle="dropdown" aria-expanded="false">Cobro</a>
+            <ul class="dropdown-menu dropdown-menu-dark dropdown-menu-end" aria-labelledby="navCobroSms">
+                <li><a class="dropdown-item" href="/crm">CRM</a></li>
+                <li><a class="dropdown-item" href="/acuerdos">Acuerdos</a></li>
+                <li><a class="dropdown-item" href="/vencimientos">Vencimientos</a></li>
+                <li><a class="dropdown-item" href="/supervision-agente">Supervisión</a></li>
+                <li><a class="dropdown-item active" href="/sms">SMS</a></li>
+                <li><a class="dropdown-item" href="/cartas-cobro">Cartas</a></li>
+            </ul>
+        </div>
         <a class="nav-link" href="/contactos">Contactos</a>
-        <a class="nav-link active fw-bold" href="/sms">SMS Cobranza</a>
         <a class="nav-link text-danger" href="/logout">Salir</a>
     </div>
 </nav>
