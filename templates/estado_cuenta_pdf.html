@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm gap-4">
+    <a href="/informes" class="text-slate-400 hover:text-slate-700" title="Volver a Informes">
+        <i data-lucide="arrow-left" class="w-5 h-5"></i>
+    </a>
+    <h2 class="text-xl font-semibold text-slate-800">Estado de cuenta PDF → Excel</h2>
+</header>
+
+<div class="p-8 max-w-3xl mx-auto mt-6 space-y-6">
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900">
+        <p class="font-bold flex items-center gap-2">
+            <i data-lucide="shield-alert" class="w-4 h-4"></i>
+            Herramienta de conversión (no escribe a la base de datos)
+        </p>
+        <p class="mt-1 text-amber-800">
+            Extrae movimientos de estados de cuenta COLON Contabilidad. Revise siempre
+            <strong>fechas detectadas</strong> vs <strong>movimientos extraídos</strong> antes de usar el Excel en gestión.
+            Límite: {{ max_mb }} MB.
+        </p>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="bg-slate-900 p-5">
+            <h3 class="text-white font-bold flex items-center gap-2">
+                <i data-lucide="file-text" class="w-5 h-5 text-sky-400"></i>
+                Subir PDF
+            </h3>
+        </div>
+        <div class="p-6 space-y-4">
+            <input id="pdf-file" type="file" accept=".pdf,application/pdf"
+                   class="block w-full text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-slate-800 file:text-white file:font-semibold hover:file:bg-slate-700" />
+            <div class="flex flex-wrap gap-3">
+                <button type="button" id="btn-analizar"
+                        class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-bold py-2.5 px-5 rounded-lg">
+                    <i data-lucide="scan-search" class="w-4 h-4"></i>
+                    Analizar
+                </button>
+                <button type="button" id="btn-excel" disabled
+                        class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-2.5 px-5 rounded-lg">
+                    <i data-lucide="download" class="w-4 h-4"></i>
+                    Descargar Excel
+                </button>
+            </div>
+            <p id="status" class="text-sm text-slate-500"></p>
+        </div>
+    </div>
+
+    <div id="resultado" class="hidden bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
+                <p class="text-xs uppercase text-slate-500 font-bold">Fechas detectadas</p>
+                <p id="m-fechas" class="text-2xl font-black text-slate-800 mt-1">—</p>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
+                <p class="text-xs uppercase text-slate-500 font-bold">Movimientos</p>
+                <p id="m-movs" class="text-2xl font-black text-slate-800 mt-1">—</p>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
+                <p class="text-xs uppercase text-slate-500 font-bold">Omitidos</p>
+                <p id="m-omit" class="text-2xl font-black text-slate-800 mt-1">—</p>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
+                <p class="text-xs uppercase text-slate-500 font-bold">Saldo final</p>
+                <p id="m-saldo" class="text-2xl font-black text-slate-800 mt-1">—</p>
+            </div>
+        </div>
+        <div id="alerta-omit" class="hidden bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg p-3 font-medium">
+            Hay bloques omitidos: revise el PDF o contraste con el Excel antes de usarlo.
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    const fileInput = document.getElementById('pdf-file');
+    const statusEl = document.getElementById('status');
+    const btnAnalizar = document.getElementById('btn-analizar');
+    const btnExcel = document.getElementById('btn-excel');
+    const resultado = document.getElementById('resultado');
+    const alertaOmit = document.getElementById('alerta-omit');
+
+    function money(n) {
+        if (n === null || n === undefined) return '—';
+        return Number(n).toLocaleString('es-CO');
+    }
+
+    function setStatus(msg, isError) {
+        statusEl.textContent = msg || '';
+        statusEl.className = 'text-sm ' + (isError ? 'text-red-600 font-semibold' : 'text-slate-500');
+    }
+
+    async function postFile(url) {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) {
+            setStatus('Seleccione un PDF primero.', true);
+            return null;
+        }
+        const fd = new FormData();
+        fd.append('archivo', file);
+        const res = await fetch(url, { method: 'POST', body: fd });
+        return res;
+    }
+
+    btnAnalizar.addEventListener('click', async () => {
+        btnExcel.disabled = true;
+        setStatus('Analizando PDF…');
+        try {
+            const res = await postFile('/herramientas/estado-cuenta/analizar');
+            if (!res) return;
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setStatus(data.detail || 'Error al analizar.', true);
+                resultado.classList.add('hidden');
+                return;
+            }
+            document.getElementById('m-fechas').textContent = data.fechas_detectadas;
+            document.getElementById('m-movs').textContent = data.movimientos_extraidos;
+            document.getElementById('m-omit').textContent = data.bloques_omitidos;
+            document.getElementById('m-saldo').textContent = money(data.saldo_final);
+            alertaOmit.classList.toggle('hidden', !data.alerta_omisiones);
+            resultado.classList.remove('hidden');
+            btnExcel.disabled = !(data.movimientos_extraidos > 0);
+            setStatus(
+                data.movimientos_extraidos > 0
+                    ? 'Listo. Revise las métricas y descargue el Excel si coinciden.'
+                    : 'Sin movimientos detectados.'
+            );
+            if (window.lucide) lucide.createIcons();
+        } catch (e) {
+            setStatus('Fallo de red al analizar.', true);
+        }
+    });
+
+    btnExcel.addEventListener('click', async () => {
+        setStatus('Generando Excel…');
+        try {
+            const res = await postFile('/herramientas/estado-cuenta/excel');
+            if (!res) return;
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                setStatus(data.detail || 'Error al generar Excel.', true);
+                return;
+            }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'estado_cuenta.xlsx';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            const movs = res.headers.get('X-Movimientos-Extraidos');
+            const fechas = res.headers.get('X-Fechas-Detectadas');
+            setStatus(`Excel descargado (${movs || '?'} movimientos / ${fechas || '?'} fechas).`);
+        } catch (e) {
+            setStatus('Fallo de red al descargar.', true);
+        }
+    });
+})();
+</script>
+{% endblock %}

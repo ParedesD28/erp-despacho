@@ -11,6 +11,7 @@ import json
 import os
 import re
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, List
 from urllib.parse import urlencode
 
@@ -58,6 +59,8 @@ import obligacion_saldo_service
 import radicacion_service
 import bot_api
 import agent_supervision
+import estado_cuenta_pdf_service
+from estado_cuenta_pdf_service import EstadoCuentaPdfError, MAX_PDF_BYTES
 
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
@@ -1819,6 +1822,89 @@ def informes(request: Request):
         return render_template("informes.html", {"request": request, "total_procesos": total, "total_contactos": total_contactos, "total_inmuebles": total_inmuebles})
     finally:
         conn.release()
+
+
+@app.get("/herramientas/estado-cuenta")
+def vista_estado_cuenta_pdf(request: Request):
+    """Herramienta interna (sesión requerida): PDF COLON → Excel estructurado."""
+    return render_template(
+        "estado_cuenta_pdf.html",
+        {
+            "request": request,
+            "max_mb": int(MAX_PDF_BYTES / (1024 * 1024)),
+        },
+    )
+
+
+async def _leer_pdf_upload(archivo: UploadFile) -> bytes:
+    if not archivo or not archivo.filename:
+        raise HTTPException(status_code=400, detail="Debe adjuntar un archivo PDF.")
+    contenido = await archivo.read(MAX_PDF_BYTES + 1)
+    try:
+        estado_cuenta_pdf_service.validar_pdf_bytes(contenido, archivo.filename)
+    except EstadoCuentaPdfError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return contenido
+
+
+@app.post("/herramientas/estado-cuenta/analizar")
+async def analizar_estado_cuenta_pdf_endpoint(archivo: UploadFile = File(...)):
+    """Analiza el PDF y devuelve métricas de extracción (no escribe a DB)."""
+    contenido = await _leer_pdf_upload(archivo)
+    try:
+        resultado = estado_cuenta_pdf_service.procesar_estado_cuenta_pdf_seguro(
+            contenido, archivo.filename
+        )
+    except EstadoCuentaPdfError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        _json_log("ERROR", "estado_cuenta_pdf_analisis_fallo")
+        raise HTTPException(status_code=422, detail="No fue posible leer el PDF.") from None
+
+    return {
+        "fechas_detectadas": resultado["fechas_detectadas"],
+        "movimientos_extraidos": resultado["movimientos_extraidos"],
+        "bloques_omitidos": resultado["bloques_omitidos"],
+        "saldo_final": resultado["saldo_final"],
+        "paginas_leidas": resultado["paginas_leidas"],
+        "alerta_omisiones": resultado["bloques_omitidos"] > 0,
+        "muestra_inicio": resultado["muestra_inicio"],
+        "muestra_fin": resultado["muestra_fin"],
+    }
+
+
+@app.post("/herramientas/estado-cuenta/excel")
+async def exportar_estado_cuenta_pdf_excel(archivo: UploadFile = File(...)):
+    """Convierte PDF → Excel. Solo sesión autenticada; no persiste datos."""
+    contenido = await _leer_pdf_upload(archivo)
+    try:
+        resultado = estado_cuenta_pdf_service.procesar_estado_cuenta_pdf_seguro(
+            contenido, archivo.filename
+        )
+    except EstadoCuentaPdfError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        _json_log("ERROR", "estado_cuenta_pdf_excel_fallo")
+        raise HTTPException(status_code=422, detail="No fue posible convertir el PDF.") from None
+
+    if resultado["movimientos_extraidos"] == 0:
+        raise HTTPException(
+            status_code=422,
+            detail="No se detectaron movimientos. Verifique que el PDF sea un estado de cuenta COLON.",
+        )
+
+    safe_stem = re.sub(r"[^\w\-]+", "_", Path(archivo.filename or "estado_cuenta").stem)[:60]
+    excel = resultado["excel"]
+    return StreamingResponse(
+        excel,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="Estado_Cuenta_{safe_stem}.xlsx"',
+            "X-Fechas-Detectadas": str(resultado["fechas_detectadas"]),
+            "X-Movimientos-Extraidos": str(resultado["movimientos_extraidos"]),
+            "X-Bloques-Omitidos": str(resultado["bloques_omitidos"]),
+        },
+    )
 
 
 @app.get("/descargar-excel")
