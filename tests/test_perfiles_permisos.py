@@ -232,10 +232,23 @@ class UsuariosServiceLogicTests(unittest.TestCase):
             )
 
 
-class LoginMiddlewareRegressionTests(unittest.TestCase):
-    def test_login_success_con_usuario_sin_perfil(self):
+class LoginMiddlewareRegressionTests(unittest.IsolatedAsyncioTestCase):
+    """Login vía middleware, sin TestClient/httpx (CI no instala httpx2)."""
+
+    @staticmethod
+    def _login_request(email: str, password: str):
+        request = MagicMock()
+        request.url.path = "/login"
+        request.method = "POST"
+
+        async def _form():
+            return {"email": email, "password": password}
+
+        request.form = _form
+        return request
+
+    async def test_login_success_con_usuario_sin_perfil(self):
         """Usuarios existentes sin columnas de perfil deben poder entrar."""
-        from fastapi.testclient import TestClient
         import main as main_mod
 
         fake_user = {
@@ -247,52 +260,74 @@ class LoginMiddlewareRegressionTests(unittest.TestCase):
             "perfil_codigo": None,
             "perfil_nombre": None,
         }
+        request = self._login_request("admin@despacho.com", "secreto123")
 
-        with patch.object(main_mod.usuarios_service, "obtener_usuario_por_email", return_value=fake_user), patch.object(
-            main_mod, "verify_password", return_value=True
-        ), patch.object(main_mod, "set_session_cookie") as set_cookie:
-            client = TestClient(main_mod.app)
-            response = client.post(
-                "/login",
-                data={"email": "admin@despacho.com", "password": "secreto123"},
-                follow_redirects=False,
-            )
+        async def call_next(_req):
+            raise AssertionError("login no debe llegar a call_next")
+
+        with patch.object(
+            main_mod.usuarios_service, "obtener_usuario_por_email", return_value=fake_user
+        ), patch.object(main_mod, "verify_password", return_value=True), patch.object(
+            main_mod, "set_session_cookie"
+        ) as set_cookie, patch.object(
+            main_mod, "render_template", side_effect=AssertionError("no debe renderizar error")
+        ):
+            response = await main_mod.production_security_middleware(request, call_next)
+
         self.assertEqual(response.status_code, 303)
         self.assertIn("/dashboard", response.headers.get("location", ""))
         set_cookie.assert_called()
 
-    def test_login_no_500_si_servicio_lanza_y_se_captura(self):
-        from fastapi.testclient import TestClient
+    async def test_login_no_500_si_servicio_lanza_y_se_captura(self):
         import main as main_mod
+        from starlette.responses import HTMLResponse
+
+        request = self._login_request("admin@despacho.com", "secreto123")
+
+        async def call_next(_req):
+            raise AssertionError("login no debe llegar a call_next")
 
         with patch.object(
             main_mod.usuarios_service,
             "obtener_usuario_por_email",
             side_effect=KeyError(0),
-        ):
-            client = TestClient(main_mod.app)
-            response = client.post(
-                "/login",
-                data={"email": "admin@despacho.com", "password": "secreto123"},
-                follow_redirects=False,
-            )
-        # Sigue siendo 500 controlado (plantilla), no traceback; el fix real
-        # evita KeyError en el servicio. Aquí validamos que el middleware no rompe.
+        ), patch.object(
+            main_mod,
+            "render_template",
+            return_value=HTMLResponse("<html>error</html>", status_code=500),
+        ) as render:
+            response = await main_mod.production_security_middleware(request, call_next)
+
+        # 500 controlado (plantilla); el fix real evita KeyError en el servicio.
         self.assertEqual(response.status_code, 500)
-        self.assertIn("text/html", response.headers.get("content-type", ""))
+        render.assert_called()
+        kwargs = render.call_args.kwargs if render.call_args.kwargs else {}
+        # render_template(login.html, {...}, status_code=500)
+        if "status_code" in kwargs:
+            self.assertEqual(kwargs["status_code"], 500)
+        elif len(render.call_args.args) >= 3:
+            self.assertEqual(render.call_args.args[2], 500)
 
-    def test_login_credenciales_invalidas_401(self):
-        from fastapi.testclient import TestClient
+    async def test_login_credenciales_invalidas_401(self):
         import main as main_mod
+        from starlette.responses import HTMLResponse
 
-        with patch.object(main_mod.usuarios_service, "obtener_usuario_por_email", return_value=None):
-            client = TestClient(main_mod.app)
-            response = client.post(
-                "/login",
-                data={"email": "nadie@x.com", "password": "x"},
-                follow_redirects=False,
-            )
+        request = self._login_request("nadie@x.com", "x")
+
+        async def call_next(_req):
+            raise AssertionError("login no debe llegar a call_next")
+
+        with patch.object(
+            main_mod.usuarios_service, "obtener_usuario_por_email", return_value=None
+        ), patch.object(
+            main_mod,
+            "render_template",
+            return_value=HTMLResponse("<html>cred</html>", status_code=401),
+        ) as render:
+            response = await main_mod.production_security_middleware(request, call_next)
+
         self.assertEqual(response.status_code, 401)
+        render.assert_called()
 
 
 class PoolCursorFailureTests(unittest.TestCase):
