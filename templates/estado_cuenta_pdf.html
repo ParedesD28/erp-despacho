@@ -15,9 +15,9 @@
             Lote multi-PDF · sin cruces entre cuentas · sin escritura a DB
         </p>
         <p class="mt-1 text-amber-800">
-            Puede subir hasta <strong>{{ max_archivos }}</strong> PDF (máx. {{ max_mb }} MB c/u).
-            Cada archivo se procesa aislado: titular/bloque/apto y movimientos quedan sellados a ese PDF.
-            Solo PDF nativos COLON con texto seleccionable (no escaneos).
+            Hasta <strong>{{ max_archivos }}</strong> PDF (máx. {{ max_mb }} MB c/u).
+            El navegador los envía en grupos de 10 para evitar timeout en Render.
+            Cada archivo se procesa aislado. Solo PDF nativos COLON (no escaneos).
         </p>
     </div>
 
@@ -85,8 +85,10 @@
     </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script>
 (function () {
+    const BATCH_SIZE = 10;
     const fileInput = document.getElementById('pdf-file');
     const statusEl = document.getElementById('status');
     const btnAnalizar = document.getElementById('btn-analizar');
@@ -99,11 +101,14 @@
         return Number(n).toLocaleString('es-CO');
     }
 
-    function detailMsg(data) {
-        if (!data) return 'Error';
+    function detailMsg(data, res) {
+        if (res && (res.status === 502 || res.status === 504 || res.status === 524)) {
+            return 'El servidor cortó el lote (timeout). Ya se envía en grupos de 10; reintente o baje a 10–15 PDF.';
+        }
+        if (!data) return res ? `Error HTTP ${res.status}` : 'Error al procesar';
         if (typeof data.detail === 'string') return data.detail;
         if (Array.isArray(data.detail)) return data.detail.map(d => d.msg || d).join('; ');
-        return 'Error al procesar';
+        return res ? `Error HTTP ${res.status}` : 'Error al procesar';
     }
 
     function setStatus(msg, isError) {
@@ -111,14 +116,19 @@
         statusEl.className = 'text-sm ' + (isError ? 'text-red-600 font-semibold' : 'text-slate-500');
     }
 
-    function postFiles(url) {
-        const files = fileInput.files;
-        if (!files || !files.length) {
-            setStatus('Seleccione uno o más PDF.', true);
-            return null;
-        }
+    function selectedFiles() {
+        return fileInput.files ? Array.from(fileInput.files) : [];
+    }
+
+    function chunk(arr, size) {
+        const out = [];
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+        return out;
+    }
+
+    async function postChunk(url, files) {
         const fd = new FormData();
-        for (const f of files) fd.append('archivos', f);
+        files.forEach(f => fd.append('archivos', f));
         return fetch(url, { method: 'POST', body: fd });
     }
 
@@ -143,60 +153,116 @@
     }
 
     btnAnalizar.addEventListener('click', async () => {
+        const files = selectedFiles();
+        if (!files.length) {
+            setStatus('Seleccione uno o más PDF.', true);
+            return;
+        }
         btnExcel.disabled = true;
-        setStatus('Analizando lote…');
+        const groups = chunk(files, BATCH_SIZE);
+        let cuentas = [];
+        let ok = 0, fail = 0, movs = 0;
         try {
-            const res = await postFiles('/herramientas/estado-cuenta/analizar');
-            if (!res) return;
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                setStatus(detailMsg(data), true);
-                resultado.classList.add('hidden');
-                return;
+            for (let i = 0; i < groups.length; i++) {
+                const g = groups[i];
+                const from = i * BATCH_SIZE + 1;
+                const to = i * BATCH_SIZE + g.length;
+                setStatus(`Analizando ${from}–${to} de ${files.length}…`);
+                const res = await postChunk('/herramientas/estado-cuenta/analizar', g);
+                let data = {};
+                try { data = await res.json(); } catch (_) { data = {}; }
+                if (!res.ok) {
+                    setStatus(detailMsg(data, res), true);
+                    resultado.classList.add('hidden');
+                    return;
+                }
+                cuentas = cuentas.concat(data.cuentas || []);
+                ok += data.archivos_ok || 0;
+                fail += data.archivos_fallidos || 0;
+                movs += data.movimientos_totales || 0;
             }
-            document.getElementById('m-archivos').textContent = data.archivos_recibidos;
-            document.getElementById('m-ok').textContent = data.archivos_ok;
-            document.getElementById('m-fail').textContent = data.archivos_fallidos;
-            document.getElementById('m-movs').textContent = data.movimientos_totales;
-            renderCuentas(data.cuentas);
+            document.getElementById('m-archivos').textContent = files.length;
+            document.getElementById('m-ok').textContent = ok;
+            document.getElementById('m-fail').textContent = fail;
+            document.getElementById('m-movs').textContent = movs;
+            renderCuentas(cuentas);
             resultado.classList.remove('hidden');
-            btnExcel.disabled = !(data.movimientos_totales > 0);
+            btnExcel.disabled = !(movs > 0);
             setStatus(
-                data.archivos_fallidos
-                    ? `Lote con ${data.archivos_fallidos} fallido(s). Los OK no se cruzan con los fallidos.`
-                    : 'Lote OK. Cada cuenta quedó aislada; puede descargar el Excel.'
+                fail
+                    ? `Listo: ${ok} OK, ${fail} fallido(s). Los OK no se cruzaron con fallidos.`
+                    : `Listo: ${ok} cuenta(s), ${movs} movimientos. Puede descargar el Excel.`
             );
             if (window.lucide) lucide.createIcons();
         } catch (e) {
-            setStatus('Fallo de red al analizar.', true);
+            setStatus('Fallo de red al analizar (posible timeout). Pruebe de a 10 PDF.', true);
         }
     });
 
     btnExcel.addEventListener('click', async () => {
-        setStatus('Generando Excel del lote…');
+        const files = selectedFiles();
+        if (!files.length) {
+            setStatus('Seleccione uno o más PDF.', true);
+            return;
+        }
+        const groups = chunk(files, BATCH_SIZE);
         try {
-            const res = await postFiles('/herramientas/estado-cuenta/excel');
-            if (!res) return;
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                setStatus(detailMsg(data), true);
+            if (groups.length === 1) {
+                setStatus('Generando Excel…');
+                const res = await postChunk('/herramientas/estado-cuenta/excel', groups[0]);
+                if (!res.ok) {
+                    let data = {};
+                    try { data = await res.json(); } catch (_) {}
+                    setStatus(detailMsg(data, res), true);
+                    return;
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'estados_cuenta_lote.xlsx';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+                setStatus('Excel descargado.');
                 return;
             }
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
+
+            // Varios grupos → ZIP con un Excel por grupo (evita timeout de 35 de un golpe).
+            if (!window.JSZip) {
+                setStatus('No se pudo cargar JSZip. Descargue en grupos de 10.', true);
+                return;
+            }
+            const zip = new JSZip();
+            for (let i = 0; i < groups.length; i++) {
+                const g = groups[i];
+                const from = i * BATCH_SIZE + 1;
+                const to = i * BATCH_SIZE + g.length;
+                setStatus(`Excel grupo ${from}–${to} de ${files.length}…`);
+                const res = await postChunk('/herramientas/estado-cuenta/excel', g);
+                if (!res.ok) {
+                    let data = {};
+                    try { data = await res.json(); } catch (_) {}
+                    setStatus(detailMsg(data, res), true);
+                    return;
+                }
+                const buf = await res.arrayBuffer();
+                zip.file(`estados_cuenta_${from}_${to}.xlsx`, buf);
+            }
+            setStatus('Empaquetando ZIP…');
+            const zipBlob = await zip.generateAsync({ type: 'blob' });
+            const url = URL.createObjectURL(zipBlob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'estados_cuenta_lote.xlsx';
+            a.download = 'estados_cuenta_lote.zip';
             document.body.appendChild(a);
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
-            setStatus(
-                `Excel descargado (${res.headers.get('X-Archivos-Ok') || '?'} OK / ` +
-                `${res.headers.get('X-Movimientos-Extraidos') || '?'} movimientos).`
-            );
+            setStatus(`ZIP descargado (${groups.length} Excel). Cada hoja Resumen/Movimientos es de su grupo.`);
         } catch (e) {
-            setStatus('Fallo de red al descargar.', true);
+            setStatus('Fallo de red al descargar (posible timeout). Pruebe de a 10 PDF.', true);
         }
     });
 })();

@@ -549,9 +549,11 @@ def procesar_estado_cuenta_pdf(source: Source) -> io.BytesIO:
 def procesar_estado_cuenta_pdf_seguro(
     contenido: bytes,
     filename: str | None = None,
+    *,
+    generar_excel: bool = True,
 ) -> dict:
     """
-    Valida el upload, analiza y genera Excel de UNA cuenta.
+    Valida el upload, analiza y opcionalmente genera Excel de UNA cuenta.
     Sin estado compartido: cada llamada es independiente.
     """
     validar_pdf_bytes(contenido, filename)
@@ -559,14 +561,15 @@ def procesar_estado_cuenta_pdf_seguro(
     rows = _sellar_archivo(analisis["rows"], filename)
     cabecera = dict(analisis.get("cabecera") or {})
     cabecera["archivo"] = filename
-    excel = generar_excel_estado_cuenta(rows, cabecera)
-    return {
+    out = {
         **{k: v for k, v in analisis.items() if k != "rows"},
         "archivo": filename,
         "cabecera": cabecera,
         "rows": rows,
-        "excel": excel,
     }
+    if generar_excel:
+        out["excel"] = generar_excel_estado_cuenta(rows, cabecera)
+    return out
 
 
 def procesar_lote_estados_cuenta(
@@ -578,6 +581,7 @@ def procesar_lote_estados_cuenta(
     - Cada PDF se parsea en su propia llamada (buffer/cabecera propios).
     - Cada fila se sella con el nombre de SU archivo y su titular/bloque/apto.
     - Un error en un PDF no contamina los demás: queda en Resumen con error.
+    - No genera Excel por archivo (ahorra RAM/CPU); arma un solo Excel al final.
     """
     if not archivos:
         raise EstadoCuentaPdfError("Debe adjuntar al menos un PDF.")
@@ -590,10 +594,12 @@ def procesar_lote_estados_cuenta(
         raise EstadoCuentaPdfError(f"El lote supera el límite total de {mb:.0f} MB.")
 
     cuentas: list[dict] = []
-    for filename, contenido in archivos:
+    for idx, (filename, contenido) in enumerate(archivos):
         try:
-            uno = procesar_estado_cuenta_pdf_seguro(contenido, filename)
-            # No reutilizar excel individual; el lote arma uno consolidado.
+            # generar_excel=False: crítico en lotes grandes (evita OOM/timeout en Render).
+            uno = procesar_estado_cuenta_pdf_seguro(
+                contenido, filename, generar_excel=False
+            )
             cuentas.append(
                 {
                     "archivo": filename,
@@ -633,6 +639,29 @@ def procesar_lote_estados_cuenta(
                     "error": str(exc),
                 }
             )
+        except Exception as exc:
+            cuentas.append(
+                {
+                    "archivo": filename,
+                    "titular": None,
+                    "bloque": None,
+                    "apartamento": None,
+                    "codigo_cuenta": None,
+                    "conjunto": None,
+                    "fechas_detectadas": 0,
+                    "movimientos_extraidos": 0,
+                    "bloques_omitidos": 0,
+                    "inconsistencias_saldo": 0,
+                    "advertencia_encoding": False,
+                    "saldo_final": None,
+                    "alerta_calidad": True,
+                    "rows": [],
+                    "error": f"Error interno: {type(exc).__name__}",
+                }
+            )
+        finally:
+            # Liberar bytes del PDF ya procesado (anti-OOM en lotes de 30+).
+            archivos[idx] = (filename, b"")
 
     ok = sum(1 for c in cuentas if not c.get("error") and c.get("movimientos_extraidos", 0) > 0)
     fallidos = sum(1 for c in cuentas if c.get("error"))

@@ -6,6 +6,7 @@ liquidador de expensas PH, supervisión de agente y administración de expedient
 from __future__ import annotations
 
 import sms_router
+import asyncio
 import io
 import json
 import os
@@ -1868,12 +1869,19 @@ async def analizar_estado_cuenta_pdf_endpoint(archivos: list[UploadFile] = File(
     """Analiza uno o varios PDF en aislamiento (sin cruces entre cuentas)."""
     lote = await _leer_pdfs_upload(archivos)
     try:
-        resultado = estado_cuenta_pdf_service.procesar_lote_estados_cuenta(lote)
+        # Hilo aparte: no bloquea health-checks ni el event loop de Render.
+        resultado = await asyncio.to_thread(
+            estado_cuenta_pdf_service.procesar_lote_estados_cuenta, lote
+        )
     except EstadoCuentaPdfError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception:
-        _json_log("ERROR", "estado_cuenta_pdf_analisis_fallo")
-        raise HTTPException(status_code=422, detail="No fue posible leer el/los PDF.") from None
+    except Exception as exc:
+        _json_log("ERROR", "estado_cuenta_pdf_analisis_fallo", error=type(exc).__name__)
+        raise HTTPException(
+            status_code=422,
+            detail=f"No fue posible leer el/los PDF ({type(exc).__name__}). "
+            "Si el lote es grande, intente en grupos de 10.",
+        ) from None
 
     return {
         "archivos_recibidos": resultado["archivos_recibidos"],
@@ -1889,12 +1897,18 @@ async def exportar_estado_cuenta_pdf_excel(archivos: list[UploadFile] = File(...
     """Convierte 1..N PDF → un Excel (Resumen + Movimientos). Sin persistencia."""
     lote = await _leer_pdfs_upload(archivos)
     try:
-        resultado = estado_cuenta_pdf_service.procesar_lote_estados_cuenta(lote)
+        resultado = await asyncio.to_thread(
+            estado_cuenta_pdf_service.procesar_lote_estados_cuenta, lote
+        )
     except EstadoCuentaPdfError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception:
-        _json_log("ERROR", "estado_cuenta_pdf_excel_fallo")
-        raise HTTPException(status_code=422, detail="No fue posible convertir el/los PDF.") from None
+    except Exception as exc:
+        _json_log("ERROR", "estado_cuenta_pdf_excel_fallo", error=type(exc).__name__)
+        raise HTTPException(
+            status_code=422,
+            detail=f"No fue posible convertir el/los PDF ({type(exc).__name__}). "
+            "Si el lote es grande, intente en grupos de 10.",
+        ) from None
 
     if resultado["movimientos_totales"] == 0:
         raise HTTPException(
