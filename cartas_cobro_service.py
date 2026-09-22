@@ -30,6 +30,81 @@ CIUDAD = "Pereira"
 DIAS_LIMITE_DEFAULT = 5
 MAX_LOTE = 100
 CARTERAS_VALIDAS = {"PREJURIDICO", "JURIDICO"}
+_VAR_PATTERN = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
+
+PLANTILLA_VARIABLES = (
+    {"clave": "deudor_nombre", "etiqueta": "Nombre completo del deudor"},
+    {"clave": "cedula", "etiqueta": "Cédula / identificación"},
+    {"clave": "torre_apto", "etiqueta": "Torre - Apto"},
+    {"clave": "conjunto", "etiqueta": "Nombre del conjunto"},
+    {"clave": "nombre_ph", "etiqueta": "Nombre PH / acreedor"},
+    {"clave": "monto", "etiqueta": "Gran total (formato COP)"},
+    {"clave": "fecha_limite", "etiqueta": "Fecha límite de pago (texto)"},
+    {"clave": "atn_codeudor", "etiqueta": "Línea Atn. codeudor (vacía si no hay)"},
+    {"clave": "codeudor_nombre", "etiqueta": "Nombre del codeudor (sin prefijo)"},
+    {"clave": "ciudad", "etiqueta": "Ciudad (Pereira)"},
+    {"clave": "telefono_despacho", "etiqueta": "Tel/WhatsApp del despacho"},
+    {"clave": "correo_despacho", "etiqueta": "Correo del despacho"},
+    {"clave": "firmante_nombre", "etiqueta": "Nombre del abogado"},
+    {"clave": "firmante_cargo", "etiqueta": "Cargo del firmante"},
+)
+
+DEFAULT_CUERPO_PREJURIDICO = """Señor(a)
+{{deudor_nombre}}
+C.C. {{cedula}}
+Propietario(a) del ({{torre_apto}}) ({{conjunto}}) {{ciudad}}.
+{{atn_codeudor}}
+REF: REQUERIMIENTO DE PAGO PREJURÍDICO - {{nombre_ph}}
+
+Respetado(a) señor(a),
+
+Actuando en mi calidad de apoderado legal de {{nombre_ph}}, me dirijo respetuosamente a usted con el fin de requerirle el pago de las obligaciones pendientes a cargo de la unidad ({{torre_apto}}) del conjunto {{conjunto}}, ubicado en {{ciudad}}.
+
+A la fecha, revisada la liquidación de cartera correspondiente, se advierte una mora que asciende a la suma total de {{monto}}.
+
+El bienestar y mantenimiento de la copropiedad dependen del pago oportuno de las cuotas de administración y demás conceptos a cargo de cada propietario. Su colaboración es indispensable para preservar los servicios comunes y evitar mayores costos para la comunidad.
+
+Le otorgamos un plazo máximo hasta el {{fecha_limite}} para cancelar la totalidad de la suma adeudada o para formalizar un acuerdo de pago viable con este despacho.
+
+Para gestionar su pago, aclarar saldos o radicar propuestas de acuerdo, puede comunicarse a través de los siguientes canales:
+• Teléfono / WhatsApp: {{telefono_despacho}}
+• Correo electrónico: {{correo_despacho}}
+
+Hacemos de su conocimiento que, de no recibirse el pago o una propuesta seria dentro del plazo indicado, se adelantarán las gestiones prejurídicas y jurídicas pertinentes, con cargo de intereses, costas y honorarios a que haya lugar.
+
+Confiamos en su voluntad de normalizar esta situación de manera pronta y cordial, evitando mayores inconvenientes.
+
+Atentamente,
+
+
+{{firmante_nombre}}
+{{firmante_cargo}}"""
+
+DEFAULT_CUERPO_JURIDICO = """Señor(a)
+{{deudor_nombre}}
+C.C. {{cedula}}
+Propietario(a) del ({{torre_apto}}) ({{conjunto}}) {{ciudad}}.
+{{atn_codeudor}}
+REF: REQUERIMIENTO DE PAGO JURÍDICO - {{nombre_ph}}
+
+Respetado(a) señor(a),
+
+Actuando en mi calidad de apoderado legal de {{nombre_ph}}, me permito reiterar el requerimiento de pago de las obligaciones a cargo de la unidad ({{torre_apto}}) del conjunto {{conjunto}}, por la suma total de {{monto}}.
+
+Le otorgamos un plazo máximo hasta el {{fecha_limite}} para cancelar la totalidad adeudada o formalizar un acuerdo de pago.
+
+Canales de contacto:
+• Teléfono / WhatsApp: {{telefono_despacho}}
+• Correo electrónico: {{correo_despacho}}
+
+De persistir el incumplimiento se continuarán las gestiones judiciales correspondientes.
+
+Atentamente,
+
+
+{{firmante_nombre}}
+{{firmante_cargo}}"""
+
 
 
 def fecha_limite_default(hoy: Optional[date] = None) -> date:
@@ -246,6 +321,255 @@ def resolver_seleccion(
     return seleccionados
 
 
+def ensure_cartas_plantillas_table(conn=None) -> None:
+    """Crea la tabla y siembra plantillas sistema si faltan (idempotente)."""
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db.get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS cartas_cobro_plantillas (
+                        id BIGSERIAL PRIMARY KEY,
+                        nombre TEXT NOT NULL,
+                        tipo_cartera VARCHAR(20) NOT NULL
+                            CHECK (tipo_cartera IN ('PREJURIDICO', 'JURIDICO')),
+                        cuerpo TEXT NOT NULL,
+                        activo BOOLEAN NOT NULL DEFAULT TRUE,
+                        es_sistema BOOLEAN NOT NULL DEFAULT FALSE,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        CONSTRAINT uq_cartas_cobro_plantillas_nombre_tipo
+                            UNIQUE (nombre, tipo_cartera)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_cartas_cobro_plantillas_tipo_activo
+                        ON cartas_cobro_plantillas (tipo_cartera, activo)
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT INTO cartas_cobro_plantillas
+                        (nombre, tipo_cartera, cuerpo, activo, es_sistema)
+                    VALUES
+                        (%s, 'PREJURIDICO', %s, TRUE, TRUE),
+                        (%s, 'JURIDICO', %s, TRUE, TRUE)
+                    ON CONFLICT (nombre, tipo_cartera) DO NOTHING
+                    """,
+                    (
+                        "Requerimiento prejurídico estándar",
+                        DEFAULT_CUERPO_PREJURIDICO,
+                        "Requerimiento jurídico estándar",
+                        DEFAULT_CUERPO_JURIDICO,
+                    ),
+                )
+    finally:
+        if owns_conn and conn is not None:
+            conn.release()
+
+
+def listar_plantillas(
+    *,
+    tipo_cartera: Optional[str] = None,
+    solo_activas: bool = True,
+    conn=None,
+) -> list[dict]:
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db.get_connection()
+    try:
+        ensure_cartas_plantillas_table(conn)
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            where = ["TRUE"]
+            params: list[Any] = []
+            if solo_activas:
+                where.append("activo=TRUE")
+            if tipo_cartera:
+                cartera = str(tipo_cartera).upper().strip()
+                if cartera not in CARTERAS_VALIDAS:
+                    raise ValueError("Tipo de cartera no válido.")
+                where.append("tipo_cartera=%s")
+                params.append(cartera)
+            cur.execute(
+                f"""
+                SELECT id, nombre, tipo_cartera, cuerpo, activo, es_sistema,
+                       created_at, updated_at
+                FROM cartas_cobro_plantillas
+                WHERE {' AND '.join(where)}
+                ORDER BY tipo_cartera, es_sistema DESC, nombre
+                """,
+                params,
+            )
+            return [dict(r) for r in cur.fetchall()]
+    finally:
+        if owns_conn and conn is not None:
+            conn.release()
+
+
+def obtener_plantilla(plantilla_id: int, *, conn=None) -> Optional[dict]:
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db.get_connection()
+    try:
+        ensure_cartas_plantillas_table(conn)
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, nombre, tipo_cartera, cuerpo, activo, es_sistema,
+                       created_at, updated_at
+                FROM cartas_cobro_plantillas
+                WHERE id=%s
+                LIMIT 1
+                """,
+                (int(plantilla_id),),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+    finally:
+        if owns_conn and conn is not None:
+            conn.release()
+
+
+def guardar_plantilla(
+    *,
+    nombre: str,
+    tipo_cartera: str,
+    cuerpo: str,
+    plantilla_id: Optional[int] = None,
+    conn=None,
+) -> dict:
+    nombre_limpio = str(nombre or "").strip()
+    cuerpo_limpio = str(cuerpo or "").strip()
+    cartera = str(tipo_cartera or "").upper().strip()
+    if not nombre_limpio:
+        raise ValueError("El nombre de la plantilla es obligatorio.")
+    if cartera not in CARTERAS_VALIDAS:
+        raise ValueError("Tipo de cartera debe ser PREJURIDICO o JURIDICO.")
+    if not cuerpo_limpio:
+        raise ValueError("El cuerpo de la plantilla no puede estar vacío.")
+    if len(cuerpo_limpio) > 50000:
+        raise ValueError("El cuerpo de la plantilla es demasiado largo.")
+
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db.get_connection()
+    try:
+        ensure_cartas_plantillas_table(conn)
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if plantilla_id:
+                    cur.execute(
+                        """
+                        UPDATE cartas_cobro_plantillas
+                        SET nombre=%s,
+                            tipo_cartera=%s,
+                            cuerpo=%s,
+                            updated_at=NOW()
+                        WHERE id=%s AND activo=TRUE
+                        RETURNING id, nombre, tipo_cartera, cuerpo, activo, es_sistema
+                        """,
+                        (nombre_limpio, cartera, cuerpo_limpio, int(plantilla_id)),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        raise ValueError("Plantilla no encontrada.")
+                    return dict(row)
+
+                cur.execute(
+                    """
+                    INSERT INTO cartas_cobro_plantillas
+                        (nombre, tipo_cartera, cuerpo, activo, es_sistema)
+                    VALUES (%s, %s, %s, TRUE, FALSE)
+                    RETURNING id, nombre, tipo_cartera, cuerpo, activo, es_sistema
+                    """,
+                    (nombre_limpio, cartera, cuerpo_limpio),
+                )
+                return dict(cur.fetchone())
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "uq_cartas_cobro_plantillas_nombre_tipo" in msg or "unique" in msg:
+            raise ValueError(
+                "Ya existe una plantilla con ese nombre para el tipo de cartera."
+            ) from exc
+        raise
+    finally:
+        if owns_conn and conn is not None:
+            conn.release()
+
+
+def desactivar_plantilla(plantilla_id: int, *, conn=None) -> None:
+    owns_conn = conn is None
+    if owns_conn:
+        conn = db.get_connection()
+    try:
+        ensure_cartas_plantillas_table(conn)
+        with conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT es_sistema FROM cartas_cobro_plantillas
+                    WHERE id=%s LIMIT 1
+                    """,
+                    (int(plantilla_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise ValueError("Plantilla no encontrada.")
+                if row.get("es_sistema"):
+                    raise ValueError("No se puede eliminar una plantilla de sistema.")
+                cur.execute(
+                    """
+                    UPDATE cartas_cobro_plantillas
+                    SET activo=FALSE, updated_at=NOW()
+                    WHERE id=%s
+                    """,
+                    (int(plantilla_id),),
+                )
+    finally:
+        if owns_conn and conn is not None:
+            conn.release()
+
+
+def construir_contexto_variables(
+    candidato: dict,
+    *,
+    fecha_limite: date,
+) -> dict[str, str]:
+    codeudor = (candidato.get("codeudor_nombre") or "").strip()
+    conjunto = (candidato.get("conjunto_residencial") or "SIN CONJUNTO").strip()
+    return {
+        "deudor_nombre": (candidato.get("deudor_nombre") or "SIN NOMBRE").strip(),
+        "cedula": (candidato.get("deudor_identificacion") or "SIN CÉDULA").strip(),
+        "torre_apto": (candidato.get("torre_apto") or "SIN UNIDAD").strip(),
+        "conjunto": conjunto,
+        "nombre_ph": (candidato.get("nombre_ph") or conjunto).strip(),
+        "monto": _fmt_money(candidato.get("saldo_total")),
+        "fecha_limite": _fmt_fecha_es(fecha_limite),
+        "codeudor_nombre": codeudor,
+        "atn_codeudor": f"Atn. {codeudor}" if codeudor else "",
+        "ciudad": CIUDAD,
+        "telefono_despacho": TELEFONO_DESPACHO,
+        "correo_despacho": CORREO_DESPACHO,
+        "firmante_nombre": FIRMANTE_NOMBRE,
+        "firmante_cargo": FIRMANTE_CARGO,
+    }
+
+
+def renderizar_cuerpo(cuerpo: str, contexto: dict[str, str]) -> str:
+    def _repl(match: re.Match) -> str:
+        clave = match.group(1)
+        if clave not in contexto:
+            return match.group(0)
+        return str(contexto.get(clave) or "")
+
+    return _VAR_PATTERN.sub(_repl, cuerpo or "")
+
+
 def _aplicar_fuente_arial(run, *, size_pt: float = 11, bold: bool = False) -> None:
     """Fuerza Arial en ascii/hAnsi/eastAsia para que Word no sustituya la fuente."""
     run.bold = bold
@@ -264,8 +588,9 @@ def construir_carta_docx(
     *,
     fecha_limite: date,
     fecha_carta: Optional[date] = None,
+    cuerpo_plantilla: Optional[str] = None,
 ) -> bytes:
-    """Genera un .docx en memoria (Arial 11, justificado, plantilla prejurídica)."""
+    """Genera un .docx en memoria (Arial 11, justificado) desde plantilla de texto."""
     doc = Document()
     for section in doc.sections:
         section.top_margin = Cm(2.5)
@@ -286,17 +611,11 @@ def construir_carta_docx(
     rfonts.set(qn("w:cs"), "Arial")
     rfonts.set(qn("w:eastAsia"), "Arial")
 
-    # fecha_carta se conserva en la firma del API por compatibilidad; la plantilla
-    # oficial no imprime ciudad/fecha en el encabezado.
     _ = fecha_carta or date.today()
-    nombre = (candidato.get("deudor_nombre") or "SIN NOMBRE").strip()
-    cedula = (candidato.get("deudor_identificacion") or "SIN CÉDULA").strip()
-    torre = (candidato.get("torre_apto") or "SIN UNIDAD").strip()
-    conjunto = (candidato.get("conjunto_residencial") or "SIN CONJUNTO").strip()
-    nombre_ph = (candidato.get("nombre_ph") or conjunto).strip()
-    monto = _fmt_money(candidato.get("saldo_total"))
-    codeudor = (candidato.get("codeudor_nombre") or "").strip()
-    fecha_limite_txt = _fmt_fecha_es(fecha_limite)
+    contexto = construir_contexto_variables(candidato, fecha_limite=fecha_limite)
+    cuerpo = cuerpo_plantilla if cuerpo_plantilla is not None else DEFAULT_CUERPO_PREJURIDICO
+    texto = renderizar_cuerpo(cuerpo, contexto)
+    lineas = texto.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 
     def add_para(
         text: str = "",
@@ -304,95 +623,46 @@ def construir_carta_docx(
         bold: bool = False,
         align=WD_ALIGN_PARAGRAPH.LEFT,
         space_after: float = 0,
-        space_before: float = 0,
     ):
         p = doc.add_paragraph()
         run = p.add_run(text)
         _aplicar_fuente_arial(run, bold=bold)
         p.alignment = align
         p.paragraph_format.space_after = Pt(space_after)
-        p.paragraph_format.space_before = Pt(space_before)
+        p.paragraph_format.space_before = Pt(0)
         p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
         return p
 
-    def add_justificado(text: str, *, space_after: float = 12):
-        return add_para(
-            text,
-            align=WD_ALIGN_PARAGRAPH.JUSTIFY,
-            space_after=space_after,
-        )
+    en_cuerpo = False
+    for idx, linea in enumerate(lineas):
+        strip = linea.strip()
+        siguiente = lineas[idx + 1].strip() if idx + 1 < len(lineas) else ""
 
-    # --- Encabezado destinatario (espaciado compacto) ---
-    add_para("Señor(a)")
-    add_para(nombre)
-    add_para(f"C.C. {cedula}")
-    add_para(f"Propietario(a) del ({torre}) ({conjunto}) {CIUDAD}.")
-    if codeudor:
-        add_para(f"Atn. {codeudor}", space_after=12)
-    else:
-        add_para("", space_after=12)
+        if strip.startswith("Respetado"):
+            en_cuerpo = True
+        if strip.startswith("Atentamente"):
+            en_cuerpo = False
 
-    add_para(
-        f"REF: REQUERIMIENTO DE PAGO PREJURÍDICO - {nombre_ph}",
-        bold=True,
-        space_after=12,
-    )
+        if not strip:
+            # Conserva espacios del bloque de firma; comprime vacíos del encabezado.
+            if en_cuerpo or siguiente.startswith("Atentamente") or not siguiente:
+                add_para("", space_after=0)
+            continue
 
-    # --- Cuerpo ---
-    add_justificado("Respetado(a) señor(a),")
+        if strip.startswith("REF:"):
+            add_para(strip, bold=True, space_after=12)
+            continue
 
-    add_justificado(
-        f"Actuando en mi calidad de apoderado legal de {nombre_ph}, me dirijo "
-        f"respetuosamente a usted con el fin de requerirle el pago de las "
-        f"obligaciones pendientes a cargo de la unidad ({torre}) del conjunto "
-        f"{conjunto}, ubicado en {CIUDAD}."
-    )
+        if strip.startswith("•") or strip.startswith("- "):
+            add_para(strip, align=WD_ALIGN_PARAGRAPH.LEFT, space_after=0)
+            continue
 
-    add_justificado(
-        f"A la fecha, revisada la liquidación de cartera correspondiente, se "
-        f"advierte una mora que asciende a la suma total de {monto}."
-    )
-
-    add_justificado(
-        "El bienestar y mantenimiento de la copropiedad dependen del pago "
-        "oportuno de las cuotas de administración y demás conceptos a cargo de "
-        "cada propietario. Su colaboración es indispensable para preservar los "
-        "servicios comunes y evitar mayores costos para la comunidad."
-    )
-
-    add_justificado(
-        f"Le otorgamos un plazo máximo hasta el {fecha_limite_txt} para "
-        "cancelar la totalidad de la suma adeudada o para formalizar un "
-        "acuerdo de pago viable con este despacho."
-    )
-
-    add_justificado(
-        "Para gestionar su pago, aclarar saldos o radicar propuestas de "
-        "acuerdo, puede comunicarse a través de los siguientes canales:"
-    )
-    add_para(f"• Teléfono / WhatsApp: {TELEFONO_DESPACHO}", space_after=0)
-    add_para(
-        f"• Correo electrónico: {CORREO_DESPACHO}",
-        space_after=12,
-    )
-
-    add_justificado(
-        "Hacemos de su conocimiento que, de no recibirse el pago o una "
-        "propuesta seria dentro del plazo indicado, se adelantarán las "
-        "gestiones prejurídicas y jurídicas pertinentes, con cargo de "
-        "intereses, costas y honorarios a que haya lugar."
-    )
-
-    add_justificado(
-        "Confiamos en su voluntad de normalizar esta situación de manera "
-        "pronta y cordial, evitando mayores inconvenientes."
-    )
-
-    add_para("Atentamente,", space_after=24)
-    add_para("")
-    add_para("")
-    add_para(FIRMANTE_NOMBRE)
-    add_para(FIRMANTE_CARGO)
+        if en_cuerpo and not strip.startswith("Atentamente"):
+            add_para(strip, align=WD_ALIGN_PARAGRAPH.JUSTIFY, space_after=12)
+        elif strip.startswith("Atentamente"):
+            add_para(strip, space_after=24)
+        else:
+            add_para(strip, space_after=0)
 
     buffer = io.BytesIO()
     doc.save(buffer)
@@ -411,12 +681,17 @@ def generar_paquete_docx(
     *,
     fecha_limite: date,
     fecha_carta: Optional[date] = None,
+    cuerpo_plantilla: Optional[str] = None,
 ) -> tuple[bytes, str, str]:
     """Devuelve (contenido, filename, media_type). ZIP si hay más de una carta."""
     fecha = fecha_carta or date.today()
+    cuerpo = cuerpo_plantilla
     if len(seleccionados) == 1:
         contenido = construir_carta_docx(
-            seleccionados[0], fecha_limite=fecha_limite, fecha_carta=fecha
+            seleccionados[0],
+            fecha_limite=fecha_limite,
+            fecha_carta=fecha,
+            cuerpo_plantilla=cuerpo,
         )
         return contenido, nombre_archivo_carta(seleccionados[0], fecha), (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -433,7 +708,12 @@ def generar_paquete_docx(
             usados.add(nombre)
             zf.writestr(
                 nombre,
-                construir_carta_docx(item, fecha_limite=fecha_limite, fecha_carta=fecha),
+                construir_carta_docx(
+                    item,
+                    fecha_limite=fecha_limite,
+                    fecha_carta=fecha,
+                    cuerpo_plantilla=cuerpo,
+                ),
             )
     conjunto = _safe_filename(seleccionados[0].get("conjunto_residencial") or "conjunto")
     zip_name = f"Cartas_Prejuridicas_{conjunto}_{fecha.strftime('%Y%m%d')}.zip"

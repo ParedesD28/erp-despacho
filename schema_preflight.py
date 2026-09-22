@@ -62,6 +62,8 @@ REQUIRED_COLUMNS = {
     "expediente_ediciones": {"id", "radicado_interno", "usuario", "accion", "antes", "despues"},
     "obligacion_partes": {"id", "obligacion_id", "contacto_id", "rol", "es_principal"},
     "data_migration_exceptions": {"id", "migration_version", "entity_type", "entity_key", "reason", "status"},
+    # cartas_cobro_plantillas se crea/verifica en runtime (ensure_cartas_plantillas_table);
+    # no bloquea el arranque si la migración aún no se aplicó en Neon.
 }
 
 

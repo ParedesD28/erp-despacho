@@ -3,8 +3,8 @@
 {% block contenido %}
 <header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm justify-between">
     <div>
-        <h2 class="text-xl font-semibold text-slate-800">Cartas de cobro prejurídico</h2>
-        <p class="text-xs text-slate-500">Word (.docx) · una carta por inmueble · saldo gran_total</p>
+        <h2 class="text-xl font-semibold text-slate-800">Cartas de cobro</h2>
+        <p class="text-xs text-slate-500">Word (.docx) · plantillas · una carta por inmueble · gran_total</p>
     </div>
     <span class="bg-amber-50 text-amber-800 text-xs font-bold px-3 py-1 rounded-full border border-amber-200">
         Máx. {{ max_lote or 100 }} por lote
@@ -12,6 +12,92 @@
 </header>
 
 <div class="p-8 space-y-6">
+    {# --- Plantillas --- #}
+    <section class="bg-white border border-slate-200 rounded-lg shadow-sm p-6">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
+            <div>
+                <h3 class="text-sm font-bold text-slate-700 uppercase tracking-wide">Formatos / plantillas</h3>
+                <p class="text-xs text-slate-500 mt-1">Variables disponibles para insertar en el cuerpo (Arial 11 justificado al generar).</p>
+            </div>
+        </div>
+
+        <div class="flex flex-wrap gap-2 mb-5">
+            {% for v in variables %}
+            <button type="button"
+                    class="text-[11px] font-mono bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 px-2 py-1 rounded"
+                    title="{{ v.etiqueta }}"
+                    onclick="insertarVariable('{{ '{{' + v.clave + '}}' }}')">
+                {{ '{{' + v.clave + '}}' }}
+            </button>
+            {% endfor %}
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div>
+                <h4 class="text-xs font-bold text-slate-600 uppercase mb-2">Plantillas guardadas</h4>
+                <div class="border border-slate-200 rounded-md divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                    {% for p in plantillas_todas %}
+                    <div class="px-3 py-2 flex items-center justify-between gap-2 text-sm {% if plantilla_id == p.id %}bg-blue-50{% endif %}">
+                        <div>
+                            <div class="font-semibold text-slate-800">{{ p.nombre }}</div>
+                            <div class="text-[11px] text-slate-400">
+                                <span class="{% if p.tipo_cartera == 'JURIDICO' %}text-blue-700{% else %}text-amber-700{% endif %}">{{ p.tipo_cartera }}</span>
+                                {% if p.es_sistema %} · sistema{% endif %}
+                            </div>
+                        </div>
+                        {% if not p.es_sistema %}
+                        <form method="POST" action="/cartas-cobro/plantillas/desactivar" onsubmit="return confirm('¿Desactivar esta plantilla?');">
+                            <input type="hidden" name="plantilla_id" value="{{ p.id }}">
+                            <input type="hidden" name="tipo_cartera" value="{{ tipo_cartera }}">
+                            <input type="hidden" name="conjunto_id" value="{{ conjunto_id or '' }}">
+                            <input type="hidden" name="fecha_corte" value="{{ fecha_corte }}">
+                            <input type="hidden" name="fecha_limite" value="{{ fecha_limite }}">
+                            <input type="hidden" name="saldo_minimo" value="{{ saldo_minimo or 0 }}">
+                            <button type="submit" class="text-xs text-red-600 hover:underline">Desactivar</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <div class="px-3 py-6 text-center text-slate-400 text-sm">Aún no hay plantillas.</div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <form method="POST" action="/cartas-cobro/plantillas/guardar" class="space-y-3">
+                <h4 class="text-xs font-bold text-slate-600 uppercase mb-2">Nueva plantilla</h4>
+                <input type="hidden" name="conjunto_id" value="{{ conjunto_id or '' }}">
+                <input type="hidden" name="fecha_corte" value="{{ fecha_corte }}">
+                <input type="hidden" name="fecha_limite" value="{{ fecha_limite }}">
+                <input type="hidden" name="saldo_minimo" value="{{ saldo_minimo or 0 }}">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-500 mb-1">Nombre</label>
+                        <input type="text" name="nombre" required maxlength="120" placeholder="Ej. Primer requerimiento"
+                               class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-500 mb-1">Tipo</label>
+                        <select name="tipo_cartera" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+                            <option value="PREJURIDICO" {% if tipo_cartera == 'PREJURIDICO' %}selected{% endif %}>PREJURIDICO</option>
+                            <option value="JURIDICO" {% if tipo_cartera == 'JURIDICO' %}selected{% endif %}>JURIDICO</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">Cuerpo (use variables {{ '{{clave}}' }})</label>
+                    <textarea id="cuerpoPlantilla" name="cuerpo" required rows="12"
+                              class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono leading-relaxed">{{ cuerpo_nuevo }}</textarea>
+                </div>
+                <div class="flex justify-end">
+                    <button type="submit" class="bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold px-4 py-2 rounded-md">
+                        Guardar plantilla
+                    </button>
+                </div>
+            </form>
+        </div>
+    </section>
+
+    {# --- Filtros --- #}
     <form method="GET" action="/cartas-cobro" class="bg-white border border-slate-200 rounded-lg shadow-sm p-6">
         <h3 class="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">1. Filtrar por conjunto</h3>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -61,12 +147,22 @@
             </div>
             <div class="flex flex-wrap items-end gap-3">
                 <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">Plantilla</label>
+                    <select name="plantilla_id" required class="border border-slate-300 rounded-md px-3 py-2 text-sm min-w-[220px]">
+                        {% for p in plantillas %}
+                        <option value="{{ p.id }}" {% if plantilla_id == p.id %}selected{% endif %}>{{ p.nombre }}</option>
+                        {% else %}
+                        <option value="" disabled selected>No hay plantillas {{ tipo_cartera }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
                     <label class="block text-xs font-semibold text-slate-500 mb-1">Fecha límite de pago</label>
                     <input type="date" name="fecha_limite" value="{{ fecha_limite }}" required class="border border-slate-300 rounded-md px-3 py-2 text-sm">
                 </div>
                 <button type="button" onclick="seleccionarTodos(true)" class="text-xs font-semibold text-slate-600 border border-slate-300 px-3 py-2 rounded-md hover:bg-slate-50">Todos</button>
                 <button type="button" onclick="seleccionarTodos(false)" class="text-xs font-semibold text-slate-600 border border-slate-300 px-3 py-2 rounded-md hover:bg-slate-50">Ninguno</button>
-                <button type="submit" id="btnGenerar" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-md disabled:opacity-40" {% if not candidatos %}disabled{% endif %}>
+                <button type="submit" id="btnGenerar" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-md disabled:opacity-40" {% if not candidatos or not plantillas %}disabled{% endif %}>
                     Generar Word
                 </button>
             </div>
@@ -136,6 +232,16 @@
 </div>
 
 <script>
+function insertarVariable(token) {
+  var ta = document.getElementById('cuerpoPlantilla');
+  if (!ta) return;
+  var start = ta.selectionStart || 0;
+  var end = ta.selectionEnd || 0;
+  var val = ta.value;
+  ta.value = val.slice(0, start) + token + val.slice(end);
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = start + token.length;
+}
 function seleccionarTodos(marcar) {
   document.querySelectorAll('.chk-inmueble').forEach(function (el) { el.checked = !!marcar; });
   actualizarContador();
@@ -145,7 +251,10 @@ function actualizarContador() {
   var el = document.getElementById('contadorSeleccion');
   if (el) el.textContent = String(n);
   var btn = document.getElementById('btnGenerar');
-  if (btn) btn.disabled = n === 0;
+  if (btn) {
+    var hasPlantilla = document.querySelector('#formGenerar select[name="plantilla_id"] option:checked');
+    btn.disabled = n === 0 || !hasPlantilla || !hasPlantilla.value;
+  }
 }
 document.getElementById('formGenerar')?.addEventListener('submit', function (ev) {
   if (document.querySelectorAll('.chk-inmueble:checked').length === 0) {
