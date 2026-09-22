@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse
+from psycopg2.extras import RealDictCursor
 
 import liquidador
 import exportaciones
@@ -149,7 +150,8 @@ async def liquidar_para_bot(request: Request):
     import db
     conn = db.get_connection()
     try:
-        with conn.cursor() as cur:
+        # RealDictCursor: el handler indexa por nombre de columna (fuente_saldo, id, …).
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if obligacion_id:
                 cur.execute(
                     """
