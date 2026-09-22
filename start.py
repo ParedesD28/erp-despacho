@@ -23,6 +23,7 @@ import schema_preflight
 import sms_cartera_runtime
 import sms_saldo_service
 import sms_router
+import usuarios_service
 from observability import log_msg
 
 def _verificar_dependencias_sms() -> None:
@@ -54,6 +55,15 @@ def _ejecutar_mantenimiento_segundo_plano() -> None:
             log_msg("🔑 [SEGURIDAD]", f"Contraseñas heredadas migradas: {migrated}")
     except Exception as exc:
         log_msg("⚠️ [SEGURIDAD]", f"Aviso en migración de credenciales: {exc}")
+    try:
+        perfiles = usuarios_service.ensure_perfiles_schema()
+        log_msg(
+            "👤 [PERFILES]",
+            "Esquema de perfiles verificado",
+            migrados_admin=perfiles.get("migrados_admin", 0),
+        )
+    except Exception as exc:
+        log_msg("⚠️ [PERFILES]", f"Aviso al asegurar perfiles: {exc}")
     log_msg("✅ [BACKGROUND]", "Mantenimiento no estructural completado")
 
 
