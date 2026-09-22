@@ -8,34 +8,34 @@
     <h2 class="text-xl font-semibold text-slate-800">Estado de cuenta PDF → Excel</h2>
 </header>
 
-<div class="p-8 max-w-3xl mx-auto mt-6 space-y-6">
+<div class="p-8 max-w-4xl mx-auto mt-6 space-y-6">
     <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900">
         <p class="font-bold flex items-center gap-2">
             <i data-lucide="shield-alert" class="w-4 h-4"></i>
-            Herramienta de conversión (no escribe a la base de datos)
+            Lote multi-PDF · sin cruces entre cuentas · sin escritura a DB
         </p>
         <p class="mt-1 text-amber-800">
-            Extrae movimientos de estados de cuenta COLON Contabilidad. Revise siempre
-            <strong>fechas detectadas</strong> vs <strong>movimientos extraídos</strong> antes de usar el Excel en gestión.
-            Límite: {{ max_mb }} MB.
+            Puede subir hasta <strong>{{ max_archivos }}</strong> PDF (máx. {{ max_mb }} MB c/u).
+            Cada archivo se procesa aislado: titular/bloque/apto y movimientos quedan sellados a ese PDF.
+            Solo PDF nativos COLON con texto seleccionable (no escaneos).
         </p>
     </div>
 
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div class="bg-slate-900 p-5">
             <h3 class="text-white font-bold flex items-center gap-2">
-                <i data-lucide="file-text" class="w-5 h-5 text-sky-400"></i>
-                Subir PDF
+                <i data-lucide="files" class="w-5 h-5 text-sky-400"></i>
+                Subir uno o varios PDF
             </h3>
         </div>
         <div class="p-6 space-y-4">
-            <input id="pdf-file" type="file" accept=".pdf,application/pdf"
+            <input id="pdf-file" type="file" accept=".pdf,application/pdf" multiple
                    class="block w-full text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-slate-800 file:text-white file:font-semibold hover:file:bg-slate-700" />
             <div class="flex flex-wrap gap-3">
                 <button type="button" id="btn-analizar"
                         class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-bold py-2.5 px-5 rounded-lg">
                     <i data-lucide="scan-search" class="w-4 h-4"></i>
-                    Analizar
+                    Analizar lote
                 </button>
                 <button type="button" id="btn-excel" disabled
                         class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-2.5 px-5 rounded-lg">
@@ -50,24 +50,37 @@
     <div id="resultado" class="hidden bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
-                <p class="text-xs uppercase text-slate-500 font-bold">Fechas detectadas</p>
-                <p id="m-fechas" class="text-2xl font-black text-slate-800 mt-1">—</p>
+                <p class="text-xs uppercase text-slate-500 font-bold">Archivos</p>
+                <p id="m-archivos" class="text-2xl font-black text-slate-800 mt-1">—</p>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
+                <p class="text-xs uppercase text-slate-500 font-bold">OK</p>
+                <p id="m-ok" class="text-2xl font-black text-emerald-700 mt-1">—</p>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
+                <p class="text-xs uppercase text-slate-500 font-bold">Fallidos</p>
+                <p id="m-fail" class="text-2xl font-black text-red-700 mt-1">—</p>
             </div>
             <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
                 <p class="text-xs uppercase text-slate-500 font-bold">Movimientos</p>
                 <p id="m-movs" class="text-2xl font-black text-slate-800 mt-1">—</p>
             </div>
-            <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
-                <p class="text-xs uppercase text-slate-500 font-bold">Omitidos</p>
-                <p id="m-omit" class="text-2xl font-black text-slate-800 mt-1">—</p>
-            </div>
-            <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
-                <p class="text-xs uppercase text-slate-500 font-bold">Saldo final</p>
-                <p id="m-saldo" class="text-2xl font-black text-slate-800 mt-1">—</p>
-            </div>
         </div>
-        <div id="alerta-omit" class="hidden bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg p-3 font-medium">
-            Hay bloques omitidos: revise el PDF o contraste con el Excel antes de usarlo.
+        <div class="overflow-x-auto border border-slate-200 rounded-lg">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-900 text-white text-xs uppercase">
+                    <tr>
+                        <th class="text-left px-3 py-2">Archivo</th>
+                        <th class="text-left px-3 py-2">Titular</th>
+                        <th class="text-left px-3 py-2">Bloque/Apto</th>
+                        <th class="text-right px-3 py-2">Movs</th>
+                        <th class="text-right px-3 py-2">Omit.</th>
+                        <th class="text-right px-3 py-2">Saldo</th>
+                        <th class="text-left px-3 py-2">Estado</th>
+                    </tr>
+                </thead>
+                <tbody id="tabla-cuentas" class="divide-y divide-slate-100"></tbody>
+            </table>
         </div>
     </div>
 </div>
@@ -79,11 +92,18 @@
     const btnAnalizar = document.getElementById('btn-analizar');
     const btnExcel = document.getElementById('btn-excel');
     const resultado = document.getElementById('resultado');
-    const alertaOmit = document.getElementById('alerta-omit');
+    const tabla = document.getElementById('tabla-cuentas');
 
     function money(n) {
         if (n === null || n === undefined) return '—';
         return Number(n).toLocaleString('es-CO');
+    }
+
+    function detailMsg(data) {
+        if (!data) return 'Error';
+        if (typeof data.detail === 'string') return data.detail;
+        if (Array.isArray(data.detail)) return data.detail.map(d => d.msg || d).join('; ');
+        return 'Error al procesar';
     }
 
     function setStatus(msg, isError) {
@@ -91,41 +111,60 @@
         statusEl.className = 'text-sm ' + (isError ? 'text-red-600 font-semibold' : 'text-slate-500');
     }
 
-    async function postFile(url) {
-        const file = fileInput.files && fileInput.files[0];
-        if (!file) {
-            setStatus('Seleccione un PDF primero.', true);
+    function postFiles(url) {
+        const files = fileInput.files;
+        if (!files || !files.length) {
+            setStatus('Seleccione uno o más PDF.', true);
             return null;
         }
         const fd = new FormData();
-        fd.append('archivo', file);
-        const res = await fetch(url, { method: 'POST', body: fd });
-        return res;
+        for (const f of files) fd.append('archivos', f);
+        return fetch(url, { method: 'POST', body: fd });
+    }
+
+    function renderCuentas(cuentas) {
+        tabla.innerHTML = '';
+        (cuentas || []).forEach(c => {
+            const tr = document.createElement('tr');
+            const ok = !c.error && c.movimientos_extraidos > 0 && !c.alerta_calidad;
+            const estado = c.error
+                ? `<span class="text-red-700 font-semibold">${c.error}</span>`
+                : (ok ? '<span class="text-emerald-700 font-semibold">OK</span>' : '<span class="text-amber-700 font-semibold">Revisar</span>');
+            tr.innerHTML = `
+                <td class="px-3 py-2 font-medium text-slate-700">${c.archivo || ''}</td>
+                <td class="px-3 py-2">${c.titular || '—'}</td>
+                <td class="px-3 py-2">B${c.bloque || '—'} · ${c.apartamento || '—'}</td>
+                <td class="px-3 py-2 text-right">${c.movimientos_extraidos ?? 0}</td>
+                <td class="px-3 py-2 text-right">${c.bloques_omitidos ?? 0}</td>
+                <td class="px-3 py-2 text-right">${money(c.saldo_final)}</td>
+                <td class="px-3 py-2">${estado}</td>`;
+            tabla.appendChild(tr);
+        });
     }
 
     btnAnalizar.addEventListener('click', async () => {
         btnExcel.disabled = true;
-        setStatus('Analizando PDF…');
+        setStatus('Analizando lote…');
         try {
-            const res = await postFile('/herramientas/estado-cuenta/analizar');
+            const res = await postFiles('/herramientas/estado-cuenta/analizar');
             if (!res) return;
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                setStatus(data.detail || 'Error al analizar.', true);
+                setStatus(detailMsg(data), true);
                 resultado.classList.add('hidden');
                 return;
             }
-            document.getElementById('m-fechas').textContent = data.fechas_detectadas;
-            document.getElementById('m-movs').textContent = data.movimientos_extraidos;
-            document.getElementById('m-omit').textContent = data.bloques_omitidos;
-            document.getElementById('m-saldo').textContent = money(data.saldo_final);
-            alertaOmit.classList.toggle('hidden', !data.alerta_omisiones);
+            document.getElementById('m-archivos').textContent = data.archivos_recibidos;
+            document.getElementById('m-ok').textContent = data.archivos_ok;
+            document.getElementById('m-fail').textContent = data.archivos_fallidos;
+            document.getElementById('m-movs').textContent = data.movimientos_totales;
+            renderCuentas(data.cuentas);
             resultado.classList.remove('hidden');
-            btnExcel.disabled = !(data.movimientos_extraidos > 0);
+            btnExcel.disabled = !(data.movimientos_totales > 0);
             setStatus(
-                data.movimientos_extraidos > 0
-                    ? 'Listo. Revise las métricas y descargue el Excel si coinciden.'
-                    : 'Sin movimientos detectados.'
+                data.archivos_fallidos
+                    ? `Lote con ${data.archivos_fallidos} fallido(s). Los OK no se cruzan con los fallidos.`
+                    : 'Lote OK. Cada cuenta quedó aislada; puede descargar el Excel.'
             );
             if (window.lucide) lucide.createIcons();
         } catch (e) {
@@ -134,27 +173,28 @@
     });
 
     btnExcel.addEventListener('click', async () => {
-        setStatus('Generando Excel…');
+        setStatus('Generando Excel del lote…');
         try {
-            const res = await postFile('/herramientas/estado-cuenta/excel');
+            const res = await postFiles('/herramientas/estado-cuenta/excel');
             if (!res) return;
             if (!res.ok) {
                 const data = await res.json().catch(() => ({}));
-                setStatus(data.detail || 'Error al generar Excel.', true);
+                setStatus(detailMsg(data), true);
                 return;
             }
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'estado_cuenta.xlsx';
+            a.download = 'estados_cuenta_lote.xlsx';
             document.body.appendChild(a);
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
-            const movs = res.headers.get('X-Movimientos-Extraidos');
-            const fechas = res.headers.get('X-Fechas-Detectadas');
-            setStatus(`Excel descargado (${movs || '?'} movimientos / ${fechas || '?'} fechas).`);
+            setStatus(
+                `Excel descargado (${res.headers.get('X-Archivos-Ok') || '?'} OK / ` +
+                `${res.headers.get('X-Movimientos-Extraidos') || '?'} movimientos).`
+            );
         } catch (e) {
             setStatus('Fallo de red al descargar.', true);
         }

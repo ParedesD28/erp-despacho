@@ -60,7 +60,11 @@ import radicacion_service
 import bot_api
 import agent_supervision
 import estado_cuenta_pdf_service
-from estado_cuenta_pdf_service import EstadoCuentaPdfError, MAX_PDF_BYTES
+from estado_cuenta_pdf_service import (
+    EstadoCuentaPdfError,
+    MAX_ARCHIVOS_LOTE,
+    MAX_PDF_BYTES,
+)
 
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
@@ -1832,77 +1836,83 @@ def vista_estado_cuenta_pdf(request: Request):
         {
             "request": request,
             "max_mb": int(MAX_PDF_BYTES / (1024 * 1024)),
+            "max_archivos": MAX_ARCHIVOS_LOTE,
         },
     )
 
 
-async def _leer_pdf_upload(archivo: UploadFile) -> bytes:
-    if not archivo or not archivo.filename:
-        raise HTTPException(status_code=400, detail="Debe adjuntar un archivo PDF.")
-    contenido = await archivo.read(MAX_PDF_BYTES + 1)
-    try:
-        estado_cuenta_pdf_service.validar_pdf_bytes(contenido, archivo.filename)
-    except EstadoCuentaPdfError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return contenido
+async def _leer_pdfs_upload(archivos: list[UploadFile]) -> list[tuple[str, bytes]]:
+    if not archivos:
+        raise HTTPException(status_code=400, detail="Debe adjuntar al menos un archivo PDF.")
+    # Filtra vacíos que a veces manda el browser con multiple
+    archivos = [a for a in archivos if a and a.filename]
+    if not archivos:
+        raise HTTPException(status_code=400, detail="Debe adjuntar al menos un archivo PDF.")
+    if len(archivos) > MAX_ARCHIVOS_LOTE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Máximo {MAX_ARCHIVOS_LOTE} PDF por lote.",
+        )
+
+    leidos: list[tuple[str, bytes]] = []
+    for archivo in archivos:
+        # Solo tope de lectura aquí; la validación dura queda aislada por archivo en el lote
+        # para que un PDF malo no tumbe las cuentas OK del mismo request.
+        contenido = await archivo.read(MAX_PDF_BYTES + 1)
+        leidos.append((archivo.filename, contenido))
+    return leidos
 
 
 @app.post("/herramientas/estado-cuenta/analizar")
-async def analizar_estado_cuenta_pdf_endpoint(archivo: UploadFile = File(...)):
-    """Analiza el PDF y devuelve métricas de extracción (no escribe a DB)."""
-    contenido = await _leer_pdf_upload(archivo)
+async def analizar_estado_cuenta_pdf_endpoint(archivos: list[UploadFile] = File(...)):
+    """Analiza uno o varios PDF en aislamiento (sin cruces entre cuentas)."""
+    lote = await _leer_pdfs_upload(archivos)
     try:
-        resultado = estado_cuenta_pdf_service.procesar_estado_cuenta_pdf_seguro(
-            contenido, archivo.filename
-        )
+        resultado = estado_cuenta_pdf_service.procesar_lote_estados_cuenta(lote)
     except EstadoCuentaPdfError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         _json_log("ERROR", "estado_cuenta_pdf_analisis_fallo")
-        raise HTTPException(status_code=422, detail="No fue posible leer el PDF.") from None
+        raise HTTPException(status_code=422, detail="No fue posible leer el/los PDF.") from None
 
     return {
-        "fechas_detectadas": resultado["fechas_detectadas"],
-        "movimientos_extraidos": resultado["movimientos_extraidos"],
-        "bloques_omitidos": resultado["bloques_omitidos"],
-        "saldo_final": resultado["saldo_final"],
-        "paginas_leidas": resultado["paginas_leidas"],
-        "alerta_omisiones": resultado["bloques_omitidos"] > 0,
-        "muestra_inicio": resultado["muestra_inicio"],
-        "muestra_fin": resultado["muestra_fin"],
+        "archivos_recibidos": resultado["archivos_recibidos"],
+        "archivos_ok": resultado["archivos_ok"],
+        "archivos_fallidos": resultado["archivos_fallidos"],
+        "movimientos_totales": resultado["movimientos_totales"],
+        "cuentas": resultado["cuentas"],
     }
 
 
 @app.post("/herramientas/estado-cuenta/excel")
-async def exportar_estado_cuenta_pdf_excel(archivo: UploadFile = File(...)):
-    """Convierte PDF → Excel. Solo sesión autenticada; no persiste datos."""
-    contenido = await _leer_pdf_upload(archivo)
+async def exportar_estado_cuenta_pdf_excel(archivos: list[UploadFile] = File(...)):
+    """Convierte 1..N PDF → un Excel (Resumen + Movimientos). Sin persistencia."""
+    lote = await _leer_pdfs_upload(archivos)
     try:
-        resultado = estado_cuenta_pdf_service.procesar_estado_cuenta_pdf_seguro(
-            contenido, archivo.filename
-        )
+        resultado = estado_cuenta_pdf_service.procesar_lote_estados_cuenta(lote)
     except EstadoCuentaPdfError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         _json_log("ERROR", "estado_cuenta_pdf_excel_fallo")
-        raise HTTPException(status_code=422, detail="No fue posible convertir el PDF.") from None
+        raise HTTPException(status_code=422, detail="No fue posible convertir el/los PDF.") from None
 
-    if resultado["movimientos_extraidos"] == 0:
+    if resultado["movimientos_totales"] == 0:
         raise HTTPException(
             status_code=422,
-            detail="No se detectaron movimientos. Verifique que el PDF sea un estado de cuenta COLON.",
+            detail="No se detectaron movimientos en ningún PDF del lote.",
         )
 
-    safe_stem = re.sub(r"[^\w\-]+", "_", Path(archivo.filename or "estado_cuenta").stem)[:60]
     excel = resultado["excel"]
+    n = resultado["archivos_recibidos"]
     return StreamingResponse(
         excel,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f'attachment; filename="Estado_Cuenta_{safe_stem}.xlsx"',
-            "X-Fechas-Detectadas": str(resultado["fechas_detectadas"]),
-            "X-Movimientos-Extraidos": str(resultado["movimientos_extraidos"]),
-            "X-Bloques-Omitidos": str(resultado["bloques_omitidos"]),
+            "Content-Disposition": f'attachment; filename="Estados_Cuenta_lote_{n}.xlsx"',
+            "X-Archivos-Recibidos": str(resultado["archivos_recibidos"]),
+            "X-Archivos-Ok": str(resultado["archivos_ok"]),
+            "X-Archivos-Fallidos": str(resultado["archivos_fallidos"]),
+            "X-Movimientos-Extraidos": str(resultado["movimientos_totales"]),
         },
     )
 
