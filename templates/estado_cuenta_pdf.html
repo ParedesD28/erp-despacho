@@ -96,6 +96,10 @@
     const resultado = document.getElementById('resultado');
     const tabla = document.getElementById('tabla-cuentas');
 
+    // Cache en memoria: el <input type="file"> a veces se vacía tras el análisis
+    // (navegador/sesión) y sin esto "Descargar Excel" pide volver a cargar.
+    let cachedFiles = [];
+
     function money(n) {
         if (n === null || n === undefined) return '—';
         return Number(n).toLocaleString('es-CO');
@@ -116,9 +120,25 @@
         statusEl.className = 'text-sm ' + (isError ? 'text-red-600 font-semibold' : 'text-slate-500');
     }
 
-    function selectedFiles() {
-        return fileInput.files ? Array.from(fileInput.files) : [];
+    function syncCacheFromInput() {
+        const fromInput = fileInput.files ? Array.from(fileInput.files) : [];
+        if (fromInput.length) cachedFiles = fromInput;
+        return cachedFiles;
     }
+
+    function selectedFiles() {
+        // Preferir caché; si el input aún tiene archivos, refrescar caché.
+        return syncCacheFromInput();
+    }
+
+    fileInput.addEventListener('change', () => {
+        cachedFiles = fileInput.files ? Array.from(fileInput.files) : [];
+        btnExcel.disabled = true;
+        resultado.classList.add('hidden');
+        if (cachedFiles.length) {
+            setStatus(`${cachedFiles.length} PDF listo(s) en memoria. Pulse Analizar.`);
+        }
+    });
 
     function chunk(arr, size) {
         const out = [];
@@ -158,6 +178,8 @@
             setStatus('Seleccione uno o más PDF.', true);
             return;
         }
+        // Congelar la lista usada en este análisis para la descarga posterior.
+        cachedFiles = files.slice();
         btnExcel.disabled = true;
         const groups = chunk(files, BATCH_SIZE);
         let cuentas = [];
@@ -190,8 +212,8 @@
             btnExcel.disabled = !(movs > 0);
             setStatus(
                 fail
-                    ? `Listo: ${ok} OK, ${fail} fallido(s). Los OK no se cruzaron con fallidos.`
-                    : `Listo: ${ok} cuenta(s), ${movs} movimientos. Puede descargar el Excel.`
+                    ? `Listo: ${ok} OK, ${fail} fallido(s). Pulse Descargar Excel (archivos en memoria: ${cachedFiles.length}).`
+                    : `Listo: ${ok} cuenta(s), ${movs} movimientos. Pulse Descargar Excel (no hace falta volver a cargar).`
             );
             if (window.lucide) lucide.createIcons();
         } catch (e) {
@@ -202,10 +224,12 @@
     btnExcel.addEventListener('click', async () => {
         const files = selectedFiles();
         if (!files.length) {
-            setStatus('Seleccione uno o más PDF.', true);
+            setStatus('Se perdieron los PDF de la sesión. Vuelva a seleccionarlos una sola vez y analice de nuevo.', true);
+            btnExcel.disabled = true;
             return;
         }
         const groups = chunk(files, BATCH_SIZE);
+        btnExcel.disabled = true;
         try {
             if (groups.length === 1) {
                 setStatus('Generando Excel…');
@@ -214,6 +238,7 @@
                     let data = {};
                     try { data = await res.json(); } catch (_) {}
                     setStatus(detailMsg(data, res), true);
+                    btnExcel.disabled = false;
                     return;
                 }
                 const blob = await res.blob();
@@ -226,12 +251,13 @@
                 a.remove();
                 URL.revokeObjectURL(url);
                 setStatus('Excel descargado.');
+                btnExcel.disabled = false;
                 return;
             }
 
-            // Varios grupos → ZIP con un Excel por grupo (evita timeout de 35 de un golpe).
             if (!window.JSZip) {
                 setStatus('No se pudo cargar JSZip. Descargue en grupos de 10.', true);
+                btnExcel.disabled = false;
                 return;
             }
             const zip = new JSZip();
@@ -245,6 +271,7 @@
                     let data = {};
                     try { data = await res.json(); } catch (_) {}
                     setStatus(detailMsg(data, res), true);
+                    btnExcel.disabled = false;
                     return;
                 }
                 const buf = await res.arrayBuffer();
@@ -260,9 +287,11 @@
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
-            setStatus(`ZIP descargado (${groups.length} Excel). Cada hoja Resumen/Movimientos es de su grupo.`);
+            setStatus(`ZIP descargado (${groups.length} Excel).`);
+            btnExcel.disabled = false;
         } catch (e) {
             setStatus('Fallo de red al descargar (posible timeout). Pruebe de a 10 PDF.', true);
+            btnExcel.disabled = false;
         }
     });
 })();
