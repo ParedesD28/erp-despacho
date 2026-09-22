@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm justify-between">
+    <div>
+        <h2 class="text-xl font-semibold text-slate-800">Cartas de cobro prejurídico</h2>
+        <p class="text-xs text-slate-500">Word (.docx) · una carta por inmueble · saldo gran_total</p>
+    </div>
+    <span class="bg-amber-50 text-amber-800 text-xs font-bold px-3 py-1 rounded-full border border-amber-200">
+        Máx. {{ max_lote or 100 }} por lote
+    </span>
+</header>
+
+<div class="p-8 space-y-6">
+    <form method="GET" action="/cartas-cobro" class="bg-white border border-slate-200 rounded-lg shadow-sm p-6">
+        <h3 class="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">1. Filtrar por conjunto</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div class="lg:col-span-2">
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Conjunto residencial</label>
+                <select name="conjunto_id" required class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+                    <option value="">Seleccione un conjunto</option>
+                    {% for c in conjuntos %}
+                    <option value="{{ c.id }}" {% if conjunto_id == c.id %}selected{% endif %}>{{ c.nombre }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Tipo de cartera</label>
+                <select name="tipo_cartera" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+                    <option value="PREJURIDICO" {% if tipo_cartera == 'PREJURIDICO' %}selected{% endif %}>Prejurídico</option>
+                    <option value="JURIDICO" {% if tipo_cartera == 'JURIDICO' %}selected{% endif %}>Jurídico</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Fecha de corte (saldo)</label>
+                <input type="date" name="fecha_corte" value="{{ fecha_corte }}" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-slate-500 mb-1">Saldo mínimo</label>
+                <input type="number" name="saldo_minimo" value="{{ saldo_minimo or 0 }}" min="0" step="1000" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+            </div>
+        </div>
+        <div class="mt-4 flex justify-end">
+            <button type="submit" class="bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold px-4 py-2 rounded-md">
+                Buscar candidatos
+            </button>
+        </div>
+    </form>
+
+    {% if conjunto_id %}
+    <form method="POST" action="/cartas-cobro/generar" class="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden" id="formGenerar">
+        <input type="hidden" name="conjunto_id" value="{{ conjunto_id }}">
+        <input type="hidden" name="tipo_cartera" value="{{ tipo_cartera }}">
+        <input type="hidden" name="fecha_corte" value="{{ fecha_corte }}">
+        <input type="hidden" name="saldo_minimo" value="{{ saldo_minimo or 0 }}">
+
+        <div class="px-6 py-4 border-b border-slate-100 flex flex-wrap items-end justify-between gap-4">
+            <div>
+                <h3 class="text-sm font-bold text-slate-700 uppercase tracking-wide">2. Seleccionar cartas</h3>
+                <p class="text-xs text-slate-500 mt-1">{{ candidatos|length }} inmueble(s) con saldo verificado. Dedupe por unidad.</p>
+            </div>
+            <div class="flex flex-wrap items-end gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">Fecha límite de pago</label>
+                    <input type="date" name="fecha_limite" value="{{ fecha_limite }}" required class="border border-slate-300 rounded-md px-3 py-2 text-sm">
+                </div>
+                <button type="button" onclick="seleccionarTodos(true)" class="text-xs font-semibold text-slate-600 border border-slate-300 px-3 py-2 rounded-md hover:bg-slate-50">Todos</button>
+                <button type="button" onclick="seleccionarTodos(false)" class="text-xs font-semibold text-slate-600 border border-slate-300 px-3 py-2 rounded-md hover:bg-slate-50">Ninguno</button>
+                <button type="submit" id="btnGenerar" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-md disabled:opacity-40" {% if not candidatos %}disabled{% endif %}>
+                    Generar Word
+                </button>
+            </div>
+        </div>
+
+        <div class="overflow-x-auto max-h-[560px] overflow-y-auto">
+            <table class="w-full text-left text-sm text-slate-600">
+                <thead class="bg-slate-900 text-white sticky top-0 z-10">
+                    <tr>
+                        <th class="px-4 py-3 w-10"><input type="checkbox" class="rounded" onclick="seleccionarTodos(this.checked)" {% if not candidatos %}disabled{% endif %}></th>
+                        <th class="px-4 py-3 font-medium">Unidad</th>
+                        <th class="px-4 py-3 font-medium">Deudor principal</th>
+                        <th class="px-4 py-3 font-medium">Atn. / Codeudor</th>
+                        <th class="px-4 py-3 font-medium">Cartera</th>
+                        <th class="px-4 py-3 font-medium text-right">Gran total</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for c in candidatos %}
+                    <tr class="hover:bg-slate-50">
+                        <td class="px-4 py-3">
+                            <input type="checkbox" name="inmueble_ids" value="{{ c.inmueble_id }}" class="chk-inmueble rounded" onchange="actualizarContador()">
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="font-semibold text-slate-800">{{ c.torre_apto }}</div>
+                            <div class="text-xs text-slate-400">ID {{ c.inmueble_id }}{% if c.radicado_interno %} · {{ c.radicado_interno }}{% endif %}</div>
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="font-semibold text-slate-800">{{ c.deudor_nombre }}</div>
+                            <div class="text-xs text-slate-400">C.C. {{ c.deudor_identificacion }}</div>
+                        </td>
+                        <td class="px-4 py-3 text-xs">
+                            {% if c.codeudor_nombre %}
+                                <span class="text-slate-700">{{ c.codeudor_nombre }}</span>
+                            {% else %}
+                                <span class="text-slate-300 italic">Sin codeudor</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="text-xs font-semibold px-2 py-1 rounded border {% if c.tipo_cartera == 'JURIDICO' %}bg-blue-50 text-blue-700 border-blue-200{% else %}bg-amber-50 text-amber-800 border-amber-200{% endif %}">
+                                {{ c.tipo_cartera or 'PREJURIDICO' }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 text-right font-bold text-slate-800 whitespace-nowrap">
+                            $ {{ "{:,.0f}".format(c.saldo_total or 0).replace(",", ".") }}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="px-4 py-10 text-center text-slate-400">
+                            No hay candidatos con saldo verificado para este conjunto y filtros.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="px-6 py-3 bg-slate-50 border-t border-slate-100 text-xs text-slate-500">
+            Seleccionados: <strong id="contadorSeleccion" class="text-slate-800">0</strong>
+        </div>
+    </form>
+    {% else %}
+    <div class="bg-slate-50 border border-dashed border-slate-300 rounded-lg p-10 text-center text-slate-500 text-sm">
+        Seleccione un conjunto y pulse <strong>Buscar candidatos</strong> para listar inmuebles con deuda.
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function seleccionarTodos(marcar) {
+  document.querySelectorAll('.chk-inmueble').forEach(function (el) { el.checked = !!marcar; });
+  actualizarContador();
+}
+function actualizarContador() {
+  var n = document.querySelectorAll('.chk-inmueble:checked').length;
+  var el = document.getElementById('contadorSeleccion');
+  if (el) el.textContent = String(n);
+  var btn = document.getElementById('btnGenerar');
+  if (btn) btn.disabled = n === 0;
+}
+document.getElementById('formGenerar')?.addEventListener('submit', function (ev) {
+  if (document.querySelectorAll('.chk-inmueble:checked').length === 0) {
+    ev.preventDefault();
+    alert('Seleccione al menos un inmueble.');
+  }
+});
+actualizarContador();
+</script>
+{% endblock %}
