@@ -60,9 +60,10 @@ def generar_pdf_liquidacion(inmueble_id, fecha_corte, resultados, resumen, inm_i
     if not inm_info:
         raise ValueError("No existe informacion del inmueble")
 
-    os.makedirs("static/pdfs", exist_ok=True)
+    import pdf_storage
+
     filename = f"Estado_Cuenta_{int(inmueble_id)}_{secrets.token_hex(8)}.pdf"
-    path = os.path.join("static", "pdfs", filename)
+    path = str(pdf_storage.resolve_pdf(filename))
 
     page_width, page_height = landscape(A4)
     left = right = 12 * mm

@@ -1,1 +1,5 @@
 .env
+private_pdfs/*
+!private_pdfs/.gitkeep
+static/pdfs/*__pycache__/
+*.pyc
