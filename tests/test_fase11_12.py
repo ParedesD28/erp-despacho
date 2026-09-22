@@ -130,6 +130,19 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertIn("procesos no-VERBAL sin obligación canónica", source)
         self.assertIn("20260919_fase15_completar_obligaciones_ejecutivos_historicos", source)
 
+    def test_compat_vista_agente_cobranza_partes(self):
+        """Vista de solo lectura para Agentecobranza tras Fase 14."""
+        path = ROOT / "migrations" / "20260922_agente_cobranza_partes_compat.sql"
+        self.assertTrue(path.exists(), msg="Falta migración de compatibilidad del agente")
+        source = path.read_text(encoding="utf-8")
+        self.assertIn("CREATE OR REPLACE VIEW", source)
+        self.assertIn("proceso_partes", source)
+        self.assertIn("identificacion_demandado", source)
+        self.assertIn("20260922_agente_cobranza_partes_compat", source)
+        # No reintroducir tabla física ni columnas legacy en procesos.
+        self.assertNotIn("CREATE TABLE", source)
+        self.assertNotIn("id_demandado", source)
+
     def test_bot_liquidar_usa_realdictcursor(self):
         """Evita TypeError al indexar ob['fuente_saldo'] / ob['id'] en /api/bot/liquidar."""
         source = (ROOT / "bot_api.py").read_text(encoding="utf-8")

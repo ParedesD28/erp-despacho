@@ -54,7 +54,11 @@ Antes de declarar producción estable, comprobar:
 
 ## Importante sobre la base de datos
 
-Este repositorio no tiene acceso directo a las restricciones reales de Neon. Conviene verificar en Neon que existan las claves foráneas, `UNIQUE` e índices apropiados para `contactos.identificacion`, `procesos.radicado_interno`, `procesos.inmueble_id`, `procesos_litisconsorcio.radicado_interno` y las tablas de auditoría/CRM.
+Este repositorio no tiene acceso directo a las restricciones reales de Neon. Conviene verificar en Neon que existan las claves foráneas, `UNIQUE` e índices apropiados para `contactos.identificacion`, `procesos.radicado_interno`, `procesos.inmueble_id` y las tablas de auditoría/CRM.
+
+Tras Fase 14 la tabla física `procesos_litisconsorcio` ya no existe. El agente de cobranza (Agentecobranza) aún consulta ese nombre; la migración `20260922_agente_cobranza_partes_compat.sql` crea una vista de solo lectura con columnas `radicado_interno`, `identificacion_demandado`, `es_principal` y `fecha_vinculacion` proyectadas desde `proceso_partes` + `contactos` (rol `DEMANDADO`). Hay que aplicarla en Neon de producción para que el webhook de WhatsApp deje de fallar con `UndefinedTable`.
+
+La fuente canónica de partes sigue siendo `proceso_partes`. A medio plazo Agentecobranza debe dejar de referenciar el nombre legacy.
 
 El motor financiero no se modifica en este endurecimiento: sigue siendo la fuente de verdad para la liquidación.
 
