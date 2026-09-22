@@ -253,7 +253,12 @@ def servir_pdf_bot(filename: str, expires: int, token: str):
     if not token or not hmac.compare_digest(expected, token):
         raise HTTPException(status_code=403, detail="Enlace no autorizado")
 
-    path = Path("static") / "pdfs" / filename
+    import pdf_storage
+
+    try:
+        path = pdf_storage.resolve_pdf(filename)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Documento no encontrado")
 

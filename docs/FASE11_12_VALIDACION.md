@@ -46,14 +46,21 @@ Los acuerdos del bot validan la identificación reportante contra `obligacion_pa
 
 ### PDF
 
-`exportaciones.generar_pdf_liquidacion()` continúa generando archivos en `static/pdfs`.
+`exportaciones.generar_pdf_liquidacion()` genera archivos en `private_pdfs/` (fuera de StaticFiles).
 
-El acceso público se realiza mediante URL firmada HMAC con:
+El acceso se realiza mediante:
 
-- expiración;
+- URL firmada HMAC `/api/bot/pdf/...` (bot);
+- ruta autenticada por sesión `/pdfs/{filename}` (UI / paz y salvo);
+
+con:
+
+- expiración (enlace firmado);
 - validación de firma;
 - rechazo de traversal mediante `Path(filename).name`;
-- acceso restringido a archivos dentro de `static/pdfs`.
+- acceso restringido al directorio privado `private_pdfs`.
+
+`/static/pdfs/` no es ruta pública (middleware).
 
 No se reinventó el pipeline PDF existente.
 

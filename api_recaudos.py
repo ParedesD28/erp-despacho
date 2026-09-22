@@ -401,7 +401,8 @@ def aprobar_paz_y_salvo_humano(solicitud_id: int, request: Request, usuario_apro
                 )
                 
                 filename = os.path.basename(pdf_path)
-                url_publica = f"{PUBLIC_BASE_URL}/static/pdfs/{filename}"
+                # Ruta autenticada por sesión ERP (no StaticFiles público).
+                url_publica = f"{PUBLIC_BASE_URL}/pdfs/{filename}"
 
                 # Actualizar estado de la solicitud y conciliación del recaudo
                 cur.execute("""
