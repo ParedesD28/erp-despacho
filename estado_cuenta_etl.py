@@ -304,7 +304,7 @@ def _nombre_hoja(titular: str, apartamento: str, usados: set[str]) -> str:
 
 
 def armar_certificados(consolidado: pd.DataFrame) -> list[dict]:
-    """Una tabla por deudor, en el orden del certificado: mes, cuotas y saldo corrido."""
+    """Una tabla por deudor. El saldo nace en el último mes y crece hacia arriba."""
     if consolidado is None or consolidado.empty:
         return []
     trabajo = consolidado.sort_values(["Archivo", "Titular", "Periodo"], kind="mergesort")
@@ -313,23 +313,41 @@ def armar_certificados(consolidado: pd.DataFrame) -> list[dict]:
     salida: list[dict] = []
     for clave, grupo in trabajo.groupby(claves, dropna=False, sort=False):
         grupo = grupo.sort_values("Periodo", kind="mergesort")
-        saldo = 0.0
-        filas = []
+        base = []
         for _, row in grupo.iterrows():
             cuota = round(float(row["Valor Cuota"] or 0), 2)
             extra = round(float(row["Valor Extras"] or 0), 2)
-            saldo = round(saldo + cuota + extra, 2)
             periodo = str(row["Periodo"])
             anio, mes = periodo.split("-")
-            filas.append(
+            base.append(
                 {
                     "MES": _MESES[int(mes)],
                     "AÑO": int(anio),
                     "CUOTAS ORDINARIAS": cuota or None,
                     "CUOTAS EXTRAORDINARIAS": extra or None,
                     "FECHA CAUSACION": row.get("Fecha Causacion") or "",
-                    "SALDO": saldo,
                     "CONCEPTOS ORIGINALES": row.get("Conceptos Originales") or "",
+                    "_cuota": cuota,
+                    "_extra": extra,
+                }
+            )
+        # Ancla en el último mes. Cada fila de arriba = saldo de abajo + cobro de esta fila.
+        saldos = [0.0] * len(base)
+        if base:
+            saldos[-1] = round(base[-1]["_cuota"] + base[-1]["_extra"], 2)
+            for i in range(len(base) - 2, -1, -1):
+                saldos[i] = round(saldos[i + 1] + base[i]["_cuota"] + base[i]["_extra"], 2)
+        filas = []
+        for item, saldo in zip(base, saldos):
+            filas.append(
+                {
+                    "MES": item["MES"],
+                    "AÑO": item["AÑO"],
+                    "CUOTAS ORDINARIAS": item["CUOTAS ORDINARIAS"],
+                    "CUOTAS EXTRAORDINARIAS": item["CUOTAS EXTRAORDINARIAS"],
+                    "FECHA CAUSACION": item["FECHA CAUSACION"],
+                    "SALDO": saldo,
+                    "CONCEPTOS ORIGINALES": item["CONCEPTOS ORIGINALES"],
                 }
             )
         salida.append(

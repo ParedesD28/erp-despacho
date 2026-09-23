@@ -104,9 +104,12 @@ class CorteMoraTests(unittest.TestCase):
         self.assertEqual(len(hojas), 1)
         tabla = next(iter(hojas.values()))["tabla"]
         marzo = tabla.loc[tabla["MES"] == "MARZO"].iloc[0]
+        agosto = tabla.loc[tabla["MES"] == "AGOSTO"].iloc[0]
         self.assertEqual(marzo["CUOTAS ORDINARIAS"], 10)
         self.assertEqual(marzo["CUOTAS EXTRAORDINARIAS"], 10)
-        self.assertEqual(marzo["SALDO"], 20)
+        # Último mes = solo su cobro (10). Marzo suma ese saldo de abajo hacia arriba: 70.
+        self.assertEqual(agosto["SALDO"], 10)
+        self.assertEqual(marzo["SALDO"], 70)
         self.assertTrue(pd.isna(tabla.loc[tabla["MES"] == "ABRIL", "CUOTAS EXTRAORDINARIAS"].iloc[0]))
         self.assertNotIn("2024-01-01", tabla["FECHA CAUSACION"].astype(str).tolist())
 
