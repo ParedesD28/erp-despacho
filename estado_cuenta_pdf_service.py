@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import io
 import re
+import secrets
+import time
 from pathlib import Path
+from threading import Lock
 from typing import BinaryIO, Union
 
 import pandas as pd
@@ -428,24 +431,37 @@ def _estilizar_hoja_movimientos(ws) -> None:
         ws.column_dimensions[letter].width = width
 
 
-def _estilizar_hoja_simple(ws, max_col: int = 2) -> None:
+def _estilizar_encabezado(ws, header_row: int = 1) -> None:
+    """Solo la fila de títulos. Evita recorrer miles de celdas en Render."""
     header_fill = PatternFill("solid", fgColor="1E3A8A")
     header_font = Font(name="Calibri", bold=True, color="FFFFFF")
-    thin = Border(
-        left=Side(style="thin", color="CBD5E1"),
-        right=Side(style="thin", color="CBD5E1"),
-        top=Side(style="thin", color="CBD5E1"),
-        bottom=Side(style="thin", color="CBD5E1"),
-    )
-    for cell in ws[1]:
+    for cell in ws[header_row]:
+        if cell.value is None:
+            continue
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = thin
-    ws.freeze_panes = "A2"
-    for row in ws.iter_rows(min_row=2, max_row=max(ws.max_row, 2), max_col=max_col):
+    ws.freeze_panes = f"A{header_row + 1}"
+
+
+def _formato_dinero(ws, nombres: set[str], header_row: int = 1) -> None:
+    headers = {cell.value: cell.column for cell in ws[header_row] if cell.value}
+    columnas = [headers[nombre] for nombre in nombres if nombre in headers]
+    if not columnas or ws.max_row <= header_row:
+        return
+    for row in ws.iter_rows(
+        min_row=header_row + 1,
+        max_row=ws.max_row,
+        min_col=min(columnas),
+        max_col=max(columnas),
+    ):
         for cell in row:
-            cell.border = thin
+            if cell.column in columnas and isinstance(cell.value, (int, float)):
+                cell.number_format = "#,##0"
+
+
+def _estilizar_hoja_simple(ws, max_col: int = 2) -> None:
+    _estilizar_encabezado(ws, 1)
 
 
 def _sellar_archivo(rows: list[dict], filename: str | None) -> list[dict]:
@@ -550,20 +566,40 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
                 ws_cert["B4"] = cert["codigo_cuenta"]
                 ws_cert["A5"] = "Inicio mora"
                 ws_cert["B5"] = cert["fecha_inicio_mora"]
-                ws_cert.column_dimensions["A"].width = 28
-                ws_cert.column_dimensions["C"].width = 24
+                _estilizar_encabezado(ws_cert, 7)
+                _formato_dinero(
+                    ws_cert,
+                    {"CUOTAS ORDINARIAS", "CUOTAS EXTRAORDINARIAS", "SALDO"},
+                    header_row=7,
+                )
+                ws_cert.column_dimensions["A"].width = 16
+                ws_cert.column_dimensions["C"].width = 22
                 ws_cert.column_dimensions["D"].width = 26
                 ws_cert.column_dimensions["G"].width = 42
-            _estilizar_hoja_simple(writer.book["Depurado"], max_col=16)
-            _estilizar_hoja_simple(writer.book["Consolidado"], max_col=11)
-            _estilizar_hoja_simple(writer.book["Inicio Mora"], max_col=10)
-        _estilizar_hoja_simple(writer.book["Resumen"], max_col=13)
+            _estilizar_encabezado(writer.book["Depurado"])
+            _estilizar_encabezado(writer.book["Consolidado"])
+            _estilizar_encabezado(writer.book["Inicio Mora"])
+            _formato_dinero(
+                writer.book["Depurado"],
+                {"Valor", "Abono", "Saldo Inverso", "Diferencia Mora"},
+            )
+        _estilizar_encabezado(writer.book["Resumen"])
+        _estilizar_encabezado(writer.book["Movimientos"])
+        _formato_dinero(writer.book["Movimientos"], set(_MONEY_COLS))
         for col in writer.book["Resumen"].columns:
             letter = get_column_letter(col[0].column)
             writer.book["Resumen"].column_dimensions[letter].width = 18
         writer.book["Resumen"].column_dimensions["A"].width = 36
         writer.book["Resumen"].column_dimensions["B"].width = 36
-        _estilizar_hoja_movimientos(writer.book["Movimientos"])
+        for idx, name in enumerate(_COLUMNS, start=1):
+            letter = get_column_letter(idx)
+            if name in ("Concepto", "Titular", "Archivo"):
+                width = 42
+            elif name in ("Bloque", "Apartamento", "Codigo Cuenta"):
+                width = 14
+            else:
+                width = 15
+            writer.book["Movimientos"].column_dimensions[letter].width = width
     output.seek(0)
     return output
 
@@ -602,8 +638,55 @@ def procesar_estado_cuenta_pdf_seguro(
     return out
 
 
+_CACHE_TTL_S = 900
+_CACHE_MAX = 8
+_lote_cache: dict[str, tuple[float, dict]] = {}
+_cache_lock = Lock()
+
+
+def _guardar_lote(cuentas: list[dict], depuracion: dict | None) -> str:
+    cache_id = secrets.token_urlsafe(16)
+    ahora = time.time()
+    with _cache_lock:
+        vencidos = [clave for clave, (expira, _) in _lote_cache.items() if expira < ahora]
+        for clave in vencidos:
+            _lote_cache.pop(clave, None)
+        while len(_lote_cache) >= _CACHE_MAX:
+            antiguo = min(_lote_cache, key=lambda clave: _lote_cache[clave][0])
+            _lote_cache.pop(antiguo, None)
+        _lote_cache[cache_id] = (ahora + _CACHE_TTL_S, {"cuentas": cuentas, "depuracion": depuracion, "excel": None})
+    return cache_id
+
+
+def excel_desde_cache(cache_id: str) -> io.BytesIO | None:
+    """Arma el Excel con el análisis ya hecho. None si el servidor se reinició."""
+    if not cache_id:
+        return None
+    with _cache_lock:
+        item = _lote_cache.get(cache_id)
+        if not item or item[0] < time.time():
+            _lote_cache.pop(cache_id, None)
+            return None
+        payload = item[1]
+        listo = payload.get("excel")
+    if listo is not None:
+        return io.BytesIO(listo)
+    excel = generar_excel_lote(payload["cuentas"], payload["depuracion"])
+    data = excel.getvalue()
+    with _cache_lock:
+        vigente = _lote_cache.get(cache_id)
+        if vigente:
+            vigente[1]["excel"] = data
+            vigente[1]["cuentas"] = []
+            vigente[1]["depuracion"] = None
+    excel.seek(0)
+    return excel
+
+
 def procesar_lote_estados_cuenta(
     archivos: list[tuple[str, bytes]],
+    *,
+    incluir_excel: bool = True,
 ) -> dict:
     """
     Procesa N PDFs en aislamiento estricto (sin cruces cuenta↔cuenta).
@@ -712,12 +795,22 @@ def procesar_lote_estados_cuenta(
                 str(cuenta.get("codigo_cuenta") or ""),
             )
             cuenta["fecha_inicio_mora"] = cortes.get(clave) or ""
-    excel = generar_excel_lote(cuentas, depuracion)
+    excel = generar_excel_lote(cuentas, depuracion) if incluir_excel else None
+    cache_id = _guardar_lote(cuentas, depuracion)
+    if excel is not None:
+        with _cache_lock:
+            guardado = _lote_cache.get(cache_id)
+            if guardado:
+                guardado[1]["excel"] = excel.getvalue()
+                guardado[1]["cuentas"] = []
+                guardado[1]["depuracion"] = None
+                excel.seek(0)
     return {
         "archivos_recibidos": len(archivos),
         "archivos_ok": ok,
         "archivos_fallidos": fallidos,
         "movimientos_totales": sum(c.get("movimientos_extraidos", 0) for c in cuentas),
+        "cache_id": cache_id,
         "cuentas": [
             {k: v for k, v in c.items() if k != "rows"} | {"muestra_filas": len(c.get("rows") or [])}
             for c in cuentas

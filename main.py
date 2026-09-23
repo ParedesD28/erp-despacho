@@ -1753,7 +1753,7 @@ async def analizar_estado_cuenta_pdf_endpoint(archivos: list[UploadFile] = File(
     try:
         # Hilo aparte: no bloquea health-checks ni el event loop de Render.
         resultado = await asyncio.to_thread(
-            estado_cuenta_pdf_service.procesar_lote_estados_cuenta, lote
+            estado_cuenta_pdf_service.procesar_lote_estados_cuenta, lote, incluir_excel=False
         )
     except EstadoCuentaPdfError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1770,45 +1770,60 @@ async def analizar_estado_cuenta_pdf_endpoint(archivos: list[UploadFile] = File(
         "archivos_ok": resultado["archivos_ok"],
         "archivos_fallidos": resultado["archivos_fallidos"],
         "movimientos_totales": resultado["movimientos_totales"],
+        "cache_id": resultado.get("cache_id") or "",
         "cuentas": resultado["cuentas"],
     }
 
 
 @app.post("/herramientas/estado-cuenta/excel")
-async def exportar_estado_cuenta_pdf_excel(archivos: list[UploadFile] = File(...)):
-    """Convierte 1..N PDF → un Excel (Resumen + Movimientos). Sin persistencia."""
-    lote = await _leer_pdfs_upload(archivos)
-    try:
-        resultado = await asyncio.to_thread(
-            estado_cuenta_pdf_service.procesar_lote_estados_cuenta, lote
-        )
-    except EstadoCuentaPdfError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        _json_log("ERROR", "estado_cuenta_pdf_excel_fallo", error=type(exc).__name__)
-        raise HTTPException(
-            status_code=422,
-            detail=f"No fue posible convertir el/los PDF ({type(exc).__name__}). "
-            "Si el lote es grande, intente en grupos de 10.",
-        ) from None
-
-    if resultado["movimientos_totales"] == 0:
-        raise HTTPException(
-            status_code=422,
-            detail="No se detectaron movimientos en ningún PDF del lote.",
-        )
-
-    excel = resultado["excel"]
-    n = resultado["archivos_recibidos"]
+async def exportar_estado_cuenta_pdf_excel(
+    cache_id: str = Form(""),
+    archivos: list[UploadFile] | None = File(None),
+):
+    """Excel del lote. Si hay cache_id, no vuelve a leer los PDF."""
+    excel = None
+    n = 0
+    ok = 0
+    fallidos = 0
+    movs = 0
+    if cache_id:
+        excel = await asyncio.to_thread(estado_cuenta_pdf_service.excel_desde_cache, cache_id)
+        if excel is None:
+            raise HTTPException(status_code=404, detail="El análisis expiró. Se reintentará con los PDF.")
+    if excel is None:
+        lote = await _leer_pdfs_upload(archivos or [])
+        try:
+            resultado = await asyncio.to_thread(
+                estado_cuenta_pdf_service.procesar_lote_estados_cuenta, lote, incluir_excel=True
+            )
+        except EstadoCuentaPdfError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            _json_log("ERROR", "estado_cuenta_pdf_excel_fallo", error=type(exc).__name__)
+            raise HTTPException(
+                status_code=422,
+                detail=f"No fue posible convertir el/los PDF ({type(exc).__name__}). "
+                "Si el lote es grande, intente en grupos de 10.",
+            ) from None
+        if resultado["movimientos_totales"] == 0:
+            raise HTTPException(
+                status_code=422,
+                detail="No se detectaron movimientos en ningún PDF del lote.",
+            )
+        excel = resultado["excel"]
+        n = resultado["archivos_recibidos"]
+        ok = resultado["archivos_ok"]
+        fallidos = resultado["archivos_fallidos"]
+        movs = resultado["movimientos_totales"]
     return StreamingResponse(
         excel,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f'attachment; filename="Estados_Cuenta_lote_{n}.xlsx"',
-            "X-Archivos-Recibidos": str(resultado["archivos_recibidos"]),
-            "X-Archivos-Ok": str(resultado["archivos_ok"]),
-            "X-Archivos-Fallidos": str(resultado["archivos_fallidos"]),
-            "X-Movimientos-Extraidos": str(resultado["movimientos_totales"]),
+            "Content-Disposition": f'attachment; filename="Estados_Cuenta_lote_{n or "cache"}.xlsx"',
+            "X-Archivos-Recibidos": str(n),
+            "X-Archivos-Ok": str(ok),
+            "X-Archivos-Fallidos": str(fallidos),
+            "X-Movimientos-Extraidos": str(movs),
         },
     )
 

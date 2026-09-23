@@ -101,6 +101,7 @@
     // Cache en memoria: el <input type="file"> a veces se vacía tras el análisis
     // (navegador/sesión) y sin esto "Descargar Excel" pide volver a cargar.
     let cachedFiles = [];
+    let cacheIds = [];
 
     function money(n) {
         if (n === null || n === undefined) return '—';
@@ -135,6 +136,7 @@
 
     fileInput.addEventListener('change', () => {
         cachedFiles = fileInput.files ? Array.from(fileInput.files) : [];
+        cacheIds = [];
         btnExcel.disabled = true;
         resultado.classList.add('hidden');
         if (cachedFiles.length) {
@@ -152,6 +154,22 @@
         const fd = new FormData();
         files.forEach(f => fd.append('archivos', f));
         return fetch(url, { method: 'POST', body: fd });
+    }
+
+    async function fetchExcel(cacheId, files) {
+        if (cacheId) {
+            const fd = new FormData();
+            fd.append('cache_id', cacheId);
+            const res = await fetch('/herramientas/estado-cuenta/excel', { method: 'POST', body: fd });
+            if (res.ok || res.status !== 404) return res;
+        }
+        if (!files || !files.length) {
+            return new Response(
+                JSON.stringify({ detail: 'El análisis expiró. Vuelva a seleccionar los PDF y pulse Analizar.' }),
+                { status: 400, headers: { 'Content-Type': 'application/json' } }
+            );
+        }
+        return postChunk('/herramientas/estado-cuenta/excel', files);
     }
 
     function renderCuentas(cuentas) {
@@ -183,6 +201,7 @@
         }
         // Congelar la lista usada en este análisis para la descarga posterior.
         cachedFiles = files.slice();
+        cacheIds = [];
         btnExcel.disabled = true;
         const groups = chunk(files, BATCH_SIZE);
         let cuentas = [];
@@ -202,6 +221,7 @@
                     return;
                 }
                 cuentas = cuentas.concat(data.cuentas || []);
+                cacheIds.push(data.cache_id || '');
                 ok += data.archivos_ok || 0;
                 fail += data.archivos_fallidos || 0;
                 movs += data.movimientos_totales || 0;
@@ -226,17 +246,21 @@
 
     btnExcel.addEventListener('click', async () => {
         const files = selectedFiles();
-        if (!files.length) {
+        const groups = chunk(files, BATCH_SIZE);
+        const ids = cacheIds.slice();
+        const jobs = ids.length
+            ? ids.map((id, i) => ({ id, files: groups[i] || [] }))
+            : groups.map(g => ({ id: '', files: g }));
+        if (!jobs.length) {
             setStatus('Se perdieron los PDF de la sesión. Vuelva a seleccionarlos una sola vez y analice de nuevo.', true);
             btnExcel.disabled = true;
             return;
         }
-        const groups = chunk(files, BATCH_SIZE);
         btnExcel.disabled = true;
         try {
-            if (groups.length === 1) {
-                setStatus('Generando Excel…');
-                const res = await postChunk('/herramientas/estado-cuenta/excel', groups[0]);
+            if (jobs.length === 1) {
+                setStatus(jobs[0].id ? 'Armando Excel del análisis ya hecho…' : 'Generando Excel…');
+                const res = await fetchExcel(jobs[0].id, jobs[0].files);
                 if (!res.ok) {
                     let data = {};
                     try { data = await res.json(); } catch (_) {}
@@ -264,12 +288,14 @@
                 return;
             }
             const zip = new JSZip();
-            for (let i = 0; i < groups.length; i++) {
-                const g = groups[i];
+            for (let i = 0; i < jobs.length; i++) {
+                const job = jobs[i];
                 const from = i * BATCH_SIZE + 1;
-                const to = i * BATCH_SIZE + g.length;
-                setStatus(`Excel grupo ${from}–${to} de ${files.length}…`);
-                const res = await postChunk('/herramientas/estado-cuenta/excel', g);
+                const to = from + (job.files.length || BATCH_SIZE) - 1;
+                setStatus(job.id
+                    ? `Excel del análisis ${i + 1} de ${jobs.length}…`
+                    : `Excel grupo ${from}–${to}…`);
+                const res = await fetchExcel(job.id, job.files);
                 if (!res.ok) {
                     let data = {};
                     try { data = await res.json(); } catch (_) {}
@@ -278,7 +304,7 @@
                     return;
                 }
                 const buf = await res.arrayBuffer();
-                zip.file(`estados_cuenta_${from}_${to}.xlsx`, buf);
+                zip.file(`estados_cuenta_${i + 1}.xlsx`, buf);
             }
             setStatus('Empaquetando ZIP…');
             const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -290,7 +316,7 @@
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
-            setStatus(`ZIP descargado (${groups.length} Excel).`);
+            setStatus(`ZIP descargado (${jobs.length} Excel).`);
             btnExcel.disabled = false;
         } catch (e) {
             setStatus('Fallo de red al descargar (posible timeout). Pruebe de a 10 PDF.', true);

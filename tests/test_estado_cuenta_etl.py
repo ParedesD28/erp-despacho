@@ -119,5 +119,24 @@ class CorteMoraTests(unittest.TestCase):
         self.assertIn("CUOTA DE ADMINISTRACION", marzo["Conceptos Originales"])
 
 
+class CacheLoteTests(unittest.TestCase):
+    def test_analizar_no_arma_excel_y_la_descarga_lo_reusa(self):
+        from estado_cuenta_pdf_service import excel_desde_cache, procesar_lote_estados_cuenta
+
+        resultado = procesar_lote_estados_cuenta(
+            [("malo.pdf", b"esto no es un pdf")],
+            incluir_excel=False,
+        )
+        self.assertIsNone(resultado["excel"])
+        self.assertTrue(resultado["cache_id"])
+        self.assertEqual(resultado["archivos_fallidos"], 1)
+        libro = excel_desde_cache(resultado["cache_id"])
+        self.assertIsNotNone(libro)
+        self.assertTrue(libro.getvalue().startswith(b"PK"))
+        otra = excel_desde_cache(resultado["cache_id"])
+        self.assertTrue(otra.getvalue().startswith(b"PK"))
+        self.assertIsNone(excel_desde_cache("no-existe"))
+
+
 if __name__ == "__main__":
     unittest.main()
