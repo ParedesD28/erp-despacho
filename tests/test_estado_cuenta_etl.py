@@ -2,7 +2,13 @@ import unittest
 
 import pandas as pd
 
-from estado_cuenta_etl import CLASIFICACION_CUOTA, CLASIFICACION_EXTRA, clasificar_concepto, depurar_movimientos
+from estado_cuenta_etl import (
+    CLASIFICACION_CUOTA,
+    CLASIFICACION_EXTRA,
+    anotar_verificacion,
+    clasificar_concepto,
+    depurar_movimientos,
+)
 
 
 def _fila(fecha, concepto, tipo, valor, abono, saldo=0, titular="ANA", archivo="a.pdf", numero="1"):
@@ -20,6 +26,78 @@ def _fila(fecha, concepto, tipo, valor, abono, saldo=0, titular="ANA", archivo="
         "Abono": abono,
         "Saldo": saldo,
     }
+
+
+class VerificacionTests(unittest.TestCase):
+    def test_columnas_siguen_el_abono_desde_la_ultima_fila(self):
+        df = pd.DataFrame(
+            [
+                _fila("2016.05.01", "CUOTA DE ADMINISTRACION", "FAC", 25000, 0, saldo=25000, numero="1"),
+                _fila("2016.05.17", "CUOTA DE ADMINISTRACION", "RDC", 0, 25000, saldo=0, numero="2"),
+                _fila("2016.06.01", "CUOTA DE ADMINISTRACION", "FAC", 25000, 0, saldo=25000, numero="3"),
+            ]
+        )
+        salida = anotar_verificacion(df)
+        self.assertEqual(salida["Abono Acumulado"].tolist(), [25000.0, 25000.0, 0.0])
+        self.assertEqual(salida["Diferencia"].tolist(), [0.0, -25000.0, 25000.0])
+
+    def test_hoja_deudor_va_de_concepto_a_la_formula(self):
+        from openpyxl import load_workbook
+
+        from estado_cuenta_pdf_service import generar_excel_lote
+
+        filas = [
+            _fila("2016.05.01", "CUOTA DE ADMINISTRACION", "FAC", 25000, 0, saldo=25000, numero="0000008"),
+            _fila("2016.05.17", "CUOTA DE ADMINISTRACION", "RDC", 0, 25000, saldo=0, numero="0000023"),
+        ]
+        cuentas = [
+            {
+                "archivo": "a.pdf",
+                "titular": "ANA",
+                "bloque": "9",
+                "apartamento": "401",
+                "codigo_cuenta": "9401",
+                "conjunto": "",
+                "fechas_detectadas": 2,
+                "movimientos_extraidos": 2,
+                "bloques_omitidos": 0,
+                "inconsistencias_saldo": 0,
+                "saldo_final": 0,
+                "rows": filas,
+                "error": "",
+            }
+        ]
+        libro = load_workbook(generar_excel_lote(cuentas))
+        hoja = libro["401 ANA"]
+        self.assertEqual(hoja["A1"].value, "Titular")
+        self.assertEqual(hoja["B1"].value, "ANA")
+        self.assertEqual(hoja["A5"].value, "Inicio mora")
+        self.assertEqual(
+            [celda.value for celda in hoja[7]],
+            [
+                "Concepto",
+                "Tipo Documento",
+                "Número",
+                "Fecha",
+                "Valor",
+                "Abono",
+                "Saldo",
+                "Abono Acumulado",
+                "Diferencia",
+            ],
+        )
+        self.assertEqual(hoja["A8"].value, "CUOTA DE ADMINISTRACION")
+        self.assertEqual(hoja["H8"].value, 25000)
+        self.assertEqual(hoja["I8"].value, 0)
+
+    def test_la_verificacion_no_mezcla_cuentas(self):
+        filas = [
+            _fila("2016.05.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, saldo=10),
+            _fila("2016.06.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 5, saldo=15, titular="OTRO", archivo="b.pdf"),
+        ]
+        salida = anotar_verificacion(pd.DataFrame(filas))
+        self.assertEqual(salida["Abono Acumulado"].tolist(), [0.0, 5.0])
+        self.assertEqual(salida["Diferencia"].tolist(), [10.0, 10.0])
 
 
 class ClasificacionTests(unittest.TestCase):

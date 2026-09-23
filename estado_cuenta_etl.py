@@ -365,6 +365,50 @@ def armar_certificados(consolidado: pd.DataFrame) -> list[dict]:
     return salida
 
 
+def anotar_verificacion(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Agrega, por cuenta y en el orden de la hoja:
+    Abono Acumulado (desde la última fila hacia arriba) y
+    Diferencia = Saldo del PDF - Abono Acumulado.
+    """
+    if df is None or df.empty:
+        vacio = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+        vacio["Abono Acumulado"] = pd.Series(dtype="float64")
+        vacio["Diferencia"] = pd.Series(dtype="float64")
+        return vacio
+
+    trabajo = df.reset_index(drop=True)
+    for col in ("Archivo", "Codigo Cuenta", "Titular"):
+        if col not in trabajo.columns:
+            trabajo[col] = ""
+    if "Abono" not in trabajo.columns:
+        trabajo["Abono"] = None
+    if "Saldo" not in trabajo.columns:
+        trabajo["Saldo"] = None
+
+    abonos = trabajo["Abono"].map(_a_float)
+    saldos = trabajo["Saldo"].map(_a_float)
+    acumulado = [float("nan")] * len(trabajo)
+    diferencia = [float("nan")] * len(trabajo)
+    for _, grupo in trabajo.groupby(["Archivo", "Codigo Cuenta", "Titular"], dropna=False, sort=False):
+        posiciones = list(grupo.index)
+        total = len(posiciones)
+        montos = [0.0] * total
+        ultimo = abonos.iloc[posiciones[-1]]
+        montos[-1] = 0.0 if pd.isna(ultimo) else float(ultimo)
+        for i in range(total - 2, -1, -1):
+            propio = abonos.iloc[posiciones[i]]
+            montos[i] = montos[i + 1] + (0.0 if pd.isna(propio) else float(propio))
+        for i, pos in enumerate(posiciones):
+            acumulado[pos] = round(montos[i], 2)
+            saldo_pdf = saldos.iloc[pos]
+            if pd.notna(saldo_pdf):
+                diferencia[pos] = round(float(saldo_pdf) - montos[i], 2)
+    trabajo["Abono Acumulado"] = acumulado
+    trabajo["Diferencia"] = diferencia
+    return trabajo
+
+
 def depurar_movimientos(df: pd.DataFrame) -> dict:
     """
     Aplica el corte de mora y deja solo FAC sin intereses.
