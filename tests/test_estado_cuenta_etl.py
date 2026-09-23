@@ -5,7 +5,7 @@ import pandas as pd
 from estado_cuenta_etl import CLASIFICACION_CUOTA, CLASIFICACION_EXTRA, clasificar_concepto, depurar_movimientos
 
 
-def _fila(fecha, concepto, tipo, valor, abono, titular="ANA", archivo="a.pdf", numero="1"):
+def _fila(fecha, concepto, tipo, valor, abono, saldo=0, titular="ANA", archivo="a.pdf", numero="1"):
     return {
         "Archivo": archivo,
         "Titular": titular,
@@ -18,7 +18,7 @@ def _fila(fecha, concepto, tipo, valor, abono, titular="ANA", archivo="a.pdf", n
         "Fecha": fecha,
         "Valor": valor,
         "Abono": abono,
-        "Saldo": 0,
+        "Saldo": saldo,
     }
 
 
@@ -37,20 +37,19 @@ class ClasificacionTests(unittest.TestCase):
 
 class CorteMoraTests(unittest.TestCase):
     def _base(self):
-        # Saldos inversos de abajo hacia arriba con valor 10:
-        # fila 0 saldo 80, 1=70, 2=60, 3=50, 4=40, 5=30, 6=20, 7=10.
-        # Negativos desde abajo: fila 6, fila 4, fila 2 (3.º) y fila 0 (4.º).
+        # M acumula abonos desde la última fila. N = Saldo PDF - M.
+        # Negativos desde abajo: 2024-07 (1.º), 2024-05 (2.º), 2024-03 (3.º) y 2024-01 (4.º).
         return [
-            _fila("2024.01.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, numero="0"),
-            _fila("2024.03.01", "SANCION ASAMBLEA", "FAC", 10, 80, numero="1"),
-            _fila("2024.03.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, numero="2"),
-            _fila("2024.04.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 60, numero="3"),
-            _fila("2024.05.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, numero="4"),
-            _fila("2024.06.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 40, numero="5"),
-            _fila("2024.07.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, numero="6"),
-            _fila("2024.08.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 20, numero="7"),
-            _fila("2024.08.01", "INTERESES DE MORA", "FAC", 0, 0, numero="8"),
-            _fila("2024.08.01", "CUOTA DE ADMINISTRACION", "RDC", 0, 5, numero="9"),
+            _fila("2024.01.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, saldo=0, numero="0"),
+            _fila("2024.03.01", "SANCION ASAMBLEA", "FAC", 10, 80, saldo=305, numero="1"),
+            _fila("2024.03.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, saldo=0, numero="2"),
+            _fila("2024.04.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 60, saldo=225, numero="3"),
+            _fila("2024.05.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, saldo=0, numero="4"),
+            _fila("2024.06.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 40, saldo=165, numero="5"),
+            _fila("2024.07.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, saldo=0, numero="6"),
+            _fila("2024.08.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 20, saldo=125, numero="7"),
+            _fila("2024.08.01", "INTERESES DE MORA", "FAC", 0, 0, saldo=105, numero="8"),
+            _fila("2024.08.01", "CUOTA DE ADMINISTRACION", "RDC", 0, 5, saldo=105, numero="9"),
         ]
 
     def test_conserva_el_tercer_negativo_y_el_dia_completo(self):

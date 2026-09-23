@@ -369,9 +369,10 @@ def depurar_movimientos(df: pd.DataFrame) -> dict:
     """
     Aplica el corte de mora y deja solo FAC sin intereses.
 
-    Corte: se conserva el 3.er negativo (de abajo hacia arriba) y todas las
-    filas de esa misma fecha. Se descarta solo lo estrictamente anterior.
-    El VBA borraba el 3.er negativo y usaba la fecha de la fila de abajo.
+    M nace en el abono de la última fila y suma el abono de cada fila hacia arriba.
+    La diferencia es el saldo del PDF menos M. El 3.er negativo de esa
+    diferencia, contado desde abajo, marca el inicio. Se conserva ese día
+    completo y se descarta solo lo anterior.
     """
     if df is None or df.empty:
         return _vacio()
@@ -382,11 +383,14 @@ def depurar_movimientos(df: pd.DataFrame) -> dict:
             trabajo[col] = ""
     if "Valor" not in trabajo.columns or "Abono" not in trabajo.columns or "Fecha" not in trabajo.columns:
         raise ValueError("El Excel no trae columnas Fecha, Valor y Abono.")
+    if "Saldo" not in trabajo.columns:
+        trabajo["Saldo"] = None
 
     trabajo["_orden"] = range(len(trabajo))
     trabajo["_fecha"] = pd.to_datetime(trabajo["Fecha"].map(_a_fecha), errors="coerce")
     trabajo["_valor_raw"] = trabajo["Valor"].map(_a_float)
     trabajo["_abono_raw"] = trabajo["Abono"].map(_a_float)
+    trabajo["_saldo_raw"] = trabajo["Saldo"].map(_a_float)
     trabajo["_valor"] = trabajo["_valor_raw"].fillna(0.0)
     trabajo["_abono"] = trabajo["_abono_raw"].fillna(0.0)
     trabajo["_clasificacion"] = trabajo["Concepto"].map(clasificar_concepto)
@@ -401,14 +405,23 @@ def depurar_movimientos(df: pd.DataFrame) -> dict:
         total = len(ordenado)
         saldos = [0.0] * total
         if total:
-            saldos[-1] = float(ordenado.loc[total - 1, "_valor"])
+            saldos[-1] = float(ordenado.loc[total - 1, "_abono"])
             for i in range(total - 2, -1, -1):
-                saldos[i] = saldos[i + 1] + float(ordenado.loc[i, "_valor"])
+                saldos[i] = saldos[i + 1] + float(ordenado.loc[i, "_abono"])
         ordenado["_saldo_inverso"] = saldos
-        ordenado["_diferencia"] = [
-            round(float(ordenado.loc[i, "_abono"]) - saldos[i], 2) for i in range(total)
+        diferencias = []
+        for i in range(total):
+            saldo_pdf = ordenado.loc[i, "_saldo_raw"]
+            if pd.isna(saldo_pdf):
+                diferencias.append(float("nan"))
+            else:
+                diferencias.append(round(float(saldo_pdf) - saldos[i], 2))
+        ordenado["_diferencia"] = diferencias
+        negativos = [
+            i
+            for i in range(total - 1, -1, -1)
+            if pd.notna(ordenado.loc[i, "_diferencia"]) and ordenado.loc[i, "_diferencia"] < 0
         ]
-        negativos = [i for i in range(total - 1, -1, -1) if ordenado.loc[i, "_diferencia"] < 0]
         inicio = ordenado.loc[negativos[2], "_fecha"] if len(negativos) >= 3 else pd.NaT
         if pd.isna(inicio):
             inicio = pd.NaT
@@ -427,6 +440,8 @@ def depurar_movimientos(df: pd.DataFrame) -> dict:
                 alertas.append("valor_ilegible")
             if pd.isna(row["_abono_raw"]):
                 alertas.append("abono_ilegible")
+            if pd.isna(row["_saldo_raw"]):
+                alertas.append("saldo_ilegible")
             if pd.isna(row["_fecha"]):
                 alertas.append("fecha_ilegible")
             depurado_filas.append(_fila_salida(row, ",".join(alertas)))
