@@ -92,7 +92,22 @@ class Fase11ContractsTests(unittest.TestCase):
         base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
         self.assertLess(base.index('href="/sms"'), base.index('href="/logout"'))
         self.assertIn("overflow-y-auto", base.split("<nav", 1)[1].split(">", 1)[0])
+        self.assertIn(">Cobro<", base)
+        self.assertLess(base.index('href="/crm"'), base.index('href="/acuerdos"'))
+        self.assertLess(base.index('href="/acuerdos"'), base.index('href="/vencimientos"'))
+        self.assertLess(base.index('href="/vencimientos"'), base.index('href="/supervision-agente"'))
+        self.assertLess(base.index('href="/supervision-agente"'), base.index('href="/sms"'))
+        self.assertLess(base.index('href="/sms"'), base.index('href="/cartas-cobro"'))
+        self.assertLess(base.index('id="nav-cobro"'), base.index('href="/informes"'))
+        self.assertGreater(base.index('href="/cartas-cobro"'), base.index('id="nav-cobro"'))
+        self.assertLess(base.index('href="/cartas-cobro"'), base.index('href="/informes"'))
 
+    def test_sms_nav_incluye_dropdown_cobro(self):
+        sms = (ROOT / "templates" / "sms_campanas.html").read_text(encoding="utf-8")
+        self.assertIn(">Cobro<", sms)
+        self.assertIn('href="/crm"', sms)
+        self.assertIn('href="/cartas-cobro"', sms)
+        self.assertIn('href="/sms"', sms)
     def test_detalle_expediente_no_referencia_campos_legacy(self):
         detalle = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8").lower()
         for token in ("id_cliente", "id_demandado", "proceso.demandante", "proceso.demandado"):

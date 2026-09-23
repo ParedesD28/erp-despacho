@@ -1,0 +1,508 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<header class="h-16 bg-white border-b border-slate-200 flex items-center px-6 md:px-8 shadow-sm justify-between gap-3">
+    <div>
+        <h2 class="text-xl font-semibold text-slate-800">Cartas de cobro</h2>
+        <p class="text-xs text-slate-500">Filtre la cartera · elija plantilla · genere Word</p>
+    </div>
+    <div class="flex items-center gap-2 flex-shrink-0">
+        <button type="button" onclick="abrirDrawerPlantillas()"
+                class="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 border border-slate-300 bg-white hover:bg-slate-50 px-3 py-2 rounded-md">
+            <i data-lucide="layout-template" class="w-3.5 h-3.5"></i>
+            Plantillas
+        </button>
+        <button type="button" onclick="abrirModalCrear()"
+                class="inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 px-3 py-2 rounded-md">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+            Crear plantilla
+        </button>
+    </div>
+</header>
+
+<div class="p-6 md:p-8 space-y-5 max-w-6xl">
+    {# Indicador de pasos #}
+    <nav class="flex flex-wrap items-center gap-2 text-xs text-slate-500" aria-label="Pasos">
+        <span class="inline-flex items-center gap-1.5 font-semibold {% if not conjunto_id %}text-blue-700{% else %}text-emerald-700{% endif %}">
+            <span class="w-5 h-5 rounded-full {% if not conjunto_id %}bg-blue-600 text-white{% else %}bg-emerald-600 text-white{% endif %} inline-flex items-center justify-center text-[10px]">1</span>
+            Filtrar cartera
+        </span>
+        <span class="text-slate-300">→</span>
+        <span class="inline-flex items-center gap-1.5 font-semibold {% if conjunto_id %}text-blue-700{% else %}text-slate-400{% endif %}">
+            <span class="w-5 h-5 rounded-full {% if conjunto_id %}bg-blue-600 text-white{% else %}bg-slate-200 text-slate-500{% endif %} inline-flex items-center justify-center text-[10px]">2</span>
+            Plantilla y selección
+        </span>
+        <span class="text-slate-300">→</span>
+        <span class="inline-flex items-center gap-1.5 text-slate-400 font-semibold">
+            <span class="w-5 h-5 rounded-full bg-slate-200 text-slate-500 inline-flex items-center justify-center text-[10px]">3</span>
+            Generar Word
+        </span>
+    </nav>
+
+    {# --- PASO 1: Filtro principal --- #}
+    <section class="bg-white border-2 border-slate-900/10 rounded-xl shadow-sm p-6">
+        <div class="mb-4">
+            <h3 class="text-base font-bold text-slate-900">1. Filtrar cartera</h3>
+            <p class="text-sm text-slate-500 mt-0.5">Elija el conjunto y el tipo de cobro. Es el punto de partida.</p>
+        </div>
+        <form method="GET" action="/cartas-cobro" class="space-y-4">
+            {% if plantilla_id %}<input type="hidden" name="plantilla_id" value="{{ plantilla_id }}">{% endif %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-1.5">Conjunto residencial</label>
+                    <select name="conjunto_id" required class="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="">Seleccione un conjunto…</option>
+                        {% for c in conjuntos %}
+                        <option value="{{ c.id }}" {% if conjunto_id == c.id %}selected{% endif %}>{{ c.nombre }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-1.5">Tipo de cartera</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label class="flex items-center gap-2 border rounded-lg px-3 py-2.5 cursor-pointer {% if tipo_cartera != 'JURIDICO' %}border-amber-400 bg-amber-50{% else %}border-slate-200 hover:bg-slate-50{% endif %}">
+                            <input type="radio" name="tipo_cartera" value="PREJURIDICO" class="accent-amber-600" {% if tipo_cartera != 'JURIDICO' %}checked{% endif %}>
+                            <span class="text-sm font-semibold text-slate-800">Prejurídico</span>
+                        </label>
+                        <label class="flex items-center gap-2 border rounded-lg px-3 py-2.5 cursor-pointer {% if tipo_cartera == 'JURIDICO' %}border-blue-400 bg-blue-50{% else %}border-slate-200 hover:bg-slate-50{% endif %}">
+                            <input type="radio" name="tipo_cartera" value="JURIDICO" class="accent-blue-600" {% if tipo_cartera == 'JURIDICO' %}checked{% endif %}>
+                            <span class="text-sm font-semibold text-slate-800">Jurídico</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <details class="text-sm">
+                <summary class="cursor-pointer text-slate-500 hover:text-slate-700 font-medium">Opciones avanzadas (fecha de corte y saldo mínimo)</summary>
+                <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-500 mb-1">Fecha de corte (saldo)</label>
+                        <input type="date" name="fecha_corte" value="{{ fecha_corte }}" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-500 mb-1">Saldo mínimo</label>
+                        <input type="number" name="saldo_minimo" value="{{ saldo_minimo or 0 }}" min="0" step="1000" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+                    </div>
+                </div>
+            </details>
+            <div class="flex justify-end pt-1">
+                <button type="submit" class="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg shadow-sm">
+                    Continuar
+                    <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </form>
+    </section>
+
+    {% if conjunto_id %}
+    {# --- Barra plantilla activa --- #}
+    <section class="bg-white border border-slate-200 rounded-xl shadow-sm px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+        <div class="min-w-0">
+            <div class="text-[11px] font-bold uppercase tracking-wide text-slate-400">Plantilla en uso</div>
+            {% if plantilla_activa %}
+            <div class="font-semibold text-slate-900 truncate" id="labelPlantillaActiva">{{ plantilla_activa.nombre }}</div>
+            <div class="text-xs text-slate-500">
+                <span class="{% if plantilla_activa.tipo_cartera == 'JURIDICO' %}text-blue-700{% else %}text-amber-700{% endif %} font-semibold">{{ plantilla_activa.tipo_cartera }}</span>
+                · {{ tipo_cartera }} · {{ candidatos|length }} inmueble(s)
+            </div>
+            {% else %}
+            <div class="font-semibold text-amber-700">Ninguna plantilla {{ tipo_cartera }} disponible</div>
+            <div class="text-xs text-slate-500">Cree una plantilla o cambie el tipo de cartera.</div>
+            {% endif %}
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <button type="button" onclick="abrirDrawerPlantillas()"
+                    class="text-xs font-semibold border border-slate-300 px-3 py-2 rounded-md hover:bg-slate-50">Cambiar plantilla</button>
+            <button type="button" onclick="abrirPreview()" {% if not plantilla_activa %}disabled{% endif %}
+                    class="text-xs font-semibold border border-slate-300 px-3 py-2 rounded-md hover:bg-slate-50 disabled:opacity-40">
+                Vista previa / editar
+            </button>
+        </div>
+    </section>
+
+    {# --- PASO 2: Selección y generar --- #}
+    <form method="POST" action="/cartas-cobro/generar" class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden" id="formGenerar">
+        <input type="hidden" name="conjunto_id" value="{{ conjunto_id }}">
+        <input type="hidden" name="tipo_cartera" value="{{ tipo_cartera }}">
+        <input type="hidden" name="fecha_corte" value="{{ fecha_corte }}">
+        <input type="hidden" name="saldo_minimo" value="{{ saldo_minimo or 0 }}">
+        <input type="hidden" name="plantilla_id" id="inputPlantillaId" value="{{ plantilla_id or '' }}">
+
+        <div class="px-5 py-4 border-b border-slate-100 flex flex-wrap items-end justify-between gap-3">
+            <div>
+                <h3 class="text-base font-bold text-slate-900">2. Seleccionar inmuebles</h3>
+                <p class="text-sm text-slate-500">Una carta por unidad. Marque los que desea generar.</p>
+            </div>
+            <div class="flex flex-wrap items-end gap-2">
+                <div>
+                    <label class="block text-[11px] font-semibold text-slate-500 mb-1">Fecha límite de pago</label>
+                    <input type="date" name="fecha_limite" value="{{ fecha_limite }}" required class="border border-slate-300 rounded-md px-3 py-2 text-sm">
+                </div>
+                <button type="button" onclick="seleccionarTodos(true)" class="text-xs font-semibold text-slate-600 border border-slate-300 px-3 py-2 rounded-md hover:bg-slate-50">Todos</button>
+                <button type="button" onclick="seleccionarTodos(false)" class="text-xs font-semibold text-slate-600 border border-slate-300 px-3 py-2 rounded-md hover:bg-slate-50">Ninguno</button>
+                <button type="submit" id="btnGenerar"
+                        class="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-md disabled:opacity-40"
+                        {% if not candidatos or not plantilla_activa %}disabled{% endif %}>
+                    <i data-lucide="file-down" class="w-4 h-4"></i>
+                    Generar Word
+                </button>
+            </div>
+        </div>
+
+        <div class="overflow-x-auto max-h-[520px] overflow-y-auto">
+            <table class="w-full text-left text-sm text-slate-600">
+                <thead class="bg-slate-900 text-white sticky top-0 z-10">
+                    <tr>
+                        <th class="px-4 py-3 w-10"><input type="checkbox" class="rounded" onclick="seleccionarTodos(this.checked)" {% if not candidatos %}disabled{% endif %}></th>
+                        <th class="px-4 py-3 font-medium">Unidad</th>
+                        <th class="px-4 py-3 font-medium">Deudor principal</th>
+                        <th class="px-4 py-3 font-medium">Atn. / Codeudor</th>
+                        <th class="px-4 py-3 font-medium text-right">Gran total</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for c in candidatos %}
+                    <tr class="hover:bg-slate-50">
+                        <td class="px-4 py-3">
+                            <input type="checkbox" name="inmueble_ids" value="{{ c.inmueble_id }}" class="chk-inmueble rounded" onchange="actualizarContador()">
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="font-semibold text-slate-800">{{ c.torre_apto }}</div>
+                            <div class="text-xs text-slate-400">{% if c.radicado_interno %}{{ c.radicado_interno }}{% else %}Sin expediente{% endif %}</div>
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="font-semibold text-slate-800">{{ c.deudor_nombre }}</div>
+                            <div class="text-xs text-slate-400">C.C. {{ c.deudor_identificacion }}</div>
+                        </td>
+                        <td class="px-4 py-3 text-xs">
+                            {% if c.codeudor_nombre %}{{ c.codeudor_nombre }}{% else %}<span class="text-slate-300 italic">—</span>{% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-right font-bold text-slate-800 whitespace-nowrap">
+                            $ {{ "{:,.0f}".format(c.saldo_total or 0).replace(",", ".") }}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-4 py-12 text-center text-slate-400">
+                            No hay inmuebles con saldo verificado para este filtro.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="px-5 py-3 bg-slate-50 border-t border-slate-100 text-xs text-slate-500 flex justify-between">
+            <span>Seleccionados: <strong id="contadorSeleccion" class="text-slate-800">0</strong></span>
+            <span>Máx. {{ max_lote or 100 }} por lote</span>
+        </div>
+    </form>
+    {% else %}
+    <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-12 text-center text-slate-500 text-sm">
+        Complete el <strong>filtro de cartera</strong> y pulse Continuar para ver inmuebles y generar cartas.
+    </div>
+    {% endif %}
+</div>
+
+{# ========== DRAWER: elegir plantilla ========== #}
+<div id="drawerOverlay" class="fixed inset-0 bg-slate-900/40 z-40 hidden" onclick="cerrarDrawerPlantillas()"></div>
+<aside id="drawerPlantillas" class="fixed top-0 right-0 h-full w-full max-w-md bg-white shadow-2xl z-50 transform translate-x-full transition-transform duration-200 flex flex-col" aria-hidden="true">
+    <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+        <div>
+            <h3 class="font-bold text-slate-900">Plantillas</h3>
+            <p class="text-xs text-slate-500">Elija el formato para {{ tipo_cartera }}</p>
+        </div>
+        <button type="button" onclick="cerrarDrawerPlantillas()" class="p-2 rounded-md hover:bg-slate-100" aria-label="Cerrar">
+            <i data-lucide="x" class="w-5 h-5 text-slate-500"></i>
+        </button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-4 space-y-2">
+        {% for p in plantillas %}
+        <button type="button"
+                class="w-full text-left border rounded-lg px-4 py-3 hover:border-blue-400 hover:bg-blue-50 transition-colors plantilla-item {% if plantilla_id == p.id %}border-blue-500 bg-blue-50 ring-1 ring-blue-200{% else %}border-slate-200{% endif %}"
+                data-id="{{ p.id }}"
+                data-nombre="{{ p.nombre|e }}"
+                data-tipo="{{ p.tipo_cartera }}"
+                data-cuerpo="{{ p.cuerpo|e }}"
+                data-sistema="{{ '1' if p.es_sistema else '0' }}"
+                onclick="elegirPlantilla(this)">
+            <div class="font-semibold text-slate-900">{{ p.nombre }}</div>
+            <div class="text-[11px] text-slate-500 mt-0.5">
+                {{ p.tipo_cartera }}{% if p.es_sistema %} · sistema{% endif %}
+                {% if plantilla_id == p.id %}<span class="text-blue-700 font-bold"> · en uso</span>{% endif %}
+            </div>
+        </button>
+        {% else %}
+        <div class="text-center text-slate-400 text-sm py-10">
+            No hay plantillas {{ tipo_cartera }}.
+            <button type="button" class="block mx-auto mt-3 text-blue-600 font-semibold" onclick="cerrarDrawerPlantillas(); abrirModalCrear();">Crear la primera</button>
+        </div>
+        {% endfor %}
+
+        {% if plantillas_otras %}
+        <div class="pt-4 mt-2 border-t border-slate-100">
+            <div class="text-[11px] font-bold uppercase text-slate-400 mb-2">Otros tipos (solo consulta)</div>
+            {% for p in plantillas_otras %}
+            <div class="border border-slate-100 rounded-lg px-4 py-2.5 text-sm text-slate-500 mb-1.5 opacity-70">
+                <div class="font-medium">{{ p.nombre }}</div>
+                <div class="text-[11px]">{{ p.tipo_cartera }} — cambie el filtro de cartera para usarla</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    <div class="p-4 border-t border-slate-200">
+        <button type="button" onclick="cerrarDrawerPlantillas(); abrirModalCrear();"
+                class="w-full text-sm font-semibold bg-slate-900 text-white py-2.5 rounded-lg hover:bg-slate-800">
+            + Crear plantilla
+        </button>
+    </div>
+</aside>
+
+{# ========== MODAL: crear plantilla ========== #}
+<div id="modalCrear" class="fixed inset-0 z-50 hidden items-center justify-center p-4">
+    <div class="absolute inset-0 bg-slate-900/50" onclick="cerrarModalCrear()"></div>
+    <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <h3 class="font-bold text-slate-900">Crear plantilla</h3>
+            <button type="button" onclick="cerrarModalCrear()" class="p-2 rounded-md hover:bg-slate-100"><i data-lucide="x" class="w-5 h-5"></i></button>
+        </div>
+        <form method="POST" action="/cartas-cobro/plantillas/guardar" class="flex-1 overflow-y-auto p-5 space-y-3">
+            <input type="hidden" name="conjunto_id" value="{{ conjunto_id or '' }}">
+            <input type="hidden" name="fecha_corte" value="{{ fecha_corte }}">
+            <input type="hidden" name="fecha_limite" value="{{ fecha_limite }}">
+            <input type="hidden" name="saldo_minimo" value="{{ saldo_minimo or 0 }}">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">Nombre</label>
+                    <input type="text" name="nombre" required maxlength="120" placeholder="Ej. Primer requerimiento"
+                           class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">Tipo</label>
+                    <select name="tipo_cartera" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+                        <option value="PREJURIDICO" {% if tipo_cartera != 'JURIDICO' %}selected{% endif %}>PREJURIDICO</option>
+                        <option value="JURIDICO" {% if tipo_cartera == 'JURIDICO' %}selected{% endif %}>JURIDICO</option>
+                    </select>
+                </div>
+            </div>
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <label class="block text-xs font-semibold text-slate-500">Cuerpo de la carta</label>
+                    <span class="text-[10px] text-slate-400">Clic en una variable para insertarla</span>
+                </div>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    {% for v in variables %}
+                    <button type="button" class="text-[10px] font-mono bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 px-1.5 py-0.5 rounded"
+                            title="{{ v.etiqueta }}"
+                            onclick="insertarVariable('cuerpoNueva', '{{ '{{' + v.clave + '}}' }}')">{{ '{{' + v.clave + '}}' }}</button>
+                    {% endfor %}
+                </div>
+                <textarea id="cuerpoNueva" name="cuerpo" required rows="14"
+                          class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono leading-relaxed">{{ cuerpo_nuevo }}</textarea>
+            </div>
+            <div class="flex justify-end gap-2 pt-2">
+                <button type="button" onclick="cerrarModalCrear()" class="text-sm font-semibold px-4 py-2 rounded-md border border-slate-300">Cancelar</button>
+                <button type="submit" class="text-sm font-semibold px-4 py-2 rounded-md bg-slate-900 text-white hover:bg-slate-800">Guardar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{# ========== MODAL: vista previa / editar ========== #}
+<div id="modalPreview" class="fixed inset-0 z-50 hidden items-center justify-center p-4">
+    <div class="absolute inset-0 bg-slate-900/50" onclick="cerrarPreview()"></div>
+    <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div>
+                <h3 class="font-bold text-slate-900">Vista previa / editar</h3>
+                <p class="text-xs text-slate-500" id="previewNombre">—</p>
+            </div>
+            <button type="button" onclick="cerrarPreview()" class="p-2 rounded-md hover:bg-slate-100"><i data-lucide="x" class="w-5 h-5"></i></button>
+        </div>
+        <form method="POST" action="/cartas-cobro/plantillas/guardar" class="flex-1 overflow-y-auto p-5 space-y-3" id="formEditarPlantilla">
+            <input type="hidden" name="plantilla_id" id="editPlantillaId" value="">
+            <input type="hidden" name="conjunto_id" value="{{ conjunto_id or '' }}">
+            <input type="hidden" name="fecha_corte" value="{{ fecha_corte }}">
+            <input type="hidden" name="fecha_limite" value="{{ fecha_limite }}">
+            <input type="hidden" name="saldo_minimo" value="{{ saldo_minimo or 0 }}">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">Nombre</label>
+                    <input type="text" name="nombre" id="editNombre" required maxlength="120" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 mb-1">Tipo</label>
+                    <select name="tipo_cartera" id="editTipo" class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm">
+                        <option value="PREJURIDICO">PREJURIDICO</option>
+                        <option value="JURIDICO">JURIDICO</option>
+                    </select>
+                </div>
+            </div>
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <label class="block text-xs font-semibold text-slate-500">Cuerpo</label>
+                    <span class="text-[10px] text-slate-400">Variables: clic para insertar</span>
+                </div>
+                <div class="flex flex-wrap gap-1.5 mb-2">
+                    {% for v in variables %}
+                    <button type="button" class="text-[10px] font-mono bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 px-1.5 py-0.5 rounded"
+                            title="{{ v.etiqueta }}"
+                            onclick="insertarVariable('cuerpoPreview', '{{ '{{' + v.clave + '}}' }}')">{{ '{{' + v.clave + '}}' }}</button>
+                    {% endfor %}
+                </div>
+                <textarea id="cuerpoPreview" name="cuerpo" required rows="16"
+                          class="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono leading-relaxed whitespace-pre-wrap"></textarea>
+            </div>
+            <div class="flex flex-wrap justify-between gap-2 pt-2">
+                <button type="button" id="btnDesactivarPreview" onclick="desactivarDesdePreview()"
+                        class="text-xs font-semibold text-red-600 px-3 py-2 rounded-md border border-red-200 hover:bg-red-50 hidden">
+                    Desactivar plantilla
+                </button>
+                <div class="flex gap-2 ml-auto">
+                    <button type="button" onclick="cerrarPreview()" class="text-sm font-semibold px-4 py-2 rounded-md border border-slate-300">Cerrar</button>
+                    <button type="submit" class="text-sm font-semibold px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700">Guardar cambios</button>
+                </div>
+            </div>
+        </form>
+        <form method="POST" action="/cartas-cobro/plantillas/desactivar" id="formDesactivar" class="hidden">
+            <input type="hidden" name="plantilla_id" id="desactivarId" value="">
+            <input type="hidden" name="tipo_cartera" value="{{ tipo_cartera }}">
+            <input type="hidden" name="conjunto_id" value="{{ conjunto_id or '' }}">
+            <input type="hidden" name="fecha_corte" value="{{ fecha_corte }}">
+            <input type="hidden" name="fecha_limite" value="{{ fecha_limite }}">
+            <input type="hidden" name="saldo_minimo" value="{{ saldo_minimo or 0 }}">
+        </form>
+    </div>
+</div>
+
+<script>
+var PLANTILLAS = {
+{% for p in plantillas %}
+  "{{ p.id }}": { id: {{ p.id }}, nombre: {{ p.nombre|tojson }}, tipo: {{ p.tipo_cartera|tojson }}, cuerpo: {{ p.cuerpo|tojson }}, sistema: {{ 'true' if p.es_sistema else 'false' }} }{% if not loop.last %},{% endif %}
+{% endfor %}
+};
+var plantillaActivaId = {{ (plantilla_id or 'null') }};
+
+function refreshIcons() {
+  if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+}
+
+function abrirDrawerPlantillas() {
+  document.getElementById('drawerOverlay').classList.remove('hidden');
+  var d = document.getElementById('drawerPlantillas');
+  d.classList.remove('translate-x-full');
+  d.setAttribute('aria-hidden', 'false');
+  refreshIcons();
+}
+function cerrarDrawerPlantillas() {
+  document.getElementById('drawerOverlay').classList.add('hidden');
+  var d = document.getElementById('drawerPlantillas');
+  d.classList.add('translate-x-full');
+  d.setAttribute('aria-hidden', 'true');
+}
+
+function elegirPlantilla(btn) {
+  var id = btn.getAttribute('data-id');
+  var nombre = btn.getAttribute('data-nombre');
+  plantillaActivaId = parseInt(id, 10);
+  var input = document.getElementById('inputPlantillaId');
+  if (input) input.value = id;
+  var label = document.getElementById('labelPlantillaActiva');
+  if (label) label.textContent = nombre;
+  document.querySelectorAll('.plantilla-item').forEach(function (el) {
+    el.classList.remove('border-blue-500', 'bg-blue-50', 'ring-1', 'ring-blue-200');
+    el.classList.add('border-slate-200');
+  });
+  btn.classList.add('border-blue-500', 'bg-blue-50', 'ring-1', 'ring-blue-200');
+  btn.classList.remove('border-slate-200');
+  actualizarContador();
+  cerrarDrawerPlantillas();
+}
+
+function abrirModalCrear() {
+  var m = document.getElementById('modalCrear');
+  m.classList.remove('hidden');
+  m.classList.add('flex');
+  refreshIcons();
+}
+function cerrarModalCrear() {
+  var m = document.getElementById('modalCrear');
+  m.classList.add('hidden');
+  m.classList.remove('flex');
+}
+
+function abrirPreview() {
+  var p = PLANTILLAS[String(plantillaActivaId)];
+  if (!p) { alert('Seleccione una plantilla primero.'); return; }
+  document.getElementById('previewNombre').textContent = p.nombre;
+  document.getElementById('editPlantillaId').value = p.id;
+  document.getElementById('editNombre').value = p.nombre;
+  document.getElementById('editTipo').value = p.tipo;
+  document.getElementById('cuerpoPreview').value = p.cuerpo;
+  var btnDes = document.getElementById('btnDesactivarPreview');
+  if (p.sistema) btnDes.classList.add('hidden'); else btnDes.classList.remove('hidden');
+  var m = document.getElementById('modalPreview');
+  m.classList.remove('hidden');
+  m.classList.add('flex');
+  refreshIcons();
+}
+function cerrarPreview() {
+  var m = document.getElementById('modalPreview');
+  m.classList.add('hidden');
+  m.classList.remove('flex');
+}
+function desactivarDesdePreview() {
+  if (!confirm('¿Desactivar esta plantilla?')) return;
+  document.getElementById('desactivarId').value = document.getElementById('editPlantillaId').value;
+  document.getElementById('formDesactivar').submit();
+}
+
+function insertarVariable(textareaId, token) {
+  var ta = document.getElementById(textareaId);
+  if (!ta) return;
+  var start = ta.selectionStart || 0;
+  var end = ta.selectionEnd || 0;
+  var val = ta.value;
+  ta.value = val.slice(0, start) + token + val.slice(end);
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = start + token.length;
+}
+
+function seleccionarTodos(marcar) {
+  document.querySelectorAll('.chk-inmueble').forEach(function (el) { el.checked = !!marcar; });
+  actualizarContador();
+}
+function actualizarContador() {
+  var n = document.querySelectorAll('.chk-inmueble:checked').length;
+  var el = document.getElementById('contadorSeleccion');
+  if (el) el.textContent = String(n);
+  var btn = document.getElementById('btnGenerar');
+  if (btn) {
+    var pid = document.getElementById('inputPlantillaId');
+    btn.disabled = n === 0 || !pid || !pid.value;
+  }
+}
+
+document.getElementById('formGenerar')?.addEventListener('submit', function (ev) {
+  if (document.querySelectorAll('.chk-inmueble:checked').length === 0) {
+    ev.preventDefault();
+    alert('Seleccione al menos un inmueble.');
+  }
+  var pid = document.getElementById('inputPlantillaId');
+  if (!pid || !pid.value) {
+    ev.preventDefault();
+    alert('Elija una plantilla (botón Plantillas).');
+  }
+});
+
+document.addEventListener('keydown', function (ev) {
+  if (ev.key === 'Escape') {
+    cerrarDrawerPlantillas();
+    cerrarModalCrear();
+    cerrarPreview();
+  }
+});
+
+actualizarContador();
+refreshIcons();
+</script>
+{% endblock %}

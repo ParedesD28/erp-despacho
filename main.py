@@ -6,6 +6,7 @@ liquidador de expensas PH, supervisión de agente y administración de expedient
 from __future__ import annotations
 
 import sms_router
+import cartas_cobro_router
 import asyncio
 import io
 import json
@@ -13,7 +14,7 @@ import os
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Optional
 from urllib.parse import urlencode
 
 import openpyxl
@@ -66,6 +67,9 @@ from estado_cuenta_pdf_service import (
     MAX_ARCHIVOS_LOTE,
     MAX_PDF_BYTES,
 )
+import permisos
+import usuarios_service
+import usuarios_router
 
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
@@ -82,14 +86,16 @@ def render_template(name: str, context: dict, status_code: int = 200):
         return templates.TemplateResponse(request=context.get("request"), name=name, context=context, status_code=status_code)
 
 
-# Montaje de archivos estáticos
-os.makedirs("static/pdfs", exist_ok=True)
+# Montaje de archivos estáticos (PDFs sensibles viven en private_pdfs/, no aquí).
+os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Inclusión de routers modulares M2M y supervisión
 app.include_router(bot_api.router)
 app.include_router(agent_supervision.router)
 app.include_router(sms_router.router)
+app.include_router(cartas_cobro_router.router)
+app.include_router(usuarios_router.router)
 
 # Configuración global de observabilidad y captura de excepciones
 observability.install_exception_handling(app)
@@ -101,11 +107,30 @@ observability.install_exception_handling(app)
 def _is_public_path(path: str) -> bool:
     if path in ("/login", "/health"):
         return True
+    # PDFs sensibles: nunca públicos vía StaticFiles (usar /pdfs/ o /api/bot/pdf/).
+    if path.startswith("/static/pdfs/"):
+        return False
     if path.startswith("/static/") or path.startswith("/api/bot/"):
         return True
     if path.startswith("/sms/api/"):
         return True
     return False
+
+
+def _aplicar_contexto_permisos(request: Request, user_id: str) -> Optional[RedirectResponse]:
+    """Carga perfil/permisos en request.state. Devuelve redirect si la cuenta está inactiva."""
+    ctx = usuarios_service.contexto_auth_usuario(user_id)
+    if not ctx.get("activo", True):
+        response = RedirectResponse(url="/login", status_code=303)
+        clear_session_cookie(response)
+        return response
+    request.state.user_id = ctx["user_id"]
+    request.state.user_nombre = ctx.get("nombre") or ""
+    request.state.user_email = ctx.get("email") or ""
+    request.state.perfil_codigo = ctx.get("perfil_codigo") or permisos.PERFIL_ADMIN
+    request.state.perfil_nombre = ctx.get("perfil_nombre") or ""
+    request.state.permisos = ctx.get("permisos") or permisos.permisos_de_perfil(permisos.PERFIL_ADMIN)
+    return None
 
 
 @app.middleware("http")
@@ -121,27 +146,25 @@ async def production_security_middleware(request: Request, call_next):
             if not email or not password:
                 return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
 
-            conn = db.get_connection()
-            try:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(
-                        "SELECT id, email, password FROM abogados WHERE LOWER(email)=LOWER(%s) LIMIT 1",
-                        (email,),
-                    )
-                    usuario = cur.fetchone()
-            finally:
-                conn.release()
-
+            usuario = usuarios_service.obtener_usuario_por_email(email)
             if not usuario or not verify_password(password, usuario.get("password")):
                 _json_log("INFO", "login_failed")
                 return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
 
+            if usuario.get("activo") is False:
+                _json_log("INFO", "login_inactive")
+                return render_template(
+                    "login.html",
+                    {"request": request, "error": "Esta cuenta está desactivada. Contacta al administrador."},
+                    status_code=401,
+                )
+
             response = RedirectResponse(url="/dashboard", status_code=303)
             set_session_cookie(response, str(usuario["id"]))
-            _json_log("INFO", "login_success")
+            _json_log("INFO", "login_success", perfil=usuario.get("perfil_codigo") or "ADMIN")
             return response
-        except Exception:
-            _json_log("ERROR", "login_error")
+        except Exception as exc:
+            _json_log("ERROR", "login_error", error=repr(exc))
             return render_template("login.html", {"request": request, "error": "No fue posible iniciar sesión."}, status_code=500)
 
     if path == "/logout":
@@ -155,7 +178,20 @@ async def production_security_middleware(request: Request, call_next):
             response = RedirectResponse(url="/login", status_code=303)
             clear_session_cookie(response)
             return response
-        request.state.user_id = user_id
+        bloqueo = _aplicar_contexto_permisos(request, user_id)
+        if bloqueo is not None:
+            return bloqueo
+        if permisos.denegar_acceso(request.state.permisos, request.method, path):
+            _json_log(
+                "INFO",
+                "permiso_denegado",
+                path=path,
+                method=request.method,
+                perfil=getattr(request.state, "perfil_codigo", None),
+            )
+            if path.startswith("/api/") or path.startswith("/sms/api/") or path.startswith("/sms/wizard/"):
+                return JSONResponse({"error": "No autorizado"}, status_code=403)
+            return _redirect("/dashboard", error="No tienes permiso para esa pantalla")
 
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -1621,91 +1657,10 @@ def crm_anular(
 
 
 # ==============================================================================
-# VENCIMIENTOS Y TÉRMINOS
+# VENCIMIENTOS Y ACUERDOS
+# GET/POST de agenda viven solo en agenda_service.py (cuotas, contactos, auditoría).
+# Se conserva incumplir aquí: no tiene equivalente en agenda.
 # ==============================================================================
-@app.get("/vencimientos")
-def vencimientos(request: Request):
-    conn = db.get_connection()
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT radicado_interno FROM procesos ORDER BY radicado_interno DESC LIMIT 500")
-            radicados = [r["radicado_interno"] for r in cur.fetchall()]
-            cur.execute(
-                "SELECT * FROM vencimientos WHERE completado=FALSE ORDER BY fecha_vencimiento ASC, id ASC"
-            )
-            pendientes = [dict(r) for r in cur.fetchall()]
-
-            acuerdos = []
-            if expedientes_service._table_exists(cur, "acuerdos_pago"):
-                cur.execute("""
-                    SELECT a.*, i.conjunto_residencial, i.torre_apto
-                    FROM acuerdos_pago a
-                    LEFT JOIN inmuebles_ph i ON a.inmueble_id = i.id
-                    WHERE UPPER(COALESCE(a.estado, 'PENDIENTE')) NOT IN ('ANULADO', 'ELIMINADO')
-                    ORDER BY a.fecha_compromiso DESC LIMIT 200
-                """)
-                acuerdos = [dict(r) for r in cur.fetchall()]
-
-            # Eventos unificados para el calendario
-            eventos_calendario = []
-            for v in pendientes:
-                if v.get("anulado"):
-                    continue
-                eventos_calendario.append({
-                    "id": f"v-{v['id']}",
-                    "tipo": "TERMINO_JUDICIAL",
-                    "titulo": v.get("titulo") or "Término Judicial",
-                    "fecha": str(v.get("fecha_vencimiento")),
-                    "radicado": v.get("radicado_interno") or "",
-                    "observaciones": v.get("observaciones") or "",
-                    "completado": v.get("completado", False),
-                })
-            for a in acuerdos:
-                estado = str(a.get("estado") or "PENDIENTE").upper()
-                if estado in {"ANULADO", "ELIMINADO"}:
-                    continue
-                val = float(a.get("valor_acordado") or 0)
-                eventos_calendario.append({
-                    "id": f"a-{a['id']}",
-                    "tipo": "ACUERDO_PAGO",
-                    "titulo": f"Pago: {a.get('nombre_deudor') or a.get('identificacion_deudor')} (${val:,.0f})",
-                    "fecha": str(a.get("fecha_compromiso")),
-                    "valor": val,
-                    "estado": a.get("estado", "PENDIENTE"),
-                    "deudor": a.get("nombre_deudor") or a.get("identificacion_deudor"),
-                    "telefono": a.get("telefono") or "",
-                    "inmueble": f"{a.get('conjunto_residencial') or ''} {a.get('torre_apto') or ''}".strip(),
-                    "observaciones": a.get("observaciones") or "",
-                    "acuerdo_id": a.get("id"),
-                })
-
-        return render_template(
-            "vencimientos.html",
-            {
-                "request": request,
-                "radicados": radicados,
-                "vencimientos": pendientes,
-                "acuerdos": acuerdos,
-                "json_eventos": json.dumps(eventos_calendario, ensure_ascii=False, default=str),
-            },
-        )
-    finally:
-        conn.release()
-
-
-@app.post("/acuerdos/cumplir")
-def cumplir_acuerdo(request: Request, acuerdo_id: int = Form(...)):
-    conn = db.get_connection()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE acuerdos_pago SET estado='CUMPLIDO', updated_at=CURRENT_TIMESTAMP WHERE id=%s", (acuerdo_id,))
-                cur.execute("UPDATE vencimientos SET completado=TRUE WHERE tipo='ACUERDO_PAGO' AND observaciones ILIKE %s", (f"%Acuerdo #{acuerdo_id}%",))
-        return _redirect("/vencimientos", mensaje="Acuerdo+marcado+como+cumplido")
-    finally:
-        conn.release()
-
-
 @app.post("/acuerdos/incumplir")
 def incumplir_acuerdo(request: Request, acuerdo_id: int = Form(...)):
     conn = db.get_connection()
@@ -1718,96 +1673,23 @@ def incumplir_acuerdo(request: Request, acuerdo_id: int = Form(...)):
         conn.release()
 
 
-@app.post("/acuerdos/guardar")
-def guardar_acuerdo_manual(
-    request: Request,
-    identificacion_deudor: str = Form(...),
-    fecha_compromiso: str = Form(...),
-    valor_acordado: float = Form(0.0),
-    nombre_deudor: str = Form(""),
-    telefono: str = Form(""),
-    inmueble_id: int | None = Form(None),
-    observaciones: str = Form(""),
-):
-    conn = db.get_connection()
+@app.get("/pdfs/{filename}", include_in_schema=False)
+def servir_pdf_autenticado(filename: str):
+    """Descarga de PDF con sesión ERP (no público vía /static/)."""
+    import pdf_storage
+
     try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO acuerdos_pago (
-                        inmueble_id, identificacion_deudor, nombre_deudor, telefono,
-                        valor_acordado, fecha_compromiso, estado, origen, observaciones
-                    ) VALUES (%s, %s, %s, %s, %s, %s, 'PENDIENTE', 'ABOGADO_HUMANO', %s)
-                    RETURNING id
-                """, (
-                    inmueble_id, identificacion_deudor.strip(), nombre_deudor.strip(), telefono.strip(),
-                    valor_acordado, fecha_compromiso, observaciones.strip()
-                ))
-                acuerdo_id = cur.fetchone()[0]
-
-                # Registrar en gestiones CRM
-                cur.execute("""
-                    INSERT INTO gestiones_crm (
-                        inmueble_id, identificacion_deudor, tipo_contacto,
-                        resumen, promesa_pago_fecha, usuario, estado
-                    ) VALUES (%s, %s, 'Acuerdo Manual', %s, %s, 'Abogado ERP', 'ACTIVO')
-                """, (
-                    inmueble_id, identificacion_deudor.strip(),
-                    f"🤝 [ACUERDO DE PAGO #{acuerdo_id}] Pactado por ${valor_acordado:,.0f} para el {fecha_compromiso}. {observaciones}",
-                    fecha_compromiso
-                ))
-
-                # Registrar en vencimientos
-                cur.execute("""
-                    INSERT INTO vencimientos (
-                        radicado_interno, titulo, fecha_vencimiento, observaciones,
-                        completado, tipo, valor, inmueble_id
-                    ) VALUES ('ACUERDO-PAGO', %s, %s, %s, FALSE, 'ACUERDO_PAGO', %s, %s)
-                """, (
-                    f"Pago acordado ({nombre_deudor or identificacion_deudor}) - ${valor_acordado:,.0f}",
-                    fecha_compromiso,
-                    f"Acuerdo #{acuerdo_id}. Tel: {telefono}. Obs: {observaciones}",
-                    valor_acordado,
-                    inmueble_id
-                ))
-        return _redirect("/vencimientos", mensaje="Acuerdo+registrado+exitosamente")
-    finally:
-        conn.release()
-
-
-@app.post("/vencimientos/guardar")
-def guardar_vencimiento(
-    radicado_interno: str = Form(...),
-    titulo: str = Form(...),
-    fecha_vencimiento: date = Form(...),
-    observaciones: str = Form(""),
-):
-    _ensure_crm_and_vencimientos_schema()
-    conn = db.get_connection()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO vencimientos (radicado_interno, titulo, fecha_vencimiento, observaciones) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (radicado_interno.strip(), titulo.strip(), fecha_vencimiento, observaciones.strip()),
-                )
-        return RedirectResponse("/vencimientos", status_code=303)
-    finally:
-        conn.release()
-
-
-@app.post("/vencimientos/completar")
-def completar_vencimiento(vencimiento_id: int = Form(...)):
-    _ensure_crm_and_vencimientos_schema()
-    conn = db.get_connection()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE vencimientos SET completado=TRUE WHERE id=%s", (vencimiento_id,))
-        return RedirectResponse("/vencimientos", status_code=303)
-    finally:
-        conn.release()
+        path = pdf_storage.resolve_pdf(filename)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    return FileResponse(
+        path=str(path),
+        media_type="application/pdf",
+        filename=filename,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 # ==============================================================================

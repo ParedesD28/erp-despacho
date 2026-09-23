@@ -68,12 +68,13 @@ def generar_pdf_paz_y_salvo(
     if not fecha_emision:
         fecha_emision = date.today()
         
-    os.makedirs("static/pdfs", exist_ok=True)
+    import pdf_storage
+
     token_aleatorio = secrets.token_hex(6).upper()
     codigo_verif = hashlib.sha256(f"{inmueble_id}|{identificacion}|{fecha_emision}|{token_aleatorio}".encode()).hexdigest()[:16].upper()
-    
+
     filename = f"Paz_Y_Salvo_{inmueble_id}_{token_aleatorio}.pdf"
-    filepath = os.path.join("static", "pdfs", filename)
+    filepath = str(pdf_storage.resolve_pdf(filename))
     
     doc = SimpleDocTemplate(
         filepath,
