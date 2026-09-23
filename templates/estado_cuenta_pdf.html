@@ -17,7 +17,8 @@
         <p class="mt-1 text-amber-800">
             Hasta <strong>{{ max_archivos }}</strong> PDF (máx. {{ max_mb }} MB c/u).
             El navegador los envía en grupos de 10 para evitar timeout en Render.
-            Cada archivo se procesa aislado. Solo PDF nativos COLON (no escaneos).
+            El Excel trae una hoja por deudor (mes, cuota ordinaria, extraordinaria y saldo)
+            más el detalle. Solo PDF nativos COLON (no escaneos).
         </p>
     </div>
 
@@ -76,6 +77,7 @@
                         <th class="text-right px-3 py-2">Movs</th>
                         <th class="text-right px-3 py-2">Omit.</th>
                         <th class="text-right px-3 py-2">Saldo</th>
+                        <th class="text-left px-3 py-2">Inicio mora</th>
                         <th class="text-left px-3 py-2">Estado</th>
                     </tr>
                 </thead>
@@ -167,6 +169,7 @@
                 <td class="px-3 py-2 text-right">${c.movimientos_extraidos ?? 0}</td>
                 <td class="px-3 py-2 text-right">${c.bloques_omitidos ?? 0}</td>
                 <td class="px-3 py-2 text-right">${money(c.saldo_final)}</td>
+                <td class="px-3 py-2">${c.fecha_inicio_mora || '—'}</td>
                 <td class="px-3 py-2">${estado}</td>`;
             tabla.appendChild(tr);
         });

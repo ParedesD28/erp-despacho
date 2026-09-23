@@ -1,0 +1,123 @@
+import unittest
+
+import pandas as pd
+
+from estado_cuenta_etl import CLASIFICACION_CUOTA, CLASIFICACION_EXTRA, clasificar_concepto, depurar_movimientos
+
+
+def _fila(fecha, concepto, tipo, valor, abono, titular="ANA", archivo="a.pdf", numero="1"):
+    return {
+        "Archivo": archivo,
+        "Titular": titular,
+        "Bloque": "9",
+        "Apartamento": "401",
+        "Codigo Cuenta": "9401",
+        "Concepto": concepto,
+        "Tipo Documento": tipo,
+        "Número": numero,
+        "Fecha": fecha,
+        "Valor": valor,
+        "Abono": abono,
+        "Saldo": 0,
+    }
+
+
+class ClasificacionTests(unittest.TestCase):
+    def test_typos_de_cuota_no_alteran_el_texto(self):
+        for concepto in (
+            "CUOTA DE ADMINISTRACION",
+            "CUOTA ADMINISTRATIVA",
+            "COUTA DE ADMINISTRACION",
+            "APORTE CUOTA DE ADMINISTRACION",
+        ):
+            self.assertEqual(clasificar_concepto(concepto), CLASIFICACION_CUOTA)
+        self.assertEqual(clasificar_concepto("SANCION ASAMBLEA"), CLASIFICACION_EXTRA)
+        self.assertEqual(clasificar_concepto("INTERESES DE MORA"), "INTERES")
+
+
+class CorteMoraTests(unittest.TestCase):
+    def _base(self):
+        # Saldos inversos de abajo hacia arriba con valor 10:
+        # fila 0 saldo 80, 1=70, 2=60, 3=50, 4=40, 5=30, 6=20, 7=10.
+        # Negativos desde abajo: fila 6, fila 4, fila 2 (3.º) y fila 0 (4.º).
+        return [
+            _fila("2024.01.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, numero="0"),
+            _fila("2024.03.01", "SANCION ASAMBLEA", "FAC", 10, 80, numero="1"),
+            _fila("2024.03.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, numero="2"),
+            _fila("2024.04.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 60, numero="3"),
+            _fila("2024.05.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, numero="4"),
+            _fila("2024.06.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 40, numero="5"),
+            _fila("2024.07.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, numero="6"),
+            _fila("2024.08.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 20, numero="7"),
+            _fila("2024.08.01", "INTERESES DE MORA", "FAC", 0, 0, numero="8"),
+            _fila("2024.08.01", "CUOTA DE ADMINISTRACION", "RDC", 0, 5, numero="9"),
+        ]
+
+    def test_conserva_el_tercer_negativo_y_el_dia_completo(self):
+        resultado = depurar_movimientos(pd.DataFrame(self._base()))
+        fechas = resultado["depurado"]["Fecha"].tolist()
+        conceptos = resultado["depurado"]["Concepto"].tolist()
+
+        self.assertNotIn("2024-01-01", fechas)
+        self.assertIn("2024-03-01", fechas)
+        self.assertEqual(resultado["cortes"].iloc[0]["Fecha Inicio Mora"], "2024-03-01")
+        self.assertIn("SANCION ASAMBLEA", conceptos)
+        self.assertNotIn("INTERESES DE MORA", conceptos)
+        self.assertTrue((resultado["depurado"]["Tipo Documento"] == "FAC").all())
+        self.assertFalse(resultado["depurado"]["Concepto"].astype(str).str.contains("SÓLO EXTRAS").any())
+        sancion = resultado["depurado"].loc[resultado["depurado"]["Concepto"] == "SANCION ASAMBLEA"].iloc[0]
+        self.assertEqual(sancion["Clasificacion"], CLASIFICACION_EXTRA)
+        self.assertEqual(sancion["Concepto"], "SANCION ASAMBLEA")
+
+    def test_huerfano_conserva_el_concepto_original(self):
+        df = pd.DataFrame(
+            [
+                _fila("2024.01.01", "SANCION ASAMBLEA", "FAC", 10, 0),
+                _fila("2024.02.01", "ELABORACION PISO", "FAC", 10, 0),
+            ]
+        )
+        resultado = depurar_movimientos(df)
+        self.assertEqual(resultado["depurado"]["Concepto"].tolist(), ["SANCION ASAMBLEA", "ELABORACION PISO"])
+        self.assertFalse(resultado["cortes"].iloc[0]["Corte Aplicado"])
+
+    def test_no_mezcla_titulares(self):
+        filas = self._base() + [_fila("2020.01.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, titular="OTRO", archivo="b.pdf")]
+        resultado = depurar_movimientos(pd.DataFrame(filas))
+        otro = resultado["depurado"].loc[resultado["depurado"]["Titular"] == "OTRO", "Fecha"].tolist()
+        self.assertEqual(otro, ["2020-01-01"])
+        self.assertEqual(len(resultado["certificados"]), 2)
+
+    def test_celdas_rotas_no_cuentan_como_negativo(self):
+        df = pd.DataFrame(
+            [
+                _fila("2024.01.01", "CUOTA DE ADMINISTRACION", "FAC", "#¡VALOR!", "########"),
+                _fila("2024.02.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0),
+            ]
+        )
+        resultado = depurar_movimientos(df)
+        self.assertFalse(resultado["cortes"].iloc[0]["Corte Aplicado"])
+        self.assertIn("valor_ilegible", resultado["depurado"].iloc[0]["Alerta"])
+
+    def test_un_certificado_por_deudor_con_saldo_corrido(self):
+        resultado = depurar_movimientos(pd.DataFrame(self._base()))
+        hojas = {c["hoja"]: c for c in resultado["certificados"]}
+        self.assertEqual(len(hojas), 1)
+        tabla = next(iter(hojas.values()))["tabla"]
+        marzo = tabla.loc[tabla["MES"] == "MARZO"].iloc[0]
+        self.assertEqual(marzo["CUOTAS ORDINARIAS"], 10)
+        self.assertEqual(marzo["CUOTAS EXTRAORDINARIAS"], 10)
+        self.assertEqual(marzo["SALDO"], 20)
+        self.assertTrue(pd.isna(tabla.loc[tabla["MES"] == "ABRIL", "CUOTAS EXTRAORDINARIAS"].iloc[0]))
+        self.assertNotIn("2024-01-01", tabla["FECHA CAUSACION"].astype(str).tolist())
+
+    def test_consolidado_suma_sin_borrar_conceptos(self):
+        resultado = depurar_movimientos(pd.DataFrame(self._base()))
+        marzo = resultado["consolidado"].loc[resultado["consolidado"]["Periodo"] == "2024-03"].iloc[0]
+        self.assertEqual(marzo["Valor Cuota"], 10)
+        self.assertEqual(marzo["Valor Extras"], 10)
+        self.assertIn("SANCION ASAMBLEA", marzo["Conceptos Originales"])
+        self.assertIn("CUOTA DE ADMINISTRACION", marzo["Conceptos Originales"])
+
+
+if __name__ == "__main__":
+    unittest.main()

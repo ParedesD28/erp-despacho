@@ -489,7 +489,7 @@ def generar_excel_estado_cuenta(rows: list[dict], cabecera: dict | None = None) 
     return output
 
 
-def generar_excel_lote(cuentas: list[dict]) -> io.BytesIO:
+def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> io.BytesIO:
     """
     Un Excel para N PDFs: hoja Resumen (1 fila/cuenta) + Movimientos (todas las filas).
     Cada movimiento ya trae Archivo/Titular/Bloque/Apartamento de SU PDF.
@@ -521,12 +521,42 @@ def generar_excel_lote(cuentas: list[dict]) -> io.BytesIO:
         )
         movimientos.extend(cuenta.get("rows") or [])
 
+    if depuracion is None and movimientos:
+        from estado_cuenta_etl import depurar_movimientos
+
+        depuracion = depurar_movimientos(pd.DataFrame(movimientos))
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame(resumen_rows).to_excel(writer, index=False, sheet_name="Resumen")
         pd.DataFrame(movimientos, columns=list(_COLUMNS)).to_excel(
             writer, index=False, sheet_name="Movimientos"
         )
+        if depuracion is not None:
+            depuracion["depurado"].to_excel(writer, index=False, sheet_name="Depurado")
+            depuracion["consolidado"].to_excel(writer, index=False, sheet_name="Consolidado")
+            depuracion["cortes"].to_excel(writer, index=False, sheet_name="Inicio Mora")
+            for cert in depuracion.get("certificados") or []:
+                hoja = cert["hoja"]
+                cert["tabla"].to_excel(writer, index=False, sheet_name=hoja, startrow=6)
+                ws_cert = writer.book[hoja]
+                ws_cert["A1"] = "Titular"
+                ws_cert["B1"] = cert["titular"]
+                ws_cert["A2"] = "Bloque"
+                ws_cert["B2"] = cert["bloque"]
+                ws_cert["A3"] = "Apartamento"
+                ws_cert["B3"] = cert["apartamento"]
+                ws_cert["A4"] = "Codigo cuenta"
+                ws_cert["B4"] = cert["codigo_cuenta"]
+                ws_cert["A5"] = "Inicio mora"
+                ws_cert["B5"] = cert["fecha_inicio_mora"]
+                ws_cert.column_dimensions["A"].width = 28
+                ws_cert.column_dimensions["C"].width = 24
+                ws_cert.column_dimensions["D"].width = 26
+                ws_cert.column_dimensions["G"].width = 42
+            _estilizar_hoja_simple(writer.book["Depurado"], max_col=16)
+            _estilizar_hoja_simple(writer.book["Consolidado"], max_col=11)
+            _estilizar_hoja_simple(writer.book["Inicio Mora"], max_col=10)
         _estilizar_hoja_simple(writer.book["Resumen"], max_col=13)
         for col in writer.book["Resumen"].columns:
             letter = get_column_letter(col[0].column)
@@ -665,7 +695,24 @@ def procesar_lote_estados_cuenta(
 
     ok = sum(1 for c in cuentas if not c.get("error") and c.get("movimientos_extraidos", 0) > 0)
     fallidos = sum(1 for c in cuentas if c.get("error"))
-    excel = generar_excel_lote(cuentas)
+    movimientos = [row for cuenta in cuentas for row in (cuenta.get("rows") or [])]
+    depuracion = None
+    if movimientos:
+        from estado_cuenta_etl import depurar_movimientos
+
+        depuracion = depurar_movimientos(pd.DataFrame(movimientos))
+        cortes = {
+            (str(fila["Archivo"] or ""), str(fila["Titular"] or ""), str(fila["Codigo Cuenta"] or "")): fila["Fecha Inicio Mora"]
+            for _, fila in depuracion["cortes"].iterrows()
+        }
+        for cuenta in cuentas:
+            clave = (
+                str(cuenta.get("archivo") or ""),
+                str(cuenta.get("titular") or ""),
+                str(cuenta.get("codigo_cuenta") or ""),
+            )
+            cuenta["fecha_inicio_mora"] = cortes.get(clave) or ""
+    excel = generar_excel_lote(cuentas, depuracion)
     return {
         "archivos_recibidos": len(archivos),
         "archivos_ok": ok,
