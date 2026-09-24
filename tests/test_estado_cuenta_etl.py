@@ -48,6 +48,7 @@ class VerificacionTests(unittest.TestCase):
 
         filas = [
             _fila("2016.05.01", "CUOTA DE ADMINISTRACION", "FAC", 25000, 0, saldo=25000, numero="0000008"),
+            _fila("2016.05.17", "INTERESES DE MORA", "FAC", 3000, 0, saldo=28000, numero="0000011"),
             _fila("2016.05.17", "CUOTA DE ADMINISTRACION", "RDC", 0, 25000, saldo=0, numero="0000023"),
         ]
         cuentas = [
@@ -86,9 +87,12 @@ class VerificacionTests(unittest.TestCase):
                 "Diferencia",
             ],
         )
-        self.assertEqual(hoja["A8"].value, "CUOTA DE ADMINISTRACION")
-        self.assertEqual(hoja["H8"].value, 25000)
-        self.assertEqual(hoja["I8"].value, 0)
+        conceptos = [hoja.cell(fila, 1).value for fila in range(8, hoja.max_row + 1)]
+        self.assertEqual(conceptos[0], "CUOTA DE ADMINISTRACION")
+        self.assertNotIn("INTERESES DE MORA", conceptos)
+        movimientos = libro["Movimientos"]
+        conceptos_mov = [movimientos.cell(fila, 6).value for fila in range(2, movimientos.max_row + 1)]
+        self.assertNotIn("INTERESES DE MORA", conceptos_mov)
 
     def test_la_verificacion_no_mezcla_cuentas(self):
         filas = [

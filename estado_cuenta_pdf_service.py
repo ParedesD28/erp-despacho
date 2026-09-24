@@ -545,10 +545,14 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame(resumen_rows).to_excel(writer, index=False, sheet_name="Resumen")
-        from estado_cuenta_etl import anotar_verificacion
+        from estado_cuenta_etl import CLASIFICACION_INTERES, anotar_verificacion, clasificar_concepto
 
         movimientos_df = anotar_verificacion(pd.DataFrame(movimientos, columns=list(_COLUMNS)))
-        movimientos_df.to_excel(writer, index=False, sheet_name="Movimientos")
+        # La mora ya usó estas filas. En el Excel no se listan intereses.
+        sin_interes = movimientos_df.loc[
+            movimientos_df["Concepto"].map(clasificar_concepto) != CLASIFICACION_INTERES
+        ].copy()
+        sin_interes.to_excel(writer, index=False, sheet_name="Movimientos")
         if depuracion is not None:
             depuracion["depurado"].to_excel(writer, index=False, sheet_name="Depurado")
             depuracion["consolidado"].to_excel(writer, index=False, sheet_name="Consolidado")
@@ -567,11 +571,11 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
             for cert in depuracion.get("certificados") or []:
                 hoja = cert["hoja"]
                 mascara = (
-                    (movimientos_df["Archivo"].astype(str) == str(cert["archivo"] or ""))
-                    & (movimientos_df["Titular"].astype(str) == str(cert["titular"] or ""))
-                    & (movimientos_df["Codigo Cuenta"].astype(str) == str(cert["codigo_cuenta"] or ""))
+                    (sin_interes["Archivo"].astype(str) == str(cert["archivo"] or ""))
+                    & (sin_interes["Titular"].astype(str) == str(cert["titular"] or ""))
+                    & (sin_interes["Codigo Cuenta"].astype(str) == str(cert["codigo_cuenta"] or ""))
                 )
-                movimientos_df.loc[mascara, columnas_detalle].to_excel(
+                sin_interes.loc[mascara, columnas_detalle].to_excel(
                     writer, index=False, sheet_name=hoja, startrow=6
                 )
                 ws_cert = writer.book[hoja]
