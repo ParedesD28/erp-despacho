@@ -548,11 +548,13 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
         from estado_cuenta_etl import CLASIFICACION_INTERES, anotar_verificacion, clasificar_concepto
 
         movimientos_df = anotar_verificacion(pd.DataFrame(movimientos, columns=list(_COLUMNS)))
-        # La mora ya usó estas filas. En el Excel no se listan intereses.
-        sin_interes = movimientos_df.loc[
-            movimientos_df["Concepto"].map(clasificar_concepto) != CLASIFICACION_INTERES
+        # La mora ya usó el lote completo. En el Excel quedan solo facturas, sin intereses.
+        tipo = movimientos_df["Tipo Documento"].map(lambda v: str(v or "").strip().upper())
+        visibles = movimientos_df.loc[
+            (tipo == "FAC")
+            & (movimientos_df["Concepto"].map(clasificar_concepto) != CLASIFICACION_INTERES)
         ].copy()
-        sin_interes.to_excel(writer, index=False, sheet_name="Movimientos")
+        visibles.to_excel(writer, index=False, sheet_name="Movimientos")
         if depuracion is not None:
             depuracion["depurado"].to_excel(writer, index=False, sheet_name="Depurado")
             depuracion["consolidado"].to_excel(writer, index=False, sheet_name="Consolidado")
@@ -571,11 +573,11 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
             for cert in depuracion.get("certificados") or []:
                 hoja = cert["hoja"]
                 mascara = (
-                    (sin_interes["Archivo"].astype(str) == str(cert["archivo"] or ""))
-                    & (sin_interes["Titular"].astype(str) == str(cert["titular"] or ""))
-                    & (sin_interes["Codigo Cuenta"].astype(str) == str(cert["codigo_cuenta"] or ""))
+                    (visibles["Archivo"].astype(str) == str(cert["archivo"] or ""))
+                    & (visibles["Titular"].astype(str) == str(cert["titular"] or ""))
+                    & (visibles["Codigo Cuenta"].astype(str) == str(cert["codigo_cuenta"] or ""))
                 )
-                sin_interes.loc[mascara, columnas_detalle].to_excel(
+                visibles.loc[mascara, columnas_detalle].to_excel(
                     writer, index=False, sheet_name=hoja, startrow=6
                 )
                 ws_cert = writer.book[hoja]

@@ -88,11 +88,12 @@ class VerificacionTests(unittest.TestCase):
             ],
         )
         conceptos = [hoja.cell(fila, 1).value for fila in range(8, hoja.max_row + 1)]
-        self.assertEqual(conceptos[0], "CUOTA DE ADMINISTRACION")
-        self.assertNotIn("INTERESES DE MORA", conceptos)
+        tipos = [hoja.cell(fila, 2).value for fila in range(8, hoja.max_row + 1)]
+        self.assertEqual(conceptos, ["CUOTA DE ADMINISTRACION"])
+        self.assertEqual(tipos, ["FAC"])
         movimientos = libro["Movimientos"]
-        conceptos_mov = [movimientos.cell(fila, 6).value for fila in range(2, movimientos.max_row + 1)]
-        self.assertNotIn("INTERESES DE MORA", conceptos_mov)
+        tipos_mov = [movimientos.cell(fila, 7).value for fila in range(2, movimientos.max_row + 1)]
+        self.assertEqual(tipos_mov, ["FAC"])
 
     def test_la_verificacion_no_mezcla_cuentas(self):
         filas = [
