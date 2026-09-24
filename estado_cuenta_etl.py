@@ -250,6 +250,8 @@ def _consolidar(depurado: pd.DataFrame) -> pd.DataFrame:
             if texto not in conceptos:
                 conceptos.append(texto)
         cuota = float(grupo.loc[grupo["Clasificacion"] == CLASIFICACION_CUOTA, "Valor"].sum())
+        if cuota == 0:
+            continue
         extras = float(grupo.loc[grupo["Clasificacion"] == CLASIFICACION_EXTRA, "Valor"].sum())
         fechas = [str(f) for f in grupo["Fecha"].tolist() if str(f).strip() and str(f).lower() != "nan"]
         filas.append(
@@ -363,6 +365,57 @@ def armar_certificados(consolidado: pd.DataFrame) -> list[dict]:
             }
         )
     return salida
+
+
+def acomodar_extraordinarias(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    La extraordinaria se pone al lado de la cuota ordinaria del mismo mes.
+    Sin ordinaria en ese mes, la extraordinaria no sale.
+    """
+    if df is None or df.empty:
+        salida = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+        salida["Cuota Extraordinaria"] = pd.Series(dtype="float64")
+        salida["Conceptos Extraordinarios"] = pd.Series(dtype="object")
+        return salida
+
+    trabajo = df.reset_index(drop=True)
+    for col in ("Archivo", "Codigo Cuenta", "Titular", "Concepto", "Fecha", "Valor"):
+        if col not in trabajo.columns:
+            trabajo[col] = None
+    trabajo["_clasificacion"] = trabajo["Concepto"].map(clasificar_concepto)
+    trabajo["_periodo"] = trabajo["Fecha"].map(lambda valor: str(valor or "")[:7])
+    extra_valor: list[float | None] = [None] * len(trabajo)
+    extra_nombres: list[str | None] = [None] * len(trabajo)
+    conservar: list[int] = []
+    claves = ["Archivo", "Codigo Cuenta", "Titular", "_periodo"]
+    for _, grupo in trabajo.groupby(claves, dropna=False, sort=False):
+        ordinarias = [int(i) for i in grupo.index if grupo.loc[i, "_clasificacion"] == CLASIFICACION_CUOTA]
+        if not ordinarias:
+            continue
+        conservar.extend(ordinarias)
+        extras = grupo.loc[grupo["_clasificacion"] == CLASIFICACION_EXTRA]
+        if extras.empty:
+            continue
+        ancla = ordinarias[0]
+        valores = extras["Valor"].map(_a_float).fillna(0.0)
+        extra_valor[ancla] = round(float(valores.sum()), 2)
+        nombres: list[str] = []
+        for concepto in extras["Concepto"].tolist():
+            texto = "" if concepto is None else str(concepto)
+            if texto and texto not in nombres:
+                nombres.append(texto)
+        extra_nombres[ancla] = " | ".join(nombres)
+    salida = trabajo.loc[conservar].copy()
+    salida["Cuota Extraordinaria"] = [extra_valor[i] for i in salida.index]
+    salida["Conceptos Extraordinarios"] = [extra_nombres[i] for i in salida.index]
+    salida = salida.drop(columns=["_clasificacion", "_periodo"])
+    columnas = [col for col in salida.columns if col not in ("Cuota Extraordinaria", "Conceptos Extraordinarios")]
+    if "Valor" in columnas:
+        columnas.insert(columnas.index("Valor") + 1, "Cuota Extraordinaria")
+    else:
+        columnas.append("Cuota Extraordinaria")
+    columnas.append("Conceptos Extraordinarios")
+    return salida.loc[:, columnas].reset_index(drop=True)
 
 
 def anotar_verificacion(df: pd.DataFrame) -> pd.DataFrame:

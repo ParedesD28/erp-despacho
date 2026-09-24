@@ -5,6 +5,7 @@ import pandas as pd
 from estado_cuenta_etl import (
     CLASIFICACION_CUOTA,
     CLASIFICACION_EXTRA,
+    acomodar_extraordinarias,
     anotar_verificacion,
     clasificar_concepto,
     depurar_movimientos,
@@ -81,10 +82,12 @@ class VerificacionTests(unittest.TestCase):
                 "Número",
                 "Fecha",
                 "Valor",
+                "Cuota Extraordinaria",
                 "Abono",
                 "Saldo",
                 "Abono Acumulado",
                 "Diferencia",
+                "Conceptos Extraordinarios",
             ],
         )
         conceptos = [hoja.cell(fila, 1).value for fila in range(8, hoja.max_row + 1)]
@@ -103,6 +106,21 @@ class VerificacionTests(unittest.TestCase):
         salida = anotar_verificacion(pd.DataFrame(filas))
         self.assertEqual(salida["Abono Acumulado"].tolist(), [0.0, 5.0])
         self.assertEqual(salida["Diferencia"].tolist(), [10.0, 10.0])
+
+    def test_extraordinaria_se_pone_al_lado_de_la_ordinaria(self):
+        df = pd.DataFrame(
+            [
+                _fila("2024.03.01", "CUOTA DE ADMINISTRACION", "FAC", 40, 0, saldo=40, numero="1"),
+                _fila("2024.03.01", "SANCION ASAMBLEA", "FAC", 15, 0, saldo=55, numero="2"),
+                _fila("2024.04.01", "ELABORACION PISO", "FAC", 20, 0, saldo=75, numero="3"),
+            ]
+        )
+        salida = acomodar_extraordinarias(df)
+        self.assertEqual(salida["Concepto"].tolist(), ["CUOTA DE ADMINISTRACION"])
+        self.assertEqual(salida["Valor"].tolist(), [40])
+        self.assertEqual(salida["Cuota Extraordinaria"].tolist(), [15])
+        self.assertEqual(salida["Conceptos Extraordinarios"].tolist(), ["SANCION ASAMBLEA"])
+        self.assertNotIn("ELABORACION PISO", salida["Concepto"].tolist())
 
 
 class ClasificacionTests(unittest.TestCase):

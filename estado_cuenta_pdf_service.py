@@ -545,15 +545,21 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame(resumen_rows).to_excel(writer, index=False, sheet_name="Resumen")
-        from estado_cuenta_etl import CLASIFICACION_INTERES, anotar_verificacion, clasificar_concepto
+        from estado_cuenta_etl import (
+            CLASIFICACION_INTERES,
+            acomodar_extraordinarias,
+            anotar_verificacion,
+            clasificar_concepto,
+        )
 
         movimientos_df = anotar_verificacion(pd.DataFrame(movimientos, columns=list(_COLUMNS)))
-        # La mora ya usó el lote completo. En el Excel quedan solo facturas, sin intereses.
+        # La mora ya usó el lote completo. En el Excel quedan facturas FAC, sin intereses.
         tipo = movimientos_df["Tipo Documento"].map(lambda v: str(v or "").strip().upper())
         visibles = movimientos_df.loc[
             (tipo == "FAC")
             & (movimientos_df["Concepto"].map(clasificar_concepto) != CLASIFICACION_INTERES)
         ].copy()
+        visibles = acomodar_extraordinarias(visibles)
         visibles.to_excel(writer, index=False, sheet_name="Movimientos")
         if depuracion is not None:
             depuracion["depurado"].to_excel(writer, index=False, sheet_name="Depurado")
@@ -565,10 +571,12 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
                 "Número",
                 "Fecha",
                 "Valor",
+                "Cuota Extraordinaria",
                 "Abono",
                 "Saldo",
                 "Abono Acumulado",
                 "Diferencia",
+                "Conceptos Extraordinarios",
             ]
             for cert in depuracion.get("certificados") or []:
                 hoja = cert["hoja"]
@@ -594,14 +602,15 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
                 _estilizar_encabezado(ws_cert, 7)
                 _formato_dinero(
                     ws_cert,
-                    {"Valor", "Abono", "Saldo", "Abono Acumulado", "Diferencia"},
+                    {"Valor", "Cuota Extraordinaria", "Abono", "Saldo", "Abono Acumulado", "Diferencia"},
                     header_row=7,
                 )
                 ws_cert.column_dimensions["A"].width = 42
                 ws_cert.column_dimensions["B"].width = 16
                 ws_cert.column_dimensions["C"].width = 14
                 ws_cert.column_dimensions["D"].width = 14
-                for letra in ("E", "F", "G", "H", "I"):
+                ws_cert.column_dimensions["K"].width = 42
+                for letra in ("E", "F", "G", "H", "I", "J"):
                     ws_cert.column_dimensions[letra].width = 18
             _estilizar_encabezado(writer.book["Depurado"])
             _estilizar_encabezado(writer.book["Consolidado"])
@@ -614,7 +623,7 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
         _estilizar_encabezado(writer.book["Movimientos"])
         _formato_dinero(
             writer.book["Movimientos"],
-            set(_MONEY_COLS) | {"Abono Acumulado", "Diferencia"},
+            set(_MONEY_COLS) | {"Cuota Extraordinaria", "Abono Acumulado", "Diferencia"},
         )
         for col in writer.book["Resumen"].columns:
             letter = get_column_letter(col[0].column)
@@ -630,8 +639,10 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
             else:
                 width = 15
             writer.book["Movimientos"].column_dimensions[letter].width = width
-        writer.book["Movimientos"].column_dimensions["M"].width = 18
-        writer.book["Movimientos"].column_dimensions["N"].width = 18
+        for nombre, ancho in (("Cuota Extraordinaria", 22), ("Conceptos Extraordinarios", 42), ("Abono Acumulado", 18), ("Diferencia", 18)):
+            for celda in writer.book["Movimientos"][1]:
+                if celda.value == nombre:
+                    writer.book["Movimientos"].column_dimensions[get_column_letter(celda.column)].width = ancho
     output.seek(0)
     return output
 
