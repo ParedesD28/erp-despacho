@@ -467,19 +467,25 @@ def cargar_procesos_general_sin_duplicados(estado_filtro: str = "ACTIVOS"):
                         p.pretensiones,
                         p.medidas_cautelares,
                         COALESCE(ppdemandante.nombres, 'SIN REGISTRO') AS demandante_nombre,
+                        COALESCE(ppdemandante.identificaciones, '') AS demandante_identificacion,
                         COALESCE(ppdemandado.nombres, 'SIN REGISTRO') AS demandado_nombre,
+                        COALESCE(ppdemandado.identificaciones, '') AS demandado_identificacion,
                         a.nombre AS abogado_asignado
                     FROM procesos p
                     LEFT JOIN abogados a ON p.abogado_id = a.id
                     LEFT JOIN LATERAL (
-                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
+                        SELECT
+                            STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres,
+                            STRING_AGG(DISTINCT c.identificacion, ' | ' ORDER BY c.identificacion) AS identificaciones
                         FROM proceso_partes pp
                         JOIN contactos c ON c.id=pp.contacto_id
                         WHERE pp.radicado_interno=p.radicado_interno
                           AND UPPER(pp.rol)='DEMANDANTE'
                     ) ppdemandante ON TRUE
                     LEFT JOIN LATERAL (
-                        SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres
+                        SELECT
+                            STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre) AS nombres,
+                            STRING_AGG(DISTINCT c.identificacion, ' | ' ORDER BY c.identificacion) AS identificaciones
                         FROM proceso_partes pp
                         JOIN contactos c ON c.id=pp.contacto_id
                         WHERE pp.radicado_interno=p.radicado_interno

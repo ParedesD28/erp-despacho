@@ -63,7 +63,7 @@
                 </thead>
                 <tbody id="cuerpo-tabla" class="divide-y divide-slate-100">
                 {% for p in procesos %}
-                    <tr onclick="window.location.href='/expediente/{{ p.radicado_interno }}'" class="hover:bg-blue-50 transition-colors fila-proceso cursor-pointer {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}bg-rose-50/40{% endif %}" data-cartera="{{ (p.tipo_cartera or 'JURIDICO')|upper }}" data-estado="{{ (p.estado or 'ACTIVO')|upper }}">
+                    <tr onclick="window.location.href='/expediente/{{ p.radicado_interno }}'" class="hover:bg-blue-50 transition-colors fila-proceso cursor-pointer {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}bg-rose-50/40{% endif %}" data-cartera="{{ (p.tipo_cartera or 'JURIDICO')|upper }}" data-estado="{{ (p.estado or 'ACTIVO')|upper }}" data-demandante-id="{{ p.demandante_identificacion or '' }}" data-demandado-id="{{ p.demandado_identificacion or '' }}">
                         <td class="px-6 py-4">
                             <div class="font-bold text-blue-600">{{ p.radicado_interno }}</div>
                             {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}<span class="inline-flex mt-1 items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">Inactivo</span>{% endif %}
@@ -78,8 +78,10 @@
                         </td>
                         <td class="px-6 py-4 text-sm text-slate-700 font-medium uppercase">
                             <div class="font-bold">{{ p.demandante_nombre or 'SIN DEMANDANTE' }}</div>
+                            {% if p.demandante_identificacion %}<div class="text-[10px] font-mono font-normal normal-case text-slate-400 mt-0.5">CC {{ p.demandante_identificacion }}</div>{% endif %}
                             <div class="text-[10px] font-black text-slate-400 uppercase my-1">vs</div>
                             <div class="font-bold">{{ p.demandado_nombre or 'SIN DEMANDADO' }}</div>
+                            {% if p.demandado_identificacion %}<div class="text-[10px] font-mono font-normal normal-case text-slate-400 mt-0.5">CC {{ p.demandado_identificacion }}</div>{% endif %}
                         </td>
                     </tr>
                 {% endfor %}
@@ -114,6 +116,19 @@
 
     function normalizar(texto) {
         return (texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    }
+
+    /** Quita puntos, espacios y guiones para comparar cédulas/NIT. */
+    function normalizarIdentificacion(texto) {
+        return normalizar(texto).replace(/[.\s\-]/g, '');
+    }
+
+    function textoCoincide(contenido, busqueda) {
+        if (!busqueda) return true;
+        if (contenido.includes(busqueda)) return true;
+        const busquedaId = normalizarIdentificacion(busqueda);
+        if (!busquedaId) return false;
+        return normalizarIdentificacion(contenido).includes(busquedaId);
     }
 
     function ejecutarBusqueda() {
@@ -154,10 +169,11 @@
         let visibles = 0;
 
         filas.forEach(fila => {
-            const contenido = normalizar(fila.textContent);
+            const idsPartes = [fila.dataset.demandanteId || '', fila.dataset.demandadoId || ''].join(' ');
+            const contenido = normalizar(fila.textContent + ' ' + idsPartes);
             const tipo = (fila.dataset.cartera || '').toUpperCase();
             const estadoFila = (fila.dataset.estado || 'ACTIVO').toUpperCase();
-            const coincideTexto = !busqueda || contenido.includes(busqueda);
+            const coincideTexto = textoCoincide(contenido, busqueda);
             const coincideCartera = !cartera || tipo === cartera;
             const coincideEstado = estado === 'TODOS' || (estado === 'INACTIVOS' ? estadoFila === 'INACTIVO' : estadoFila !== 'INACTIVO');
             const visible = coincideTexto && coincideCartera && coincideEstado;
