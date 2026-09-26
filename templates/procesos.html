@@ -218,6 +218,10 @@ function configurarRadicacion(){
 
     document.getElementById('bloque-demandante').classList.toggle('hidden',esPH);
     document.getElementById('aviso-demandante-automatico').classList.toggle('hidden',!esPH);
+    if(esPH){
+        selectDemandantes.clear();
+        document.getElementById('contenedor-nuevos-demandantes').innerHTML='';
+    }
 
     document.getElementById('bloque-propiedad').classList.toggle('hidden',!esPH);
     document.getElementById('conjunto_id').disabled=!esPH;

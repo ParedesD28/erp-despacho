@@ -124,9 +124,9 @@ def radicar_proceso(
     if interseccion:
         raise ValueError("Una misma persona no puede ser demandante y demandado en el mismo proceso")
 
-    if not demandantes and not nuevos_dem:
-        raise ValueError("Debe existir al menos un demandante")
-
+    # En cuotas de administración (requiere_conjunto) el demandante/acreedor se
+    # resuelve después desde la persona jurídica del conjunto. No exigir
+    # demandante aquí: el formulario PH oculta ese campo a propósito.
     if not demandados and not nuevos_ddo:
         raise ValueError("Debe existir al menos un demandado")
 
@@ -203,6 +203,9 @@ def radicar_proceso(
                             "La persona jurídica del conjunto no tiene identificación configurada"
                         )
                     demandantes = [str(acreedor_row["identificacion"])]
+
+                if not demandantes and not nuevos_dem:
+                    raise ValueError("Debe existir al menos un demandante")
 
                 if tipo_obligacion and tipo_obligacion["requiere_inmueble"] and not apto:
                     raise ValueError("Debes indicar la torre/apartamento del inmueble")
