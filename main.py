@@ -1363,7 +1363,7 @@ def crm(
             if cuenta_actual:
                 inmueble_id = cuenta_actual.get("inmueble_id")
 
-                if inmueble_id:
+                if inmueble_id and expedientes_service._table_exists(cur, "inmueble_propietarios"):
                     cur.execute(
                         """
                         SELECT c.identificacion, c.nombre, c.telefono, c.email, ip.es_principal
@@ -1373,6 +1373,23 @@ def crm(
                         ORDER BY ip.es_principal DESC, c.nombre ASC
                         """,
                         (int(inmueble_id),),
+                    )
+                    propietarios = [dict(r) for r in cur.fetchall()]
+
+                # Respaldo: si aún no hay filas en inmueble_propietarios (radicaciones
+                # anteriores al vínculo), mostrar demandados del proceso. No inventa
+                # titulares: usa la misma fuente que el selector de cuenta.
+                if not propietarios and cuenta_actual.get("radicado_interno"):
+                    cur.execute(
+                        """
+                        SELECT c.identificacion, c.nombre, c.telefono, c.email, pp.es_principal
+                        FROM proceso_partes pp
+                        JOIN contactos c ON c.id=pp.contacto_id
+                        WHERE pp.radicado_interno=%s
+                          AND UPPER(pp.rol)='DEMANDADO'
+                        ORDER BY pp.es_principal DESC, c.nombre ASC
+                        """,
+                        (cuenta_actual["radicado_interno"],),
                     )
                     propietarios = [dict(r) for r in cur.fetchall()]
 

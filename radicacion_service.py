@@ -64,6 +64,34 @@ def _crear_actuacion_inicial(cur, radicado_interno: str) -> None:
     )
 
 
+def _vincular_propietarios_inmueble(cur, inmueble_id: int, contactos_demandados: list[dict]) -> None:
+    """Vincula demandados como titulares del inmueble (fuente que usa CRM).
+
+    La radicación ya escribe proceso_partes / obligacion_partes; CRM y el detalle
+    de expediente leen inmueble_propietarios. Sin este vínculo el selector de
+    cuenta muestra al demandado pero "Titulares del inmueble" queda vacío.
+    Idempotente: ON CONFLICT no borra ni altera filas existentes.
+    """
+    if not inmueble_id or not contactos_demandados:
+        return
+    if not expedientes_service._table_exists(cur, "inmueble_propietarios"):
+        return
+
+    for idx, contacto in enumerate(contactos_demandados):
+        contacto_id = contacto.get("id")
+        if not contacto_id:
+            continue
+        cur.execute(
+            """
+            INSERT INTO inmueble_propietarios
+                (inmueble_id, contacto_id, es_principal)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (inmueble_id, contacto_id) DO NOTHING
+            """,
+            (int(inmueble_id), int(contacto_id), idx == 0),
+        )
+
+
 def radicar_proceso(
     *,
     naturaleza: str,
@@ -390,6 +418,13 @@ def radicar_proceso(
                         DO UPDATE SET es_principal=EXCLUDED.es_principal
                         """,
                         (radicado_interno, contacto["id"], idx == 0),
+                    )
+
+                if inmueble_id:
+                    _vincular_propietarios_inmueble(
+                        cur,
+                        inmueble_id,
+                        [contacts[ident] for ident in demandados],
                     )
 
                 obligacion_id = None

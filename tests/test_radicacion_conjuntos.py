@@ -297,6 +297,110 @@ class RadicacionConjuntosTests(unittest.TestCase):
         self.assertEqual(len(partes_demandante), 1)
         self.assertEqual(partes_demandante[0][1], 55)
 
+        propietarios = [
+            params
+            for sql, params in cur.statements
+            if "INSERT INTO inmueble_propietarios" in sql
+        ]
+        self.assertEqual(len(propietarios), 1)
+        self.assertEqual(propietarios[0], (301, 88, True))
+
+    def test_cuotas_vincula_propietarios_al_crear_inmueble_nuevo(self):
+        """Inmueble nuevo: demandado principal queda en inmueble_propietarios."""
+        cur = _FakeCursor()
+        original_execute = cur.execute
+
+        def execute_nuevo_inmueble(sql, params=None):
+            normalized = " ".join(str(sql).split())
+            if "FROM inmuebles_ph" in normalized and "torre_apto" in normalized:
+                cur.statements.append((normalized, params))
+                cur._fetchone_queue.append(None)
+                return
+            if "INSERT INTO inmuebles_ph" in normalized:
+                cur.statements.append((normalized, params))
+                cur._fetchone_queue.append({"id": 777})
+                return
+            return original_execute(sql, params)
+
+        cur.execute = execute_nuevo_inmueble
+        conn = _FakeConn(cur)
+
+        with patch.object(radicacion_service.db, "get_connection", return_value=conn):
+            with patch.object(
+                radicacion_service.catalogos_service,
+                "obtener_tipo_proceso",
+                return_value={"id": 1, "codigo": "EJECUTIVO"},
+            ):
+                with patch.object(
+                    radicacion_service.catalogos_service,
+                    "obtener_tipo_obligacion",
+                    return_value={
+                        "id": 3,
+                        "codigo": "CUOTAS_ADMINISTRACION",
+                        "requiere_conjunto": True,
+                        "requiere_inmueble": True,
+                        "requiere_documento": False,
+                    },
+                ):
+                    with patch.object(
+                        radicacion_service.catalogos_service,
+                        "obtener_conjunto",
+                        return_value={
+                            "id": 7,
+                            "nombre": "CONJUNTO DEMO",
+                            "contacto_id": 55,
+                        },
+                    ):
+                        with patch.object(
+                            radicacion_service.expedientes_service,
+                            "_cols",
+                            return_value={
+                                "radicado_interno",
+                                "radicado_rama",
+                                "estado_rama",
+                                "tipo_cartera",
+                                "tipo_proceso_id",
+                                "naturaleza",
+                                "etapa_actual",
+                                "juzgado",
+                                "estado",
+                                "inmueble_id",
+                                "pretensiones",
+                                "medidas_cautelares",
+                                "abogado_id",
+                            },
+                        ):
+                            with patch.object(
+                                radicacion_service.expedientes_service,
+                                "_table_exists",
+                                return_value=True,
+                            ):
+                                with patch.object(
+                                    radicacion_service.obligaciones_service,
+                                    "crear_obligacion",
+                                    return_value=999,
+                                ):
+                                    with patch.object(
+                                        radicacion_service.obligaciones_service,
+                                        "vincular_partes_obligacion",
+                                    ):
+                                        with patch.object(
+                                            radicacion_service.obligaciones_service,
+                                            "vincular_obligacion_a_proceso",
+                                        ):
+                                            resultado = radicacion_service.radicar_proceso(
+                                                **_base_kwargs(demandantes=[])
+                                            )
+
+        self.assertEqual(resultado["radicado_interno"], "EXP-0042")
+        propietarios = [
+            params
+            for sql, params in cur.statements
+            if "INSERT INTO inmueble_propietarios" in sql
+        ]
+        self.assertEqual(len(propietarios), 1)
+        self.assertEqual(propietarios[0], (777, 88, True))
+
     def test_cuotas_rechaza_demandante_manual(self):
         cur = _FakeCursor()
         conn = _FakeConn(cur)
