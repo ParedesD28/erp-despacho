@@ -832,6 +832,7 @@ def detalle_expediente(request: Request, radicado: str):
                     obligacion_principal.get("id") if obligacion_principal else None,
                 )
                 audit = expedientes_service._audit(cur, radicado)
+                conjuntos = catalogos_service.listar_conjuntos(cur, activos=True)
                 return render_template(
                     "detalle_expediente_v4.html",
                     {
@@ -846,6 +847,7 @@ def detalle_expediente(request: Request, radicado: str):
                         "actuaciones": actuaciones,
                         "acuerdos_crm": acuerdos,
                         "audit_ediciones": audit,
+                        "conjuntos": conjuntos,
                         "demandante_ids": {str(x.get("identificacion")) for x in demandantes if x.get("identificacion")},
                         "demandado_ids": {str(x.get("identificacion")) for x in demandados if x.get("identificacion")},
                     },
@@ -1064,6 +1066,22 @@ async def guardar_expediente_estructurado(request: Request):
                         contactos_deudores=[contact_records[x] for x in demandado_ids],
                     )
 
+                # Corrección de inmueble dentro del mismo editor (sin botón aparte).
+                torre_apto_form = str(form.get("torre_apto") or "").strip()
+                conjunto_id_form = str(form.get("conjunto_id") or "").strip()
+                if proceso.get("inmueble_id") or torre_apto_form:
+                    expedientes_service.corregir_inmueble_proceso(
+                        cur,
+                        radicado_interno=radicado,
+                        proceso=proceso,
+                        torre_apto=torre_apto_form or str(
+                            (proceso.get("inmueble") or {}).get("torre_apto") or ""
+                        ).strip(),
+                        conjunto_id_raw=conjunto_id_form,
+                        contactos_demandados=[contact_records[x] for x in demandado_ids],
+                        obligaciones=obligaciones_actuales,
+                    )
+
                 expedientes_service._ensure_audit_table(cur)
                 after_process = expedientes_service._get_process(cur, radicado)
                 after = {
@@ -1080,6 +1098,9 @@ async def guardar_expediente_estructurado(request: Request):
         return _redirect(f"/expediente/{radicado}", mensaje="Expediente+actualizado")
     except HTTPException:
         raise
+    except ValueError as exc:
+        print(f"[EXPEDIENTE][EDICION] Validacion {radicado}: {exc!r}", flush=True)
+        return _redirect(f"/expediente/{radicado}", error=str(exc))
     except Exception as exc:
         print(f"[EXPEDIENTE][EDICION] Error {radicado}: {exc!r}", flush=True)
         return _redirect(f"/expediente/{radicado}", error="No+fue+posible+actualizar+el+expediente")

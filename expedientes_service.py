@@ -221,7 +221,7 @@ def _get_inmueble_info(cur, inmueble_id):
         return {}, []
 
     cur.execute("""
-        SELECT id, conjunto_residencial, torre_apto, contacto_id
+        SELECT id, conjunto_residencial, torre_apto, contacto_id, conjunto_id
         FROM inmuebles_ph
         WHERE id=%s
         LIMIT 1
@@ -235,6 +235,7 @@ def _get_inmueble_info(cur, inmueble_id):
         "conjunto_residencial": _row_value(row, "conjunto_residencial", _row_value(row, 1)) or "",
         "torre_apto": _row_value(row, "torre_apto", _row_value(row, 2)) or "",
         "contacto_id": _row_value(row, "contacto_id", _row_value(row, 3)),
+        "conjunto_id": _row_value(row, "conjunto_id", _row_value(row, 4)),
     }
 
     propietarios = []
@@ -313,6 +314,355 @@ def _get_process(cur, radicado):
         if ab_row:
             proc["abogado_asignado"] = _row_value(ab_row, "nombre", _row_value(ab_row, 0))
     return proc
+
+
+def _proceso_activo_en_inmueble(cur, inmueble_id: int, excluir_radicado: str):
+    """Devuelve otro proceso activo ligado al inmueble, si existe."""
+    cur.execute(
+        """
+        SELECT radicado_interno, estado
+        FROM procesos
+        WHERE inmueble_id=%s
+          AND radicado_interno<>%s
+          AND UPPER(COALESCE(estado, 'ACTIVO')) <> 'INACTIVO'
+        ORDER BY radicado_interno
+        LIMIT 1
+        """,
+        (int(inmueble_id), str(excluir_radicado)),
+    )
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def _contar_procesos_inmueble(cur, inmueble_id: int) -> int:
+    cur.execute(
+        "SELECT COUNT(*) AS n FROM procesos WHERE inmueble_id=%s",
+        (int(inmueble_id),),
+    )
+    row = cur.fetchone()
+    return int(_row_value(row, "n", _row_value(row, 0, 0)) or 0)
+
+
+def _upsert_propietarios_inmueble(cur, inmueble_id: int, contactos_demandados: list) -> None:
+    """Upsert de demandados como titulares; no duplica (UNIQUE inmueble+contacto)."""
+    if not inmueble_id or not contactos_demandados:
+        return
+    if not _table_exists(cur, "inmueble_propietarios"):
+        return
+
+    for idx, contacto in enumerate(contactos_demandados):
+        contacto_id = contacto.get("id") if isinstance(contacto, dict) else None
+        if not contacto_id:
+            continue
+        cur.execute(
+            """
+            INSERT INTO inmueble_propietarios
+                (inmueble_id, contacto_id, es_principal)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (inmueble_id, contacto_id)
+            DO UPDATE SET es_principal=EXCLUDED.es_principal
+            """,
+            (int(inmueble_id), int(contacto_id), idx == 0),
+        )
+
+
+def _limpiar_propietarios_inmueble_anterior(
+    cur,
+    *,
+    inmueble_anterior_id: int,
+    contactos_demandados: list,
+    radicado_interno: str,
+) -> None:
+    """Quita del inmueble viejo a demandados de este proceso si nadie más los necesita."""
+    if not inmueble_anterior_id or not contactos_demandados:
+        return
+    if not _table_exists(cur, "inmueble_propietarios"):
+        return
+
+    contacto_ids = [
+        int(c["id"])
+        for c in contactos_demandados
+        if isinstance(c, dict) and c.get("id")
+    ]
+    if not contacto_ids:
+        return
+
+    placeholders = ",".join(["%s"] * len(contacto_ids))
+    cur.execute(
+        f"""
+        DELETE FROM inmueble_propietarios ip
+        WHERE ip.inmueble_id=%s
+          AND ip.contacto_id IN ({placeholders})
+          AND NOT EXISTS (
+            SELECT 1
+            FROM procesos p
+            JOIN proceso_partes pp
+              ON pp.radicado_interno=p.radicado_interno
+             AND pp.contacto_id=ip.contacto_id
+             AND UPPER(pp.rol)='DEMANDADO'
+            WHERE p.inmueble_id=%s
+              AND p.radicado_interno<>%s
+              AND UPPER(COALESCE(p.estado, 'ACTIVO')) <> 'INACTIVO'
+          )
+        """,
+        [int(inmueble_anterior_id), *contacto_ids, int(inmueble_anterior_id), str(radicado_interno)],
+    )
+
+
+def _reenlanzar_historial_inmueble(
+    cur,
+    *,
+    radicado_interno: str,
+    inmueble_anterior_id: int | None,
+    inmueble_nuevo_id: int,
+    obligacion_ids: list[int],
+) -> None:
+    """Re-enlaza acuerdos/vencimientos/gestiones; no borra historial."""
+    if inmueble_anterior_id and int(inmueble_anterior_id) == int(inmueble_nuevo_id):
+        return
+
+    if obligacion_ids and _table_exists(cur, "acuerdos_pago"):
+        placeholders = ",".join(["%s"] * len(obligacion_ids))
+        params = [int(inmueble_nuevo_id), *obligacion_ids]
+        if inmueble_anterior_id:
+            cur.execute(
+                f"""
+                UPDATE acuerdos_pago
+                SET inmueble_id=%s
+                WHERE obligacion_id IN ({placeholders})
+                  AND (inmueble_id IS NULL OR inmueble_id=%s)
+                """,
+                params + [int(inmueble_anterior_id)],
+            )
+        else:
+            cur.execute(
+                f"""
+                UPDATE acuerdos_pago
+                SET inmueble_id=%s
+                WHERE obligacion_id IN ({placeholders})
+                """,
+                params,
+            )
+
+    for table in ("vencimientos", "gestiones_crm"):
+        if not _table_exists(cur, table):
+            continue
+        if inmueble_anterior_id:
+            cur.execute(
+                f"""
+                UPDATE {table}
+                SET inmueble_id=%s
+                WHERE radicado_interno=%s
+                  AND (inmueble_id IS NULL OR inmueble_id=%s)
+                """,
+                (int(inmueble_nuevo_id), str(radicado_interno), int(inmueble_anterior_id)),
+            )
+        else:
+            cur.execute(
+                f"""
+                UPDATE {table}
+                SET inmueble_id=%s
+                WHERE radicado_interno=%s
+                """,
+                (int(inmueble_nuevo_id), str(radicado_interno)),
+            )
+
+
+def corregir_inmueble_proceso(
+    cur,
+    *,
+    radicado_interno: str,
+    proceso: dict,
+    torre_apto: str,
+    conjunto_id_raw: str,
+    contactos_demandados: list,
+    obligaciones: list | None = None,
+) -> int | None:
+    """Corrige el inmueble de un proceso radicado sin clonar ni dejar basura.
+
+    - Reutiliza inmueble existente (mismo conjunto + torre/apto).
+    - Si el destino ya tiene otro proceso activo: rechaza (no rompe vínculos).
+    - Si el inmueble actual solo lo usa este proceso y cambia el apto en el
+      mismo conjunto: actualiza en sitio (evita huérfanos).
+    - Actualiza procesos.inmueble_id y obligaciones vinculadas.
+    - Reconcilia inmueble_propietarios con demandados actuales.
+    - Re-enlaza acuerdos/vencimientos/gestiones; no borra historial.
+    """
+    if not _table_exists(cur, "inmuebles_ph"):
+        return proceso.get("inmueble_id")
+
+    radicado_interno = str(radicado_interno or "").strip()
+    torre_apto = str(torre_apto or "").strip()
+    obligaciones = obligaciones or []
+    inmueble_anterior_id = proceso.get("inmueble_id")
+    if inmueble_anterior_id is not None:
+        inmueble_anterior_id = int(inmueble_anterior_id)
+
+    info_actual = (proceso.get("inmueble") or {}) if isinstance(proceso, dict) else {}
+    if not info_actual and inmueble_anterior_id:
+        info_actual, _ = _get_inmueble_info(cur, inmueble_anterior_id)
+
+    # Sin inmueble previo y sin dato nuevo: no aplicar (p.ej. verbal sin PH).
+    if not inmueble_anterior_id and not torre_apto:
+        return None
+
+    if not torre_apto:
+        raise ValueError("Debes indicar la torre/apartamento del inmueble")
+
+    conjunto_id = None
+    conjunto_nombre = str(info_actual.get("conjunto_residencial") or "").strip()
+    raw = str(conjunto_id_raw or "").strip()
+    if raw.isdigit():
+        conjunto_id = int(raw)
+    elif info_actual.get("conjunto_id"):
+        conjunto_id = int(info_actual["conjunto_id"])
+
+    if not conjunto_id:
+        raise ValueError("Debes indicar el conjunto residencial del inmueble")
+
+    # Resolver nombre del conjunto si cambió o faltaba.
+    if _table_exists(cur, "conjuntos_residenciales"):
+        cur.execute(
+            """
+            SELECT id, nombre
+            FROM conjuntos_residenciales
+            WHERE id=%s
+            LIMIT 1
+            """,
+            (conjunto_id,),
+        )
+        conj = cur.fetchone()
+        if not conj:
+            raise ValueError("El conjunto residencial seleccionado no es válido")
+        conjunto_nombre = str(_row_value(conj, "nombre", _row_value(conj, 1)) or "").strip()
+
+    mismo_apto = (
+        inmueble_anterior_id
+        and str(info_actual.get("torre_apto") or "").strip() == torre_apto
+        and int(info_actual.get("conjunto_id") or 0) == conjunto_id
+    )
+    if mismo_apto:
+        _upsert_propietarios_inmueble(cur, inmueble_anterior_id, contactos_demandados)
+        return inmueble_anterior_id
+
+    # ¿Ya existe unidad con ese conjunto + apto?
+    cur.execute(
+        """
+        SELECT id
+        FROM inmuebles_ph
+        WHERE conjunto_id=%s
+          AND torre_apto=%s
+        LIMIT 1
+        """,
+        (conjunto_id, torre_apto),
+    )
+    existente = cur.fetchone()
+    target_id = None
+    if existente:
+        target_id = int(_row_value(existente, "id", _row_value(existente, 0)))
+        if inmueble_anterior_id and target_id == inmueble_anterior_id:
+            _upsert_propietarios_inmueble(cur, target_id, contactos_demandados)
+            return target_id
+        otro = _proceso_activo_en_inmueble(cur, target_id, radicado_interno)
+        if otro:
+            raise ValueError(
+                "El inmueble "
+                f"{conjunto_nombre} / {torre_apto} ya tiene el proceso activo "
+                f"{otro.get('radicado_interno')}. No se puede reasignar."
+            )
+    elif (
+        inmueble_anterior_id
+        and int(info_actual.get("conjunto_id") or 0) == conjunto_id
+        and _contar_procesos_inmueble(cur, inmueble_anterior_id) <= 1
+    ):
+        # Corrección tipográfica en la misma unidad exclusiva: actualizar en sitio.
+        cur.execute(
+            """
+            UPDATE inmuebles_ph
+            SET torre_apto=%s,
+                conjunto_residencial=%s,
+                conjunto_id=%s
+            WHERE id=%s
+            """,
+            (torre_apto, conjunto_nombre, conjunto_id, inmueble_anterior_id),
+        )
+        target_id = inmueble_anterior_id
+    else:
+        demandado_principal = contactos_demandados[0] if contactos_demandados else {}
+        contacto_id = demandado_principal.get("id") if isinstance(demandado_principal, dict) else None
+        if not contacto_id:
+            raise ValueError("Se requiere al menos un demandado para crear el inmueble")
+        cur.execute(
+            """
+            INSERT INTO inmuebles_ph
+                (contacto_id, conjunto_residencial, conjunto_id, torre_apto)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (int(contacto_id), conjunto_nombre, conjunto_id, torre_apto),
+        )
+        nuevo = cur.fetchone()
+        target_id = int(_row_value(nuevo, "id", _row_value(nuevo, 0)))
+
+    if not target_id:
+        raise ValueError("No fue posible resolver el inmueble")
+
+    if inmueble_anterior_id and target_id != inmueble_anterior_id:
+        cur.execute(
+            "UPDATE procesos SET inmueble_id=%s WHERE radicado_interno=%s",
+            (int(target_id), radicado_interno),
+        )
+        obligacion_ids = [int(o["id"]) for o in obligaciones if o.get("id")]
+        if obligacion_ids:
+            placeholders = ",".join(["%s"] * len(obligacion_ids))
+            cur.execute(
+                f"""
+                UPDATE obligaciones
+                SET inmueble_id=%s
+                WHERE id IN ({placeholders})
+                """,
+                [int(target_id), *obligacion_ids],
+            )
+        _reenlanzar_historial_inmueble(
+            cur,
+            radicado_interno=radicado_interno,
+            inmueble_anterior_id=inmueble_anterior_id,
+            inmueble_nuevo_id=target_id,
+            obligacion_ids=obligacion_ids,
+        )
+        _limpiar_propietarios_inmueble_anterior(
+            cur,
+            inmueble_anterior_id=inmueble_anterior_id,
+            contactos_demandados=contactos_demandados,
+            radicado_interno=radicado_interno,
+        )
+    elif not inmueble_anterior_id:
+        cur.execute(
+            "UPDATE procesos SET inmueble_id=%s WHERE radicado_interno=%s",
+            (int(target_id), radicado_interno),
+        )
+        obligacion_ids = [int(o["id"]) for o in obligaciones if o.get("id")]
+        if obligacion_ids:
+            placeholders = ",".join(["%s"] * len(obligacion_ids))
+            cur.execute(
+                f"""
+                UPDATE obligaciones
+                SET inmueble_id=%s
+                WHERE id IN ({placeholders})
+                """,
+                [int(target_id), *obligacion_ids],
+            )
+        _reenlanzar_historial_inmueble(
+            cur,
+            radicado_interno=radicado_interno,
+            inmueble_anterior_id=None,
+            inmueble_nuevo_id=target_id,
+            obligacion_ids=obligacion_ids,
+        )
+
+    _upsert_propietarios_inmueble(cur, target_id, contactos_demandados)
+    return target_id
+
 
 def _get_demandantes(cur, proceso):
     if not proceso:
