@@ -1268,6 +1268,92 @@ def _ensure_crm_and_vencimientos_schema():
         conn.release()
 
 
+def _resolver_contexto_crm(
+    cur,
+    *,
+    conjunto_id: int | None = None,
+    radicado_interno: str | None = None,
+    inmueble_id: int | None = None,
+    buscar_inmueble: int | None = None,
+) -> tuple[int | None, str | None, int | None]:
+    """Completa conjunto/radicado/inmueble para deep-links (p.ej. desde expediente).
+
+    Solo rellena campos faltantes; no pisa filtros ya elegidos por el usuario.
+    `buscar_inmueble` es alias legacy de `inmueble_id`.
+    """
+    rid = str(radicado_interno).strip() if radicado_interno else None
+    if rid == "":
+        rid = None
+
+    cid = None
+    if conjunto_id is not None:
+        try:
+            cid = int(conjunto_id)
+        except (TypeError, ValueError):
+            cid = None
+
+    iid = inmueble_id if inmueble_id is not None else buscar_inmueble
+    if iid is not None:
+        try:
+            iid = int(iid)
+        except (TypeError, ValueError):
+            iid = None
+
+    if rid and (cid is None or iid is None) and expedientes_service._table_exists(cur, "procesos"):
+        cur.execute(
+            """
+            SELECT p.inmueble_id, i.conjunto_id
+            FROM procesos p
+            LEFT JOIN inmuebles_ph i ON i.id = p.inmueble_id
+            WHERE p.radicado_interno=%s
+            LIMIT 1
+            """,
+            (rid,),
+        )
+        row = cur.fetchone()
+        if row:
+            if iid is None and row.get("inmueble_id") is not None:
+                try:
+                    iid = int(row["inmueble_id"])
+                except (TypeError, ValueError):
+                    pass
+            if cid is None and row.get("conjunto_id") is not None:
+                try:
+                    cid = int(row["conjunto_id"])
+                except (TypeError, ValueError):
+                    pass
+
+    if iid is not None and cid is None and expedientes_service._table_exists(cur, "inmuebles_ph"):
+        cur.execute(
+            "SELECT conjunto_id FROM inmuebles_ph WHERE id=%s LIMIT 1",
+            (iid,),
+        )
+        row = cur.fetchone()
+        if row and row.get("conjunto_id") is not None:
+            try:
+                cid = int(row["conjunto_id"])
+            except (TypeError, ValueError):
+                pass
+
+    if iid is not None and rid is None and expedientes_service._table_exists(cur, "procesos"):
+        cur.execute(
+            """
+            SELECT radicado_interno
+            FROM procesos
+            WHERE inmueble_id=%s
+              AND UPPER(COALESCE(estado,'ACTIVO')) <> 'INACTIVO'
+            ORDER BY radicado_interno DESC
+            LIMIT 1
+            """,
+            (iid,),
+        )
+        row = cur.fetchone()
+        if row and row.get("radicado_interno"):
+            rid = str(row["radicado_interno"]).strip() or None
+
+    return cid, rid, iid
+
+
 @app.get("/crm")
 def crm(
     request: Request,
@@ -1275,12 +1361,18 @@ def crm(
     buscar_acreedor: str | None = None,
     acreedor_id: str | None = None,
     radicado_interno: str | None = None,
+    inmueble_id: int | None = None,
+    buscar_inmueble: int | None = None,
 ):
     """CRM PH: el punto de entrada visible es el conjunto residencial.
 
     El conjunto se resuelve a su persona jurídica (contacto Cliente) y desde
     esa relación se cargan las cuentas/procesos. No se pide al usuario buscar
     manualmente el acreedor.
+
+    Deep-links desde expediente/liquidador pueden pasar `radicado_interno`,
+    `conjunto_id` y/o `inmueble_id` (alias legacy: `buscar_inmueble`) para
+    auto-seleccionar la cuenta al cargar.
     """
     conn = db.get_connection()
     try:
@@ -1293,6 +1385,14 @@ def crm(
 
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             conjuntos = catalogos_service.listar_conjuntos(cur, activos=True)
+
+            conjunto_id, radicado_interno, _ = _resolver_contexto_crm(
+                cur,
+                conjunto_id=conjunto_id,
+                radicado_interno=radicado_interno,
+                inmueble_id=inmueble_id,
+                buscar_inmueble=buscar_inmueble,
+            )
 
             # Resolver conjunto -> persona jurídica acreedora.
             if conjunto_id:
