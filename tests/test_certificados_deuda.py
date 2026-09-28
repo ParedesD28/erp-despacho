@@ -1,4 +1,4 @@
-"""Tests del módulo Certificados de Deuda (agrupación, validación, smoke Word)."""
+"""Tests del módulo Certificados de Deuda (agrupación, matching Neon, Word)."""
 from __future__ import annotations
 
 import sys
@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import certificados_deuda_repository as repo
 import certificados_deuda_service as svc
 import permisos
 
@@ -78,6 +79,154 @@ class AgruparCapitalTests(unittest.TestCase):
         filas = svc.agrupar_capital_limpio(items)
         self.assertEqual(filas[0].periodo, "MAYO 2024")
         self.assertEqual(filas[0].vencimiento, "5-may-24")
+
+
+class MatchingUnidadTests(unittest.TestCase):
+    """Regresión del 404: PDF 'TORRE X APTO Y' vs Neon 'X-Y' / 'TX-Y'."""
+
+    def test_clave_une_torre_apto_texto_y_bloque_apartamento(self):
+        self.assertEqual(repo._clave_unidad("TORRE 1 APTO 201"), "1-201")
+        self.assertEqual(repo._clave_unidad("1-201"), "1-201")
+        self.assertEqual(
+            repo._clave_unidad("", bloque="1", apartamento="201"),
+            "1-201",
+        )
+        self.assertEqual(
+            repo._clave_unidad("TORRE 32 APTO N0.502"),
+            "32-502",
+        )
+        self.assertEqual(repo._clave_unidad("BLOQUE 9 APTO 401"), "9-401")
+
+    def test_claves_cruzan_formatos_tipicos_colon_vs_neon(self):
+        pdf = repo._claves_unidad(
+            "TORRE 1 APTO 201",
+            bloque="1",
+            apartamento="201",
+        )
+        neon_simple = repo._claves_unidad("1-201")
+        neon_t = repo._claves_unidad("T1-201")
+        neon_largo = repo._claves_unidad("TORRE 1 APTO 201")
+        self.assertTrue(pdf & neon_simple)
+        self.assertTrue(pdf & neon_t)
+        self.assertTrue(pdf & neon_largo)
+        self.assertTrue(repo._unidad_coincide("1-201", pdf))
+        self.assertTrue(repo._unidad_coincide("T1-201", pdf))
+        self.assertTrue(repo._unidad_coincide("TORRE 1 APTO 201", pdf))
+        self.assertFalse(repo._unidad_coincide("1-202", pdf))
+
+    def test_score_conjunto_ignora_ph_y_acentos(self):
+        self.assertGreaterEqual(
+            repo._score_conjunto(
+                "URBANIZACIÓN SANTA CLARA MANZANA 2 PH",
+                "Urbanizacion Santa Clara Manzana 2",
+            ),
+            90,
+        )
+        self.assertGreaterEqual(
+            repo._score_conjunto(
+                "SANTA CLARA MANZANA 2",
+                "URBANIZACIÓN SANTA CLARA MANZANA 2 PROPIEDAD HORIZONTAL",
+            ),
+            70,
+        )
+        self.assertEqual(
+            repo._score_conjunto("OTRO CONJUNTO", "SANTA CLARA"),
+            0,
+        )
+
+    def test_describir_busqueda_incluye_claves_y_codigo(self):
+        txt = repo.describir_busqueda(
+            conjunto_nombre="Demo PH",
+            bloque="1",
+            apartamento="201",
+            torre_apto="TORRE 1 APTO 201",
+            titular="ANA PEREZ",
+            codigo_cuenta="9401",
+        )
+        self.assertIn("conjunto=", txt)
+        self.assertIn("1-201", txt)
+        self.assertIn("codigo_cuenta='9401'", txt)
+        self.assertIn("no indexa", txt)
+
+    def test_buscar_match_torre_vs_guion_con_filas_en_memoria(self):
+        filas = [
+            {
+                "inmueble_id": 10,
+                "torre_apto": "1-201",
+                "conjunto_id": 3,
+                "conjunto_nombre": "SANTA CLARA MANZANA 2",
+                "conjunto_catalogo": "SANTA CLARA MANZANA 2",
+                "copropiedad_nombre": "SANTA CLARA MANZANA 2 PH",
+                "copropiedad_nit": "900",
+                "ciudad": "Pereira",
+                "titular_nombre": "ANA PEREZ",
+                "titular_cedula": "1",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+            {
+                "inmueble_id": 11,
+                "torre_apto": "1-202",
+                "conjunto_id": 3,
+                "conjunto_nombre": "SANTA CLARA MANZANA 2",
+                "conjunto_catalogo": "SANTA CLARA MANZANA 2",
+                "copropiedad_nombre": "SANTA CLARA MANZANA 2 PH",
+                "copropiedad_nit": "900",
+                "ciudad": "Pereira",
+                "titular_nombre": "OTRO",
+                "titular_cedula": "2",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+        ]
+        filtradas = repo._filtrar_por_conjunto(
+            filas,
+            conjunto_id=None,
+            conjunto_nombre="URBANIZACIÓN SANTA CLARA MANZANA 2",
+        )
+        self.assertEqual(len(filtradas), 2)
+        claves = repo._claves_unidad("TORRE 1 APTO 201", "1", "201")
+        hallado = repo._elegir_por_unidad(filtradas, claves)
+        self.assertIsNotNone(hallado)
+        self.assertEqual(hallado["inmueble_id"], 10)
+        self.assertEqual(hallado["torre_apto"], "1-201")
+
+    def test_elegir_desambigua_por_titular(self):
+        filas = [
+            {
+                "inmueble_id": 1,
+                "torre_apto": "9-401",
+                "titular_nombre": "BANOL RIVERA MAURICIO",
+                "titular_cedula": "1",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+                "conjunto_nombre": "X",
+                "conjunto_catalogo": "X",
+                "copropiedad_nombre": "X",
+                "copropiedad_nit": "1",
+                "ciudad": None,
+                "conjunto_id": 1,
+            },
+            {
+                "inmueble_id": 2,
+                "torre_apto": "9-401",
+                "titular_nombre": "OTRO TITULAR",
+                "titular_cedula": "2",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+                "conjunto_nombre": "X",
+                "conjunto_catalogo": "X",
+                "copropiedad_nombre": "X",
+                "copropiedad_nit": "1",
+                "ciudad": None,
+                "conjunto_id": 1,
+            },
+        ]
+        claves = repo._claves_unidad("", "9", "401")
+        hallado = repo._elegir_por_unidad(
+            filas, claves, titular="BAÑOL RIVERA MAURICIO"
+        )
+        self.assertEqual(hallado["inmueble_id"], 1)
 
 
 class ValidacionDatosTests(unittest.TestCase):
@@ -162,11 +311,20 @@ class GeneracionWordTests(unittest.TestCase):
             "certificados_deuda_service.resolver_datos_certificado",
             return_value=None,
         ):
-            with self.assertRaises(svc.CertificadoNoEncontradoError):
+            with self.assertRaises(svc.CertificadoNoEncontradoError) as ctx:
                 svc.generar_certificado_deuda(
                     capital_limpio_a_demandar=[],
-                    inmueble_id=999,
+                    conjunto="Demo",
+                    bloque="1",
+                    apartamento="201",
+                    torre_apto="TORRE 1 APTO 201",
+                    codigo_cuenta="9401",
                 )
+            msg = str(ctx.exception)
+            self.assertIn("Buscado:", msg)
+            self.assertIn("1-201", msg)
+            self.assertIn("codigo_cuenta", msg)
+            self.assertTrue(ctx.exception.criterios)
 
     def test_generar_falla_si_faltan_criticos(self):
         with patch(
@@ -224,6 +382,32 @@ class GeneracionWordTests(unittest.TestCase):
         self.assertEqual(meta["filas"], 1)
         self.assertEqual(meta["plantilla"], "CERTIFICADO_DE_DEUDA.docx")
         self.assertTrue(buf.getvalue()[:2] == b"PK")
+
+    def test_generar_pasa_titular_al_resolver(self):
+        with patch(
+            "certificados_deuda_service.resolver_datos_certificado",
+            return_value={
+                "inmueble_id": 3,
+                "copropiedad_nombre": "PH",
+                "copropiedad_nit": "1",
+                "titular_nombre": "ANA",
+                "titular_cedula": "9",
+                "torre_apto": "1-101",
+                "conjunto_nombre": "X",
+                "ciudad": "Pereira",
+            },
+        ) as mocked:
+            svc.generar_certificado_deuda(
+                capital_limpio_a_demandar=[],
+                conjunto="X",
+                bloque="1",
+                apartamento="101",
+                titular="ANA PEREZ",
+            )
+            kwargs = mocked.call_args.kwargs
+            self.assertEqual(kwargs["titular"], "ANA PEREZ")
+            self.assertEqual(kwargs["bloque"], "1")
+            self.assertEqual(kwargs["apartamento"], "101")
 
 
 class RbacCertificadoTests(unittest.TestCase):

@@ -17,7 +17,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
-from certificados_deuda_repository import resolver_datos_certificado
+from certificados_deuda_repository import describir_busqueda, resolver_datos_certificado
 
 PLANTILLA_PATH = (
     Path(__file__).resolve().parent / "static" / "plantillas" / "CERTIFICADO_DE_DEUDA.docx"
@@ -93,6 +93,10 @@ _MESES_EMISION = (
 
 class CertificadoNoEncontradoError(LookupError):
     """Inmueble / cuenta no encontrada en Neon."""
+
+    def __init__(self, message: str, *, criterios: str = ""):
+        self.criterios = criterios
+        super().__init__(message)
 
 
 class CertificadoDatosFaltantesError(ValueError):
@@ -362,6 +366,8 @@ def generar_certificado_deuda(
     torre_apto: str = "",
     bloque: str = "",
     apartamento: str = "",
+    titular: str = "",
+    codigo_cuenta: str = "",
     ciudad: str = "",
     representante_nombre: str = "",
     representante_cedula: str = "",
@@ -381,12 +387,28 @@ def generar_certificado_deuda(
         torre_apto=torre_apto,
         bloque=bloque,
         apartamento=apartamento,
+        titular=titular,
         conn=conn,
     )
     if not datos:
+        criterios = describir_busqueda(
+            inmueble_id=inmueble_id,
+            conjunto_id=conjunto_id,
+            conjunto_nombre=conjunto,
+            torre_apto=torre_apto,
+            bloque=bloque,
+            apartamento=apartamento,
+            titular=titular,
+            codigo_cuenta=codigo_cuenta,
+        )
         raise CertificadoNoEncontradoError(
-            "No se encontró inmueble/titular en Neon con los identificadores "
-            "proporcionados (inmueble_id o conjunto+torre/apto)."
+            "No se encontró inmueble/titular en Neon. "
+            "El cruce usa inmueble_id o conjunto+unidad (torre/apto o bloque+apartamento); "
+            f"`codigo_cuenta` COLON no indexa maestros. Buscado: {criterios}. "
+            "Verifique que el conjunto exista en conjuntos_residenciales / "
+            "inmuebles_ph.conjunto_residencial y que torre_apto en Neon "
+            "corresponda a bloque-apartamento del PDF (p.ej. '1-201' ≡ 'TORRE 1 APTO 201').",
+            criterios=criterios,
         )
     validar_datos_criticos(datos)
 

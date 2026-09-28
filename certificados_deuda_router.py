@@ -51,7 +51,17 @@ class CertificadoDeudaRequest(BaseModel):
     )
     titular: str = Field(
         default="",
-        description="Solo informativo / UI; el titular canónico sale de Neon.",
+        description=(
+            "Nombre del titular del PDF; desambigua unidad y permite "
+            "fallback si el nombre de conjunto del PDF no cuadra con Neon."
+        ),
+    )
+    permitir_datos_pdf: bool = Field(
+        default=False,
+        description=(
+            "Reservado: emitir con datos del PDF si Neon no tiene maestro. "
+            "No implementado; el certificado exige match Neon."
+        ),
     )
 
 
@@ -98,6 +108,8 @@ async def emitir_certificado_deuda(payload: CertificadoDeudaRequest):
             torre_apto=payload.torre_apto,
             bloque=payload.bloque,
             apartamento=payload.apartamento,
+            titular=payload.titular,
+            codigo_cuenta=payload.codigo_cuenta,
             ciudad=payload.ciudad,
             representante_nombre=payload.representante_nombre,
             representante_cedula=payload.representante_cedula,
