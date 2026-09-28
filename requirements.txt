@@ -12,4 +12,5 @@ requests
 reportlab
 pypdf
 python-docx
+docxtpl
 pytest
