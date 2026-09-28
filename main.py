@@ -67,6 +67,7 @@ from estado_cuenta_pdf_service import (
     MAX_ARCHIVOS_LOTE,
     MAX_PDF_BYTES,
 )
+import bolsa_global_estado_cuenta_service
 import permisos
 import usuarios_service
 import usuarios_router
@@ -1962,6 +1963,107 @@ async def exportar_estado_cuenta_pdf_excel(
             "X-Archivos-Ok": str(ok),
             "X-Archivos-Fallidos": str(fallidos),
             "X-Movimientos-Extraidos": str(movs),
+        },
+    )
+
+
+async def _cuentas_lote_para_bolsa(
+    cache_id: str,
+    archivos: list[UploadFile] | None,
+) -> list[dict]:
+    """Resuelve cuentas con rows desde caché o re-parseando PDFs (sin Excel)."""
+    if cache_id:
+        cuentas = await asyncio.to_thread(estado_cuenta_pdf_service.cuentas_desde_cache, cache_id)
+        if cuentas is not None:
+            return cuentas
+        if not archivos:
+            raise HTTPException(
+                status_code=404,
+                detail="El análisis expiró o ya se liberó tras armar el Excel. Reenvíe los PDF.",
+            )
+    lote = await _leer_pdfs_upload(archivos or [])
+    try:
+        resultado = await asyncio.to_thread(
+            estado_cuenta_pdf_service.procesar_lote_estados_cuenta, lote, incluir_excel=False
+        )
+    except EstadoCuentaPdfError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _json_log("ERROR", "estado_cuenta_bolsa_parseo_fallo", error=type(exc).__name__)
+        raise HTTPException(
+            status_code=422,
+            detail=f"No fue posible leer el/los PDF ({type(exc).__name__}).",
+        ) from None
+    # Tras analizar, las filas viven en caché; el JSON público no las trae.
+    cuentas = await asyncio.to_thread(
+        estado_cuenta_pdf_service.cuentas_desde_cache, resultado.get("cache_id") or ""
+    )
+    if cuentas is None:
+        raise HTTPException(
+            status_code=422,
+            detail="No se pudieron recuperar movimientos para Bolsa Global.",
+        )
+    return cuentas
+
+
+@app.post("/herramientas/estado-cuenta/bolsa-global")
+async def calcular_bolsa_global_estado_cuenta(
+    cache_id: str = Form(""),
+    archivos: list[UploadFile] | None = File(None),
+):
+    """
+    Método Bolsa Global por deudor/archivo (Art. 1653-1655).
+    Endpoint aparte del Excel de transcripción (PR #20).
+    Requiere sesión + accion.editar (middleware genérico de POST).
+    """
+    cuentas = await _cuentas_lote_para_bolsa(cache_id, archivos)
+    payload = await asyncio.to_thread(
+        bolsa_global_estado_cuenta_service.calcular_bolsa_lote, cuentas
+    )
+    return payload
+
+
+@app.post("/herramientas/estado-cuenta/bolsa-global/excel")
+async def exportar_bolsa_global_excel(
+    cache_id: str = Form(""),
+    archivos: list[UploadFile] | None = File(None),
+):
+    """Descarga Excel dedicado de mora/capital limpio (no toca generar_excel_lote)."""
+    cuentas = await _cuentas_lote_para_bolsa(cache_id, archivos)
+    payload = await asyncio.to_thread(
+        bolsa_global_estado_cuenta_service.calcular_bolsa_lote, cuentas
+    )
+    excel = await asyncio.to_thread(
+        bolsa_global_estado_cuenta_service.generar_excel_bolsa_global, payload
+    )
+    return StreamingResponse(
+        excel,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="bolsa_global_capital_limpio.xlsx"',
+            "X-Cuentas-Evaluadas": str(payload.get("cuentas_evaluadas") or 0),
+        },
+    )
+
+
+@app.post("/herramientas/estado-cuenta/bolsa-global/json")
+async def exportar_bolsa_global_json(
+    cache_id: str = Form(""),
+    archivos: list[UploadFile] | None = File(None),
+):
+    """Descarga JSON del mismo resultado de Bolsa Global."""
+    cuentas = await _cuentas_lote_para_bolsa(cache_id, archivos)
+    payload = await asyncio.to_thread(
+        bolsa_global_estado_cuenta_service.calcular_bolsa_lote, cuentas
+    )
+    raw = await asyncio.to_thread(
+        bolsa_global_estado_cuenta_service.resultado_a_json_bytes, payload
+    )
+    return StreamingResponse(
+        raw,
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="bolsa_global_capital_limpio.json"',
         },
     )
 

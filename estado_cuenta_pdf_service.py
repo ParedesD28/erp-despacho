@@ -708,6 +708,31 @@ def excel_desde_cache(cache_id: str) -> io.BytesIO | None:
     return excel
 
 
+def cuentas_desde_cache(cache_id: str) -> list[dict] | None:
+    """
+    Devuelve las cuentas del lote (con `rows`) si siguen en RAM.
+    No genera Excel ni vacía la caché (sirve para Bolsa Global / utilidades).
+    None si el id expiró, no existe, o ya se liberaron las filas tras armar Excel.
+    """
+    if not cache_id:
+        return None
+    with _cache_lock:
+        item = _lote_cache.get(cache_id)
+        if not item or item[0] < time.time():
+            _lote_cache.pop(cache_id, None)
+            return None
+        cuentas = item[1].get("cuentas") or []
+        if not cuentas:
+            return None
+        # Copia superficial + copia de rows para no mutar la caché desde callers.
+        salida: list[dict] = []
+        for cuenta in cuentas:
+            copia = dict(cuenta)
+            copia["rows"] = [dict(r) for r in (cuenta.get("rows") or [])]
+            salida.append(copia)
+        return salida
+
+
 def procesar_lote_estados_cuenta(
     archivos: list[tuple[str, bytes]],
     *,

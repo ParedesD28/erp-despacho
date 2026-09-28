@@ -8,7 +8,7 @@
     <h2 class="text-xl font-semibold text-slate-800">Estado de cuenta PDF → Excel</h2>
 </header>
 
-<div class="p-8 max-w-4xl mx-auto mt-6 space-y-6">
+<div class="p-8 max-w-5xl mx-auto mt-6 space-y-6">
     <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900">
         <p class="font-bold flex items-center gap-2">
             <i data-lucide="shield-alert" class="w-4 h-4"></i>
@@ -19,6 +19,8 @@
             El navegador los envía en grupos de 10 para evitar timeout en Render.
             El Excel copia los movimientos del PDF (sin recalcular saldos),
             suma abonos y calcula la diferencia, y abre una hoja por cada deudor.
+            <strong>Bolsa Global</strong> (mora / capital limpio) es un cálculo aparte:
+            no altera la descarga de transcripción.
             Solo PDF nativos COLON (no escaneos).
         </p>
     </div>
@@ -43,6 +45,11 @@
                         class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-2.5 px-5 rounded-lg">
                     <i data-lucide="download" class="w-4 h-4"></i>
                     Descargar Excel
+                </button>
+                <button type="button" id="btn-bolsa" disabled
+                        class="inline-flex items-center gap-2 bg-sky-700 hover:bg-sky-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-2.5 px-5 rounded-lg">
+                    <i data-lucide="scale" class="w-4 h-4"></i>
+                    Calcular mora / capital limpio
                 </button>
             </div>
             <p id="status" class="text-sm text-slate-500"></p>
@@ -85,6 +92,49 @@
             </table>
         </div>
     </div>
+
+    <div id="bolsa-resultado" class="hidden space-y-4">
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h3 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <i data-lucide="scale" class="w-5 h-5 text-sky-700"></i>
+                        Bolsa Global · mora y capital limpio
+                    </h3>
+                    <p class="text-sm text-slate-500 mt-1">
+                        Un bloque por deudor/archivo. No modifica el Excel de transcripción.
+                    </p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" id="btn-bolsa-excel"
+                            class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2 px-4 rounded-lg text-sm">
+                        <i data-lucide="file-spreadsheet" class="w-4 h-4"></i>
+                        Excel Bolsa
+                    </button>
+                    <button type="button" id="btn-bolsa-json"
+                            class="inline-flex items-center gap-2 bg-slate-700 hover:bg-slate-800 text-white font-semibold py-2 px-4 rounded-lg text-sm">
+                        <i data-lucide="braces" class="w-4 h-4"></i>
+                        JSON
+                    </button>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
+                    <p class="text-xs uppercase text-slate-500 font-bold">Cuentas evaluadas</p>
+                    <p id="b-cuentas" class="text-2xl font-black text-slate-800 mt-1">—</p>
+                </div>
+                <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
+                    <p class="text-xs uppercase text-slate-500 font-bold">Con capital limpio</p>
+                    <p id="b-con-capital" class="text-2xl font-black text-sky-800 mt-1">—</p>
+                </div>
+                <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
+                    <p class="text-xs uppercase text-slate-500 font-bold">Total demandado (lote)</p>
+                    <p id="b-total" class="text-2xl font-black text-slate-800 mt-1">—</p>
+                </div>
+            </div>
+        </div>
+        <div id="bolsa-bloques" class="space-y-4"></div>
+    </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
@@ -95,7 +145,12 @@
     const statusEl = document.getElementById('status');
     const btnAnalizar = document.getElementById('btn-analizar');
     const btnExcel = document.getElementById('btn-excel');
+    const btnBolsa = document.getElementById('btn-bolsa');
+    const btnBolsaExcel = document.getElementById('btn-bolsa-excel');
+    const btnBolsaJson = document.getElementById('btn-bolsa-json');
     const resultado = document.getElementById('resultado');
+    const bolsaResultado = document.getElementById('bolsa-resultado');
+    const bolsaBloques = document.getElementById('bolsa-bloques');
     const tabla = document.getElementById('tabla-cuentas');
 
     // Cache en memoria: el <input type="file"> a veces se vacía tras el análisis
@@ -104,8 +159,16 @@
     let cacheIds = [];
 
     function money(n) {
-        if (n === null || n === undefined) return '—';
+        if (n === null || n === undefined || n === '') return '—';
         return Number(n).toLocaleString('es-CO');
+    }
+
+    function esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
     }
 
     function detailMsg(data, res) {
@@ -130,15 +193,27 @@
     }
 
     function selectedFiles() {
-        // Preferir caché; si el input aún tiene archivos, refrescar caché.
         return syncCacheFromInput();
+    }
+
+    function bolsaJobs() {
+        const files = selectedFiles();
+        const groups = chunk(files, BATCH_SIZE);
+        const ids = cacheIds.slice();
+        if (ids.length) {
+            return ids.map((id, i) => ({ id, files: groups[i] || [] }));
+        }
+        return groups.map(g => ({ id: '', files: g }));
     }
 
     fileInput.addEventListener('change', () => {
         cachedFiles = fileInput.files ? Array.from(fileInput.files) : [];
         cacheIds = [];
         btnExcel.disabled = true;
+        btnBolsa.disabled = true;
         resultado.classList.add('hidden');
+        bolsaResultado.classList.add('hidden');
+        bolsaBloques.innerHTML = '';
         if (cachedFiles.length) {
             setStatus(`${cachedFiles.length} PDF listo(s) en memoria. Pulse Analizar.`);
         }
@@ -153,6 +228,13 @@
     async function postChunk(url, files) {
         const fd = new FormData();
         files.forEach(f => fd.append('archivos', f));
+        return fetch(url, { method: 'POST', body: fd });
+    }
+
+    async function postBolsa(url, cacheId, files) {
+        const fd = new FormData();
+        if (cacheId) fd.append('cache_id', cacheId);
+        (files || []).forEach(f => fd.append('archivos', f));
         return fetch(url, { method: 'POST', body: fd });
     }
 
@@ -178,12 +260,12 @@
             const tr = document.createElement('tr');
             const ok = !c.error && c.movimientos_extraidos > 0 && !c.alerta_calidad;
             const estado = c.error
-                ? `<span class="text-red-700 font-semibold">${c.error}</span>`
+                ? `<span class="text-red-700 font-semibold">${esc(c.error)}</span>`
                 : (ok ? '<span class="text-emerald-700 font-semibold">OK</span>' : '<span class="text-amber-700 font-semibold">Revisar</span>');
             tr.innerHTML = `
-                <td class="px-3 py-2 font-medium text-slate-700">${c.archivo || ''}</td>
-                <td class="px-3 py-2">${c.titular || '—'}</td>
-                <td class="px-3 py-2">B${c.bloque || '—'} · ${c.apartamento || '—'}</td>
+                <td class="px-3 py-2 font-medium text-slate-700">${esc(c.archivo || '')}</td>
+                <td class="px-3 py-2">${esc(c.titular || '—')}</td>
+                <td class="px-3 py-2">B${esc(c.bloque || '—')} · ${esc(c.apartamento || '—')}</td>
                 <td class="px-3 py-2 text-right">${c.movimientos_extraidos ?? 0}</td>
                 <td class="px-3 py-2 text-right">${c.bloques_omitidos ?? 0}</td>
                 <td class="px-3 py-2 text-right">${money(c.saldo_final)}</td>
@@ -192,16 +274,85 @@
         });
     }
 
+    function renderBolsa(payload) {
+        document.getElementById('b-cuentas').textContent = payload.cuentas_evaluadas ?? 0;
+        document.getElementById('b-con-capital').textContent = payload.cuentas_con_capital ?? 0;
+        document.getElementById('b-total').textContent = money(payload.total_capital_demandado_lote);
+        bolsaBloques.innerHTML = '';
+        (payload.resultados || []).forEach((r, idx) => {
+            const items = r.capital_limpio_a_demandar || [];
+            const errores = r.errores_procesamiento || [];
+            const block = document.createElement('div');
+            block.className = 'bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-3';
+            const badge = r.omitido
+                ? '<span class="text-xs font-bold uppercase text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">Omitido</span>'
+                : '<span class="text-xs font-bold uppercase text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">Calculado</span>';
+            let filas = items.map(it => `
+                <tr>
+                    <td class="px-3 py-1.5">${esc(it.fecha || '')}</td>
+                    <td class="px-3 py-1.5">${esc(it.concepto || '')}</td>
+                    <td class="px-3 py-1.5 text-right font-medium">${money(it.valor_a_demandar)}</td>
+                    <td class="px-3 py-1.5 text-slate-600">${esc(it.nota || '')}</td>
+                    <td class="px-3 py-1.5 text-xs uppercase text-slate-500">${esc(it.clase_concepto || '')}</td>
+                </tr>`).join('');
+            if (!filas) {
+                filas = '<tr><td colspan="5" class="px-3 py-3 text-slate-500">Sin capital limpio a demandar.</td></tr>';
+            }
+            const errHtml = errores.length
+                ? `<ul class="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-3 list-disc list-inside space-y-1">
+                    ${errores.map(e => `<li>${esc(e)}</li>`).join('')}
+                   </ul>`
+                : '<p class="text-sm text-slate-400">Sin errores de procesamiento.</p>';
+            block.innerHTML = `
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                        <p class="font-bold text-slate-800">${esc(r.titular || 'Sin titular')} · ${esc(r.archivo || '')}</p>
+                        <p class="text-sm text-slate-500">B${esc(r.bloque || '—')} · ${esc(r.apartamento || '—')} · cta ${esc(r.codigo_cuenta || '—')}</p>
+                    </div>
+                    ${badge}
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                    <div><p class="text-xs uppercase text-slate-500 font-bold">Inicio mora</p><p class="font-semibold text-slate-800">${esc(r.fecha_inicio_mora || '—')}</p></div>
+                    <div><p class="text-xs uppercase text-slate-500 font-bold">Capital demandado</p><p class="font-semibold text-slate-800">${money(r.total_capital_demandado)}</p></div>
+                    <div><p class="text-xs uppercase text-slate-500 font-bold">Bolsa inicial</p><p class="font-semibold text-slate-800">${money(r.bolsa_global_inicial)}</p></div>
+                    <div><p class="text-xs uppercase text-slate-500 font-bold">Bolsa remanente</p><p class="font-semibold text-slate-800">${money(r.bolsa_remanente_final)}</p></div>
+                </div>
+                <div class="overflow-x-auto border border-slate-200 rounded-lg">
+                    <table class="min-w-full text-sm">
+                        <thead class="bg-slate-100 text-xs uppercase text-slate-600">
+                            <tr>
+                                <th class="text-left px-3 py-2">Fecha</th>
+                                <th class="text-left px-3 py-2">Concepto</th>
+                                <th class="text-right px-3 py-2">Valor</th>
+                                <th class="text-left px-3 py-2">Nota</th>
+                                <th class="text-left px-3 py-2">Clase</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">${filas}</tbody>
+                    </table>
+                </div>
+                <div>
+                    <p class="text-xs uppercase text-slate-500 font-bold mb-1">Errores de procesamiento</p>
+                    ${errHtml}
+                </div>`;
+            bolsaBloques.appendChild(block);
+        });
+        bolsaResultado.classList.remove('hidden');
+        if (window.lucide) lucide.createIcons();
+    }
+
     btnAnalizar.addEventListener('click', async () => {
         const files = selectedFiles();
         if (!files.length) {
             setStatus('Seleccione uno o más PDF.', true);
             return;
         }
-        // Congelar la lista usada en este análisis para la descarga posterior.
         cachedFiles = files.slice();
         cacheIds = [];
         btnExcel.disabled = true;
+        btnBolsa.disabled = true;
+        bolsaResultado.classList.add('hidden');
+        bolsaBloques.innerHTML = '';
         const groups = chunk(files, BATCH_SIZE);
         let cuentas = [];
         let ok = 0, fail = 0, movs = 0;
@@ -232,10 +383,11 @@
             renderCuentas(cuentas);
             resultado.classList.remove('hidden');
             btnExcel.disabled = !(movs > 0);
+            btnBolsa.disabled = !(ok > 0 || movs > 0 || fail > 0);
             setStatus(
                 fail
-                    ? `Listo: ${ok} OK, ${fail} fallido(s). Pulse Descargar Excel (archivos en memoria: ${cachedFiles.length}).`
-                    : `Listo: ${ok} cuenta(s), ${movs} movimientos. Pulse Descargar Excel (no hace falta volver a cargar).`
+                    ? `Listo: ${ok} OK, ${fail} fallido(s). Puede descargar Excel o calcular mora.`
+                    : `Listo: ${ok} cuenta(s), ${movs} movimientos. Descargue Excel o calcule mora / capital limpio.`
             );
             if (window.lucide) lucide.createIcons();
         } catch (e) {
@@ -276,7 +428,7 @@
                 a.click();
                 a.remove();
                 URL.revokeObjectURL(url);
-                setStatus('Excel descargado.');
+                setStatus('Excel de transcripción descargado. Bolsa Global sigue disponible si la caché no expiró; si falla, use los PDF en memoria.');
                 btnExcel.disabled = false;
                 return;
             }
@@ -322,6 +474,124 @@
             btnExcel.disabled = false;
         }
     });
+
+    async function runBolsaJson() {
+        const jobs = bolsaJobs();
+        if (!jobs.length) {
+            setStatus('Analice el lote antes de calcular mora, o vuelva a cargar los PDF.', true);
+            return null;
+        }
+        btnBolsa.disabled = true;
+        let merged = {
+            cuentas_evaluadas: 0,
+            cuentas_con_capital: 0,
+            total_capital_demandado_lote: 0,
+            resultados: [],
+        };
+        try {
+            for (let i = 0; i < jobs.length; i++) {
+                const job = jobs[i];
+                setStatus(`Calculando Bolsa Global ${i + 1} de ${jobs.length}…`);
+                let res = await postBolsa('/herramientas/estado-cuenta/bolsa-global', job.id, []);
+                if (!res.ok && (res.status === 404 || res.status === 400 || res.status === 422) && job.files.length) {
+                    res = await postBolsa('/herramientas/estado-cuenta/bolsa-global', '', job.files);
+                }
+                let data = {};
+                try { data = await res.json(); } catch (_) { data = {}; }
+                if (!res.ok) {
+                    setStatus(detailMsg(data, res), true);
+                    btnBolsa.disabled = false;
+                    return null;
+                }
+                merged.cuentas_evaluadas += data.cuentas_evaluadas || 0;
+                merged.cuentas_con_capital += data.cuentas_con_capital || 0;
+                merged.total_capital_demandado_lote += Number(data.total_capital_demandado_lote || 0);
+                merged.resultados = merged.resultados.concat(data.resultados || []);
+            }
+            merged.total_capital_demandado_lote = Math.round(merged.total_capital_demandado_lote * 100) / 100;
+            renderBolsa(merged);
+            setStatus(`Bolsa Global lista: ${merged.cuentas_evaluadas} cuenta(s).`);
+            btnBolsa.disabled = false;
+            return merged;
+        } catch (e) {
+            setStatus('Fallo de red al calcular Bolsa Global.', true);
+            btnBolsa.disabled = false;
+            return null;
+        }
+    }
+
+    btnBolsa.addEventListener('click', () => { runBolsaJson(); });
+
+    async function downloadBolsa(kind) {
+        const jobs = bolsaJobs();
+        if (!jobs.length) {
+            setStatus('No hay lote en memoria para descargar Bolsa Global.', true);
+            return;
+        }
+        const url = kind === 'json'
+            ? '/herramientas/estado-cuenta/bolsa-global/json'
+            : '/herramientas/estado-cuenta/bolsa-global/excel';
+        const filename = kind === 'json'
+            ? 'bolsa_global_capital_limpio.json'
+            : 'bolsa_global_capital_limpio.xlsx';
+        try {
+            if (jobs.length === 1) {
+                setStatus(kind === 'json' ? 'Generando JSON Bolsa…' : 'Generando Excel Bolsa…');
+                let res = await postBolsa(url, jobs[0].id, []);
+                if (!res.ok && jobs[0].files.length) {
+                    res = await postBolsa(url, '', jobs[0].files);
+                }
+                if (!res.ok) {
+                    let data = {};
+                    try { data = await res.json(); } catch (_) {}
+                    setStatus(detailMsg(data, res), true);
+                    return;
+                }
+                const blob = await res.blob();
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setStatus(kind === 'json' ? 'JSON Bolsa descargado.' : 'Excel Bolsa descargado.');
+                return;
+            }
+            if (!window.JSZip) {
+                setStatus('No se pudo cargar JSZip para empaquetar varios grupos.', true);
+                return;
+            }
+            const zip = new JSZip();
+            const ext = kind === 'json' ? 'json' : 'xlsx';
+            for (let i = 0; i < jobs.length; i++) {
+                setStatus(`Bolsa grupo ${i + 1} de ${jobs.length}…`);
+                let res = await postBolsa(url, jobs[i].id, []);
+                if (!res.ok && jobs[i].files.length) {
+                    res = await postBolsa(url, '', jobs[i].files);
+                }
+                if (!res.ok) {
+                    let data = {};
+                    try { data = await res.json(); } catch (_) {}
+                    setStatus(detailMsg(data, res), true);
+                    return;
+                }
+                zip.file(`bolsa_global_${i + 1}.${ext}`, await res.arrayBuffer());
+            }
+            const zipBlob = await zip.generateAsync({ type: 'blob' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(zipBlob);
+            a.download = `bolsa_global_lote.zip`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setStatus(`ZIP Bolsa descargado (${jobs.length} archivo(s)).`);
+        } catch (e) {
+            setStatus('Fallo de red al descargar Bolsa Global.', true);
+        }
+    }
+
+    btnBolsaExcel.addEventListener('click', () => downloadBolsa('excel'));
+    btnBolsaJson.addEventListener('click', () => downloadBolsa('json'));
 })();
 </script>
 {% endblock %}
