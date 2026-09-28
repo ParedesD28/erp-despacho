@@ -60,8 +60,8 @@ class VerificacionTests(unittest.TestCase):
                 "apartamento": "401",
                 "codigo_cuenta": "9401",
                 "conjunto": "",
-                "fechas_detectadas": 2,
-                "movimientos_extraidos": 2,
+                "fechas_detectadas": 3,
+                "movimientos_extraidos": 3,
                 "bloques_omitidos": 0,
                 "inconsistencias_saldo": 0,
                 "saldo_final": 0,
@@ -73,31 +73,38 @@ class VerificacionTests(unittest.TestCase):
         hoja = libro["401 ANA"]
         self.assertEqual(hoja["A1"].value, "Titular")
         self.assertEqual(hoja["B1"].value, "ANA")
-        self.assertEqual(hoja["A5"].value, "Inicio mora")
+        self.assertEqual(hoja["A4"].value, "Codigo cuenta")
         self.assertEqual(
-            [celda.value for celda in hoja[7]],
+            [celda.value for celda in hoja[6]],
             [
                 "Concepto",
                 "Tipo Documento",
                 "Número",
                 "Fecha",
                 "Valor",
-                "Cuota Extraordinaria",
                 "Abono",
                 "Saldo",
                 "Abono Acumulado",
                 "Diferencia",
-                "Conceptos Extraordinarios",
             ],
         )
-        conceptos = [hoja.cell(fila, 1).value for fila in range(8, hoja.max_row + 1)]
-        tipos = [hoja.cell(fila, 2).value for fila in range(8, hoja.max_row + 1)]
-        self.assertEqual(conceptos, ["CUOTA DE ADMINISTRACION"])
-        self.assertEqual(tipos, ["FAC"])
+        conceptos = [hoja.cell(fila, 1).value for fila in range(7, hoja.max_row + 1)]
+        tipos = [hoja.cell(fila, 2).value for fila in range(7, hoja.max_row + 1)]
+        # Transcripción completa: no se omiten intereses ni recibos RDC.
+        self.assertEqual(
+            conceptos,
+            ["CUOTA DE ADMINISTRACION", "INTERESES DE MORA", "CUOTA DE ADMINISTRACION"],
+        )
+        self.assertEqual(tipos, ["FAC", "FAC", "RDC"])
         movimientos = libro["Movimientos"]
         tipos_mov = [movimientos.cell(fila, 7).value for fila in range(2, movimientos.max_row + 1)]
-        self.assertEqual(tipos_mov, ["FAC"])
-
+        self.assertEqual(tipos_mov, ["FAC", "FAC", "RDC"])
+        self.assertNotIn("Depurado", libro.sheetnames)
+        self.assertNotIn("Consolidado", libro.sheetnames)
+        self.assertNotIn("Inicio Mora", libro.sheetnames)
+        # Abono Acumulado / Diferencia se conservan (suma desde abajo + diferencia vs saldo PDF).
+        self.assertEqual(hoja.cell(7, 8).value, 25000.0)
+        self.assertEqual(hoja.cell(7, 9).value, 0.0)
     def test_la_verificacion_no_mezcla_cuentas(self):
         filas = [
             _fila("2016.05.01", "CUOTA DE ADMINISTRACION", "FAC", 10, 0, saldo=10),

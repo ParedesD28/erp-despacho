@@ -507,9 +507,15 @@ def generar_excel_estado_cuenta(rows: list[dict], cabecera: dict | None = None) 
 
 def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> io.BytesIO:
     """
-    Un Excel para N PDFs: hoja Resumen (1 fila/cuenta) + Movimientos (todas las filas).
-    Cada movimiento ya trae Archivo/Titular/Bloque/Apartamento de SU PDF.
+    Un Excel para N PDFs: Resumen + Movimientos (transcripción completa) +
+    una hoja por deudor con el detalle y las columnas Abono Acumulado / Diferencia.
+
+    No filtra FAC/RDC/intereses ni recalcula saldos: copia lo leído del PDF.
+    `depuracion` se ignora (compatibilidad de firma con callers antiguos).
     """
+    del depuracion  # ya no se usa: el Excel es solo transcripción + fórmulas
+    from estado_cuenta_etl import _nombre_hoja, anotar_verificacion
+
     resumen_rows = []
     movimientos: list[dict] = []
     for cuenta in cuentas:
@@ -537,93 +543,69 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
         )
         movimientos.extend(cuenta.get("rows") or [])
 
-    if depuracion is None and movimientos:
-        from estado_cuenta_etl import depurar_movimientos
-
-        depuracion = depurar_movimientos(pd.DataFrame(movimientos))
-
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame(resumen_rows).to_excel(writer, index=False, sheet_name="Resumen")
-        from estado_cuenta_etl import (
-            CLASIFICACION_INTERES,
-            acomodar_extraordinarias,
-            anotar_verificacion,
-            clasificar_concepto,
-        )
 
         movimientos_df = anotar_verificacion(pd.DataFrame(movimientos, columns=list(_COLUMNS)))
-        # La mora ya usó el lote completo. En el Excel quedan facturas FAC, sin intereses.
-        tipo = movimientos_df["Tipo Documento"].map(lambda v: str(v or "").strip().upper())
-        visibles = movimientos_df.loc[
-            (tipo == "FAC")
-            & (movimientos_df["Concepto"].map(clasificar_concepto) != CLASIFICACION_INTERES)
-        ].copy()
-        visibles = acomodar_extraordinarias(visibles)
-        visibles.to_excel(writer, index=False, sheet_name="Movimientos")
-        if depuracion is not None:
-            depuracion["depurado"].to_excel(writer, index=False, sheet_name="Depurado")
-            depuracion["consolidado"].to_excel(writer, index=False, sheet_name="Consolidado")
-            depuracion["cortes"].to_excel(writer, index=False, sheet_name="Inicio Mora")
-            columnas_detalle = [
-                "Concepto",
-                "Tipo Documento",
-                "Número",
-                "Fecha",
-                "Valor",
-                "Cuota Extraordinaria",
-                "Abono",
-                "Saldo",
-                "Abono Acumulado",
-                "Diferencia",
-                "Conceptos Extraordinarios",
-            ]
-            for cert in depuracion.get("certificados") or []:
-                hoja = cert["hoja"]
-                mascara = (
-                    (visibles["Archivo"].astype(str) == str(cert["archivo"] or ""))
-                    & (visibles["Titular"].astype(str) == str(cert["titular"] or ""))
-                    & (visibles["Codigo Cuenta"].astype(str) == str(cert["codigo_cuenta"] or ""))
-                )
-                visibles.loc[mascara, columnas_detalle].to_excel(
-                    writer, index=False, sheet_name=hoja, startrow=6
-                )
-                ws_cert = writer.book[hoja]
-                ws_cert["A1"] = "Titular"
-                ws_cert["B1"] = cert["titular"]
-                ws_cert["A2"] = "Bloque"
-                ws_cert["B2"] = cert["bloque"]
-                ws_cert["A3"] = "Apartamento"
-                ws_cert["B3"] = cert["apartamento"]
-                ws_cert["A4"] = "Codigo cuenta"
-                ws_cert["B4"] = cert["codigo_cuenta"]
-                ws_cert["A5"] = "Inicio mora"
-                ws_cert["B5"] = cert["fecha_inicio_mora"]
-                _estilizar_encabezado(ws_cert, 7)
-                _formato_dinero(
-                    ws_cert,
-                    {"Valor", "Cuota Extraordinaria", "Abono", "Saldo", "Abono Acumulado", "Diferencia"},
-                    header_row=7,
-                )
-                ws_cert.column_dimensions["A"].width = 42
-                ws_cert.column_dimensions["B"].width = 16
-                ws_cert.column_dimensions["C"].width = 14
-                ws_cert.column_dimensions["D"].width = 14
-                ws_cert.column_dimensions["K"].width = 42
-                for letra in ("E", "F", "G", "H", "I", "J"):
-                    ws_cert.column_dimensions[letra].width = 18
-            _estilizar_encabezado(writer.book["Depurado"])
-            _estilizar_encabezado(writer.book["Consolidado"])
-            _estilizar_encabezado(writer.book["Inicio Mora"])
-            _formato_dinero(
-                writer.book["Depurado"],
-                {"Valor", "Abono", "Saldo Inverso", "Diferencia Mora"},
+        movimientos_df.to_excel(writer, index=False, sheet_name="Movimientos")
+
+        columnas_detalle = [
+            "Concepto",
+            "Tipo Documento",
+            "Número",
+            "Fecha",
+            "Valor",
+            "Abono",
+            "Saldo",
+            "Abono Acumulado",
+            "Diferencia",
+        ]
+        usados: set[str] = set()
+        for cuenta in cuentas:
+            if not (cuenta.get("rows") or []):
+                continue
+            hoja = _nombre_hoja(
+                str(cuenta.get("titular") or ""),
+                str(cuenta.get("apartamento") or ""),
+                usados,
             )
+            mascara = (
+                (movimientos_df["Archivo"].astype(str) == str(cuenta.get("archivo") or ""))
+                & (movimientos_df["Titular"].astype(str) == str(cuenta.get("titular") or ""))
+                & (movimientos_df["Codigo Cuenta"].astype(str) == str(cuenta.get("codigo_cuenta") or ""))
+            )
+            detalle = movimientos_df.loc[mascara, columnas_detalle]
+            if detalle.empty:
+                continue
+            detalle.to_excel(writer, index=False, sheet_name=hoja, startrow=5)
+            ws_cert = writer.book[hoja]
+            ws_cert["A1"] = "Titular"
+            ws_cert["B1"] = cuenta.get("titular")
+            ws_cert["A2"] = "Bloque"
+            ws_cert["B2"] = cuenta.get("bloque")
+            ws_cert["A3"] = "Apartamento"
+            ws_cert["B3"] = cuenta.get("apartamento")
+            ws_cert["A4"] = "Codigo cuenta"
+            ws_cert["B4"] = cuenta.get("codigo_cuenta")
+            _estilizar_encabezado(ws_cert, 6)
+            _formato_dinero(
+                ws_cert,
+                {"Valor", "Abono", "Saldo", "Abono Acumulado", "Diferencia"},
+                header_row=6,
+            )
+            ws_cert.column_dimensions["A"].width = 42
+            ws_cert.column_dimensions["B"].width = 16
+            ws_cert.column_dimensions["C"].width = 14
+            ws_cert.column_dimensions["D"].width = 14
+            for letra in ("E", "F", "G", "H", "I"):
+                ws_cert.column_dimensions[letra].width = 18
+
         _estilizar_encabezado(writer.book["Resumen"])
         _estilizar_encabezado(writer.book["Movimientos"])
         _formato_dinero(
             writer.book["Movimientos"],
-            set(_MONEY_COLS) | {"Cuota Extraordinaria", "Abono Acumulado", "Diferencia"},
+            set(_MONEY_COLS) | {"Abono Acumulado", "Diferencia"},
         )
         for col in writer.book["Resumen"].columns:
             letter = get_column_letter(col[0].column)
@@ -639,7 +621,7 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
             else:
                 width = 15
             writer.book["Movimientos"].column_dimensions[letter].width = width
-        for nombre, ancho in (("Cuota Extraordinaria", 22), ("Conceptos Extraordinarios", 42), ("Abono Acumulado", 18), ("Diferencia", 18)):
+        for nombre, ancho in (("Abono Acumulado", 18), ("Diferencia", 18)):
             for celda in writer.book["Movimientos"][1]:
                 if celda.value == nombre:
                     writer.book["Movimientos"].column_dimensions[get_column_letter(celda.column)].width = ancho
@@ -821,25 +803,11 @@ def procesar_lote_estados_cuenta(
 
     ok = sum(1 for c in cuentas if not c.get("error") and c.get("movimientos_extraidos", 0) > 0)
     fallidos = sum(1 for c in cuentas if c.get("error"))
-    movimientos = [row for cuenta in cuentas for row in (cuenta.get("rows") or [])]
-    depuracion = None
-    if movimientos:
-        from estado_cuenta_etl import depurar_movimientos
-
-        depuracion = depurar_movimientos(pd.DataFrame(movimientos))
-        cortes = {
-            (str(fila["Archivo"] or ""), str(fila["Titular"] or ""), str(fila["Codigo Cuenta"] or "")): fila["Fecha Inicio Mora"]
-            for _, fila in depuracion["cortes"].iterrows()
-        }
-        for cuenta in cuentas:
-            clave = (
-                str(cuenta.get("archivo") or ""),
-                str(cuenta.get("titular") or ""),
-                str(cuenta.get("codigo_cuenta") or ""),
-            )
-            cuenta["fecha_inicio_mora"] = cortes.get(clave) or ""
-    excel = generar_excel_lote(cuentas, depuracion) if incluir_excel else None
-    cache_id = _guardar_lote(cuentas, depuracion)
+    # Transcripción pura: no se recalcula mora ni se inventan saldos aquí.
+    for cuenta in cuentas:
+        cuenta.setdefault("fecha_inicio_mora", "")
+    excel = generar_excel_lote(cuentas) if incluir_excel else None
+    cache_id = _guardar_lote(cuentas, None)
     if excel is not None:
         with _cache_lock:
             guardado = _lote_cache.get(cache_id)
