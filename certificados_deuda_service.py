@@ -102,10 +102,107 @@ class CertificadoNoEncontradoError(LookupError):
 class CertificadoDatosFaltantesError(ValueError):
     """Faltan campos críticos para emitir el certificado."""
 
-    def __init__(self, faltantes: list[str]):
+    def __init__(self, faltantes: list[str], *, fuente: str = "neon"):
         self.faltantes = list(faltantes)
-        detalle = "; ".join(self.faltantes)
-        super().__init__(f"Faltan datos críticos en Neon: {detalle}")
+        self.fuente = fuente
+        if fuente == "pdf":
+            detalle = "; ".join(self.faltantes)
+            super().__init__(
+                "Faltan datos críticos para emitir con datos del PDF "
+                f"(sin inventar NIT/cédula): {detalle}. "
+                "Indique copropiedad_nit y titular_cedula en el body, "
+                "o cargue el maestro en Neon."
+            )
+        else:
+            detalle = "; ".join(self.faltantes)
+            super().__init__(f"Faltan datos críticos en Neon: {detalle}")
+
+
+def datos_certificado_desde_pdf(
+    *,
+    conjunto: str = "",
+    torre_apto: str = "",
+    bloque: str = "",
+    apartamento: str = "",
+    titular: str = "",
+    titular_cedula: str = "",
+    copropiedad_nombre: str = "",
+    copropiedad_nit: str = "",
+    ciudad: str = "",
+) -> dict[str, Any]:
+    """
+    Fallback documentado: arma el contexto con datos del PDF cuando Neon
+    no tiene la unidad. No inventa NIT ni cédula.
+    """
+    torre = (torre_apto or "").strip()
+    if not torre and (bloque or "").strip() and (apartamento or "").strip():
+        torre = f"TORRE {str(bloque).strip()} APTO {str(apartamento).strip()}"
+    nombre_conjunto = (conjunto or "").strip() or None
+    nombre_copropiedad = (copropiedad_nombre or "").strip() or nombre_conjunto
+    return {
+        "inmueble_id": None,
+        "torre_apto": torre or None,
+        "conjunto_id": None,
+        "conjunto_nombre": nombre_conjunto,
+        "copropiedad_nombre": nombre_copropiedad,
+        "copropiedad_nit": (copropiedad_nit or "").strip() or None,
+        "ciudad": (ciudad or "").strip() or None,
+        "titular_nombre": (titular or "").strip() or None,
+        "titular_cedula": (titular_cedula or "").strip() or None,
+        "fuente": "pdf",
+    }
+
+
+def validar_datos_criticos(datos: dict[str, Any]) -> None:
+    """
+    Early-return validation: exige nombre+NIT copropiedad, nombre+cédula titular
+    e identificación del inmueble (torre/apto).
+    """
+    fuente = str(datos.get("fuente") or "neon")
+    faltantes: list[str] = []
+    if not (datos.get("copropiedad_nombre") or "").strip():
+        faltantes.append(
+            "nombre de la copropiedad"
+            + (
+                " (conjunto / copropiedad_nombre del PDF)"
+                if fuente == "pdf"
+                else " (conjuntos_residenciales→contactos.nombre)"
+            )
+        )
+    if not (datos.get("copropiedad_nit") or "").strip():
+        faltantes.append(
+            "NIT de la copropiedad"
+            + (
+                " (indique copropiedad_nit; el PDF COLON suele no traerlo)"
+                if fuente == "pdf"
+                else " (conjuntos_residenciales→contactos.identificacion)"
+            )
+        )
+    if not (datos.get("titular_nombre") or "").strip():
+        faltantes.append(
+            "nombre del titular"
+            + (" (PDF)" if fuente == "pdf" else " (inmueble_propietarios/contactos)")
+        )
+    if not (datos.get("titular_cedula") or "").strip():
+        faltantes.append(
+            "cédula del titular"
+            + (
+                " (indique titular_cedula; el PDF COLON suele no traerla)"
+                if fuente == "pdf"
+                else " (contactos.identificacion)"
+            )
+        )
+    if not (datos.get("torre_apto") or "").strip():
+        faltantes.append(
+            "identificación del inmueble torre/apto"
+            + (
+                " (bloque+apartamento del PDF)"
+                if fuente == "pdf"
+                else " (inmuebles_ph.torre_apto)"
+            )
+        )
+    if faltantes:
+        raise CertificadoDatosFaltantesError(faltantes, fuente=fuente)
 
 
 @dataclass(frozen=True)
@@ -265,26 +362,6 @@ def agrupar_capital_limpio(
     return filas
 
 
-def validar_datos_criticos(datos: dict[str, Any]) -> None:
-    """
-    Early-return validation: exige nombre+NIT copropiedad, nombre+cédula titular
-    e identificación del inmueble (torre/apto).
-    """
-    faltantes: list[str] = []
-    if not (datos.get("copropiedad_nombre") or "").strip():
-        faltantes.append("nombre de la copropiedad (conjuntos_residenciales→contactos.nombre)")
-    if not (datos.get("copropiedad_nit") or "").strip():
-        faltantes.append("NIT de la copropiedad (conjuntos_residenciales→contactos.identificacion)")
-    if not (datos.get("titular_nombre") or "").strip():
-        faltantes.append("nombre del titular (inmueble_propietarios/contactos)")
-    if not (datos.get("titular_cedula") or "").strip():
-        faltantes.append("cédula del titular (contactos.identificacion)")
-    if not (datos.get("torre_apto") or "").strip():
-        faltantes.append("identificación del inmueble torre/apto (inmuebles_ph.torre_apto)")
-    if faltantes:
-        raise CertificadoDatosFaltantesError(faltantes)
-
-
 def _safe_filename(texto: str) -> str:
     cleaned = re.sub(r"[^\w\-]+", "_", (texto or "").strip(), flags=re.UNICODE)
     return cleaned.strip("_")[:80] or "SIN_TITULAR"
@@ -367,15 +444,23 @@ def generar_certificado_deuda(
     bloque: str = "",
     apartamento: str = "",
     titular: str = "",
+    titular_cedula: str = "",
+    copropiedad_nombre: str = "",
+    copropiedad_nit: str = "",
     codigo_cuenta: str = "",
     ciudad: str = "",
     representante_nombre: str = "",
     representante_cedula: str = "",
     dia_vencimiento: int = 5,
+    permitir_datos_pdf: bool = False,
     conn=None,
 ) -> tuple[BytesIO, str, dict[str, Any]]:
     """
-    Orquesta validación Neon → agrupación → Word (plantilla oficial).
+    Orquesta validación Neon → (opcional fallback PDF) → agrupación → Word.
+
+    Prioriza match Neon. Si no hay fila y `permitir_datos_pdf`, usa titular /
+    bloque-apto / conjunto del PDF; NIT y cédula deben venir en el body
+    (no se inventan).
 
     Returns:
         (buffer_docx, nombre_archivo, meta)
@@ -401,15 +486,30 @@ def generar_certificado_deuda(
             titular=titular,
             codigo_cuenta=codigo_cuenta,
         )
-        raise CertificadoNoEncontradoError(
-            "No se encontró inmueble/titular en Neon. "
-            "El cruce usa inmueble_id o conjunto+unidad (torre/apto o bloque+apartamento); "
-            f"`codigo_cuenta` COLON no indexa maestros. Buscado: {criterios}. "
-            "Verifique que el conjunto exista en conjuntos_residenciales / "
-            "inmuebles_ph.conjunto_residencial y que torre_apto en Neon "
-            "corresponda a bloque-apartamento del PDF (p.ej. '1-201' ≡ 'TORRE 1 APTO 201').",
-            criterios=criterios,
-        )
+        if permitir_datos_pdf:
+            datos = datos_certificado_desde_pdf(
+                conjunto=conjunto,
+                torre_apto=torre_apto,
+                bloque=bloque,
+                apartamento=apartamento,
+                titular=titular,
+                titular_cedula=titular_cedula,
+                copropiedad_nombre=copropiedad_nombre,
+                copropiedad_nit=copropiedad_nit,
+                ciudad=ciudad,
+            )
+        else:
+            raise CertificadoNoEncontradoError(
+                "No se encontró inmueble/titular en Neon. "
+                "El cruce usa inmueble_id o conjunto+unidad (torre/apto o bloque+apartamento); "
+                f"`codigo_cuenta` COLON no indexa maestros. Buscado: {criterios}. "
+                "Verifique que el conjunto exista en conjuntos_residenciales / "
+                "inmuebles_ph.conjunto_residencial y que torre_apto en Neon "
+                "corresponda a bloque-apartamento del PDF (p.ej. '02-042' ≡ '2-42'). "
+                "Active `permitir_datos_pdf` para emitir con datos del PDF "
+                "(requiere NIT y cédula explícitos; no se inventan).",
+                criterios=criterios,
+            )
     validar_datos_criticos(datos)
 
     filas = agrupar_capital_limpio(
@@ -426,11 +526,12 @@ def generar_certificado_deuda(
     buffer = renderizar_docx(contexto)
     nombre = nombre_archivo_certificado(str(datos.get("titular_nombre") or ""))
     meta = {
-        "inmueble_id": datos["inmueble_id"],
-        "titular_nombre": datos["titular_nombre"],
-        "torre_apto": datos["torre_apto"],
+        "inmueble_id": datos.get("inmueble_id"),
+        "titular_nombre": datos.get("titular_nombre"),
+        "torre_apto": datos.get("torre_apto"),
         "filas": len(filas),
         "placeholders": list(PLANTILLA_PLACEHOLDERS),
         "plantilla": str(PLANTILLA_PATH.name),
+        "fuente": datos.get("fuente") or "neon",
     }
     return buffer, nombre, meta

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from itertools import product
 from typing import Any, Optional
 
 from psycopg2.extras import RealDictCursor
@@ -24,12 +25,17 @@ _UNIT_NOISE_RE = re.compile(
 )
 _CONJUNTO_NOISE_RE = re.compile(
     r"\b("
-    r"PROPIEDAD\s+HORIZONTAL|P\.?\s*H\.?|PH|"
+    r"PROPIEDAD\s+HORIZONTAL|"
+    r"P\.?\s*H\.?|"  # P.H. / PH / P H (punto final se limpia aparte)
+    r"PH|"
     r"URBANIZACI[OÓ]N|URB\.?|CONJUNTO\s+RESIDENCIAL|"
     r"CONJUNTO|EDIFICIO|RESIDENCIAL|UNIDAD"
-    r")\b",
+    r")\b\.?",
     re.IGNORECASE,
 )
+# Prefijos de catálogo PDF tipo "D - MIRADOR…", "A- …"
+_CONJUNTO_LETRA_PREFIJO_RE = re.compile(r"^[A-Z]\s*[-–—:.]+\s*", re.IGNORECASE)
+_CONJUNTO_ETAPA_RE = re.compile(r"\bETAPA\s+\d+\b", re.IGNORECASE)
 _TOKEN_UNIDAD_RE = re.compile(r"[A-Z]*\d+[A-Z]*")
 
 
@@ -82,6 +88,61 @@ def _clave_unidad(texto: str = "", *, bloque: str = "", apartamento: str = "") -
     return "-".join(tokens) if tokens else ""
 
 
+def _strip_ceros_token(token: str) -> str:
+    """Quita ceros a la izquierda de la parte numérica: 02→2, 042→42, T02→T2."""
+    m = re.match(r"^([A-Z]*)(0*)(\d+)([A-Z]*)$", token)
+    if not m:
+        return token
+    letters, _zeros, digits, suffix = m.groups()
+    return f"{letters}{str(int(digits))}{suffix}"
+
+
+def _variantes_clave_unidad(clave: str) -> set[str]:
+    """
+    Variantes canónicas de una clave bloque-apto.
+
+    `02-042` → también `2-42`, `02-42`, `2-042` (+ compactos dígitos).
+    """
+    if not clave:
+        return set()
+    out: set[str] = {clave}
+    partes = clave.split("-")
+    # Alias: quitar letras líderes del primer token (T1-201 → 1-201)
+    if partes:
+        first = re.sub(r"^[A-Z]+", "", partes[0]) or partes[0]
+        out.add("-".join([first] + partes[1:]))
+
+    # Combinaciones con/sin ceros a la izquierda por segmento.
+    opciones: list[set[str]] = []
+    for p in partes:
+        stripped = _strip_ceros_token(p)
+        opciones.append({p, stripped} if stripped != p else {p})
+    for combo in product(*opciones):
+        out.add("-".join(combo))
+
+    for c in list(out):
+        solo_digitos = re.sub(r"\D+", "", c)
+        if len(solo_digitos) >= 3:
+            out.add(solo_digitos)
+        # Compacto también sin ceros líderes globales
+        if solo_digitos.isdigit() and solo_digitos:
+            out.add(str(int(solo_digitos)))
+    return {c for c in out if c}
+
+
+def _tupla_numerica_unidad(clave: str) -> Optional[tuple[int, ...]]:
+    """(2, 42) desde `02-042` / `2-42` / `T02-042` para comparar numéricamente."""
+    if "-" not in (clave or ""):
+        return None
+    nums: list[int] = []
+    for parte in clave.split("-"):
+        m = re.search(r"(\d+)", parte)
+        if not m:
+            return None
+        nums.append(int(m.group(1)))
+    return tuple(nums) if len(nums) >= 2 else None
+
+
 def _claves_unidad(
     torre_apto: str = "",
     bloque: str = "",
@@ -94,18 +155,7 @@ def _claves_unidad(
         clave = _clave_unidad(raw, bloque=b, apartamento=a)
         if not clave:
             return
-        claves.add(clave)
-        # Alias: quitar letras líderes del primer token (T1-201 → 1-201)
-        partes = clave.split("-")
-        if partes:
-            first = re.sub(r"^[A-Z]+", "", partes[0]) or partes[0]
-            alt = "-".join([first] + partes[1:])
-            if alt:
-                claves.add(alt)
-        # Alias compacto solo dígitos (evitar choques cortos se filtra en match)
-        solo_digitos = re.sub(r"\D+", "", clave)
-        if len(solo_digitos) >= 3:
-            claves.add(solo_digitos)
+        claves.update(_variantes_clave_unidad(clave))
 
     _agregar(torre_apto)
     if bloque and apartamento:
@@ -121,9 +171,14 @@ def _claves_unidad(
 
 
 def _nucleo_conjunto(nombre: str) -> str:
-    """Quita prefijos/sufijos legales (PH, URBANIZACIÓN, …) para comparar."""
+    """Quita prefijos/sufijos legales (D -, PH, ETAPA N, URBANIZACIÓN, …)."""
     texto = _norm_texto(nombre)
+    # "D - MIRADOR…" / "A- FOO"
+    texto = _CONJUNTO_LETRA_PREFIJO_RE.sub("", texto)
     texto = _CONJUNTO_NOISE_RE.sub(" ", texto)
+    texto = _CONJUNTO_ETAPA_RE.sub(" ", texto)
+    # Puntos/guiones sueltos que deja P.H. u otros
+    texto = re.sub(r"[.\-–,;:]+", " ", texto)
     return re.sub(r"\s+", " ", texto).strip()
 
 
@@ -212,6 +267,15 @@ def _unidad_coincide(torre_neon: str, claves_busqueda: set[str]) -> bool:
         return False
     claves_neon = _claves_unidad(torre_neon)
     if claves_neon & claves_busqueda:
+        return True
+    # Comparación numérica torre/apto: 02-042 ≡ 2-42 ≡ 02-42
+    nums_busqueda = {
+        t for kb in claves_busqueda if (t := _tupla_numerica_unidad(kb)) is not None
+    }
+    nums_neon = {
+        t for kn in claves_neon if (t := _tupla_numerica_unidad(kn)) is not None
+    }
+    if nums_busqueda and nums_neon and (nums_busqueda & nums_neon):
         return True
     # Contención solo entre claves con estructura bloque-apto (evita falsos + con "1")
     for kn in claves_neon:

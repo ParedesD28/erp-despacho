@@ -114,6 +114,26 @@ class MatchingUnidadTests(unittest.TestCase):
         self.assertTrue(repo._unidad_coincide("TORRE 1 APTO 201", pdf))
         self.assertFalse(repo._unidad_coincide("1-202", pdf))
 
+    def test_ceros_izquierda_02_042_equivale_2_42(self):
+        """Regresión Mirador: PDF TORRE 02 APTO 042 vs Neon 2-42 / 02-42."""
+        pdf = repo._claves_unidad(
+            "TORRE 02 APTO 042",
+            bloque="02",
+            apartamento="042",
+        )
+        self.assertIn("02-042", pdf)
+        self.assertIn("2-42", pdf)
+        self.assertIn("02-42", pdf)
+        self.assertIn("2-042", pdf)
+        self.assertTrue(pdf & repo._claves_unidad("2-42"))
+        self.assertTrue(pdf & repo._claves_unidad("02-42"))
+        self.assertTrue(repo._unidad_coincide("2-42", pdf))
+        self.assertTrue(repo._unidad_coincide("02-42", pdf))
+        self.assertTrue(repo._unidad_coincide("02-042", pdf))
+        self.assertFalse(repo._unidad_coincide("2-43", pdf))
+        self.assertEqual(repo._tupla_numerica_unidad("02-042"), (2, 42))
+        self.assertEqual(repo._tupla_numerica_unidad("2-42"), (2, 42))
+
     def test_score_conjunto_ignora_ph_y_acentos(self):
         self.assertGreaterEqual(
             repo._score_conjunto(
@@ -133,6 +153,67 @@ class MatchingUnidadTests(unittest.TestCase):
             repo._score_conjunto("OTRO CONJUNTO", "SANTA CLARA"),
             0,
         )
+
+    def test_conjunto_prefijo_letra_y_etapa_mirador(self):
+        """Regresión Mirador: 'D - … ETAPA 1 P.H.' ≡ 'MIRADOR DE LLANO GRANDE'."""
+        pdf = "D - MIRADOR DE LLANO GRANDE ETAPA 1 P.H."
+        neon = "MIRADOR DE LLANO GRANDE"
+        self.assertEqual(
+            repo._nucleo_conjunto(pdf),
+            "MIRADOR DE LLANO GRANDE",
+        )
+        self.assertEqual(repo._nucleo_conjunto(neon), "MIRADOR DE LLANO GRANDE")
+        self.assertGreaterEqual(repo._score_conjunto(neon, pdf), 90)
+        # Variante con etapa en Neon también
+        self.assertGreaterEqual(
+            repo._score_conjunto("MIRADOR DE LLANO GRANDE ETAPA 1", pdf),
+            90,
+        )
+
+    def test_buscar_mirador_02_042_en_memoria(self):
+        filas = [
+            {
+                "inmueble_id": 42,
+                "torre_apto": "2-42",
+                "conjunto_id": 9,
+                "conjunto_nombre": "MIRADOR DE LLANO GRANDE",
+                "conjunto_catalogo": "MIRADOR DE LLANO GRANDE",
+                "copropiedad_nombre": "MIRADOR DE LLANO GRANDE PH",
+                "copropiedad_nit": "900",
+                "ciudad": "Pereira",
+                "titular_nombre": "MOSQUERA MOSQUERA LUZ ELVIRA",
+                "titular_cedula": "1",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+            {
+                "inmueble_id": 43,
+                "torre_apto": "2-43",
+                "conjunto_id": 9,
+                "conjunto_nombre": "MIRADOR DE LLANO GRANDE",
+                "conjunto_catalogo": "MIRADOR DE LLANO GRANDE",
+                "copropiedad_nombre": "MIRADOR DE LLANO GRANDE PH",
+                "copropiedad_nit": "900",
+                "ciudad": "Pereira",
+                "titular_nombre": "OTRO",
+                "titular_cedula": "2",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+        ]
+        filtradas = repo._filtrar_por_conjunto(
+            filas,
+            conjunto_id=None,
+            conjunto_nombre="D - MIRADOR DE LLANO GRANDE ETAPA 1 P.H.",
+        )
+        self.assertEqual(len(filtradas), 2)
+        claves = repo._claves_unidad("TORRE 02 APTO 042", "02", "042")
+        hallado = repo._elegir_por_unidad(
+            filtradas, claves, titular="MOSQUERA MOSQUERA LUZ ELVIRA"
+        )
+        self.assertIsNotNone(hallado)
+        self.assertEqual(hallado["inmueble_id"], 42)
+        self.assertEqual(hallado["torre_apto"], "2-42")
 
     def test_describir_busqueda_incluye_claves_y_codigo(self):
         txt = repo.describir_busqueda(
@@ -408,6 +489,55 @@ class GeneracionWordTests(unittest.TestCase):
             self.assertEqual(kwargs["titular"], "ANA PEREZ")
             self.assertEqual(kwargs["bloque"], "1")
             self.assertEqual(kwargs["apartamento"], "101")
+
+    def test_permitir_datos_pdf_emite_sin_neon_si_hay_nit_cedula(self):
+        with patch(
+            "certificados_deuda_service.resolver_datos_certificado",
+            return_value=None,
+        ):
+            buf, nombre, meta = svc.generar_certificado_deuda(
+                capital_limpio_a_demandar=[
+                    {
+                        "fecha": "2024.02.01",
+                        "concepto": "CUOTA ADMINISTRACION",
+                        "valor_a_demandar": 30,
+                    }
+                ],
+                conjunto="D - MIRADOR DE LLANO GRANDE ETAPA 1 P.H.",
+                bloque="02",
+                apartamento="042",
+                torre_apto="TORRE 02 APTO 042",
+                titular="MOSQUERA MOSQUERA LUZ ELVIRA",
+                titular_cedula="52.000.000",
+                copropiedad_nit="900123456-1",
+                permitir_datos_pdf=True,
+                representante_nombre="RL",
+                representante_cedula="1",
+            )
+        self.assertEqual(meta["fuente"], "pdf")
+        self.assertIsNone(meta["inmueble_id"])
+        self.assertIn("MOSQUERA", nombre)
+        self.assertTrue(buf.getvalue()[:2] == b"PK")
+
+    def test_permitir_datos_pdf_400_si_falta_nit_cedula(self):
+        with patch(
+            "certificados_deuda_service.resolver_datos_certificado",
+            return_value=None,
+        ):
+            with self.assertRaises(svc.CertificadoDatosFaltantesError) as ctx:
+                svc.generar_certificado_deuda(
+                    capital_limpio_a_demandar=[],
+                    conjunto="MIRADOR",
+                    bloque="02",
+                    apartamento="042",
+                    titular="MOSQUERA",
+                    permitir_datos_pdf=True,
+                )
+            self.assertEqual(ctx.exception.fuente, "pdf")
+            msg = str(ctx.exception)
+            self.assertIn("sin inventar NIT/cédula", msg)
+            self.assertIn("NIT", msg)
+            self.assertIn("cédula", msg)
 
 
 class RbacCertificadoTests(unittest.TestCase):
