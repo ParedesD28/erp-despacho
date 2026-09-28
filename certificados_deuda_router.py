@@ -56,11 +56,29 @@ class CertificadoDeudaRequest(BaseModel):
             "fallback si el nombre de conjunto del PDF no cuadra con Neon."
         ),
     )
+    titular_cedula: str = Field(
+        default="",
+        description=(
+            "Cédula del titular. Obligatoria si permitir_datos_pdf y Neon no "
+            "tiene maestro (no se inventa)."
+        ),
+    )
+    copropiedad_nombre: str = Field(
+        default="",
+        description="Nombre PH opcional para fallback PDF (default: conjunto).",
+    )
+    copropiedad_nit: str = Field(
+        default="",
+        description=(
+            "NIT de la copropiedad. Obligatorio si permitir_datos_pdf y Neon "
+            "no tiene maestro (no se inventa)."
+        ),
+    )
     permitir_datos_pdf: bool = Field(
         default=False,
         description=(
-            "Reservado: emitir con datos del PDF si Neon no tiene maestro. "
-            "No implementado; el certificado exige match Neon."
+            "Si Neon no tiene la unidad, emitir con titular/bloque-apto/conjunto "
+            "del PDF. Exige NIT y cédula explícitos (body); no inventa datos."
         ),
     )
 
@@ -109,11 +127,15 @@ async def emitir_certificado_deuda(payload: CertificadoDeudaRequest):
             bloque=payload.bloque,
             apartamento=payload.apartamento,
             titular=payload.titular,
+            titular_cedula=payload.titular_cedula,
+            copropiedad_nombre=payload.copropiedad_nombre,
+            copropiedad_nit=payload.copropiedad_nit,
             codigo_cuenta=payload.codigo_cuenta,
             ciudad=payload.ciudad,
             representante_nombre=payload.representante_nombre,
             representante_cedula=payload.representante_cedula,
             dia_vencimiento=payload.dia_vencimiento,
+            permitir_datos_pdf=payload.permitir_datos_pdf,
         )
     except CertificadoNoEncontradoError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

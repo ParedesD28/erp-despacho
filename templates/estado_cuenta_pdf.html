@@ -118,6 +118,26 @@
                     </button>
                 </div>
             </div>
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="chk-permitir-datos-pdf" class="mt-1 rounded border-amber-300 text-amber-800 focus:ring-amber-500">
+                    <span>
+                        <span class="font-semibold">Permitir datos del PDF</span>
+                        si Neon no tiene la unidad (certificado sin inventar NIT/cédula).
+                        Prioriza siempre el maestro Neon.
+                    </span>
+                </label>
+                <div id="pdf-fallback-fields" class="hidden grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                    <div>
+                        <label class="block text-xs font-bold uppercase text-amber-800 mb-1" for="pdf-copropiedad-nit">NIT copropiedad (obligatorio si no hay Neon)</label>
+                        <input type="text" id="pdf-copropiedad-nit" class="w-full rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-slate-800" placeholder="900…">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold uppercase text-amber-800 mb-1" for="pdf-titular-cedula">Cédula titular (obligatoria si no hay Neon)</label>
+                        <input type="text" id="pdf-titular-cedula" class="w-full rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-slate-800" placeholder="1.234.567">
+                    </div>
+                </div>
+            </div>
             <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
                     <p class="text-xs uppercase text-slate-500 font-bold">Cuentas evaluadas</p>
@@ -152,6 +172,14 @@
     const bolsaResultado = document.getElementById('bolsa-resultado');
     const bolsaBloques = document.getElementById('bolsa-bloques');
     const tabla = document.getElementById('tabla-cuentas');
+    const chkPermitirPdf = document.getElementById('chk-permitir-datos-pdf');
+    const pdfFallbackFields = document.getElementById('pdf-fallback-fields');
+
+    if (chkPermitirPdf && pdfFallbackFields) {
+        chkPermitirPdf.addEventListener('change', () => {
+            pdfFallbackFields.classList.toggle('hidden', !chkPermitirPdf.checked);
+        });
+    }
 
     // Cache en memoria: el <input type="file"> a veces se vacía tras el análisis
     // (navegador/sesión) y sin esto "Descargar Excel" pide volver a cargar.
@@ -368,6 +396,9 @@
             ? `TORRE ${r.bloque} APTO ${r.apartamento}`
             : (r.apartamento || '');
         setStatus(`Generando certificado de deuda (${r.titular || 'titular'})…`);
+        const permitirPdf = !!(document.getElementById('chk-permitir-datos-pdf') || {}).checked;
+        const nitPdf = ((document.getElementById('pdf-copropiedad-nit') || {}).value || '').trim();
+        const cedulaPdf = ((document.getElementById('pdf-titular-cedula') || {}).value || '').trim();
         try {
             const res = await fetch('/herramientas/estado-cuenta/certificado-deuda', {
                 method: 'POST',
@@ -380,6 +411,9 @@
                     torre_apto: torre,
                     codigo_cuenta: r.codigo_cuenta || '',
                     titular: r.titular || '',
+                    permitir_datos_pdf: permitirPdf,
+                    copropiedad_nit: nitPdf,
+                    titular_cedula: cedulaPdf,
                 }),
             });
             if (!res.ok) {
