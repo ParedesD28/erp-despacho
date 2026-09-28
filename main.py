@@ -1983,8 +1983,8 @@ async def _cuentas_lote_para_bolsa(
             )
     lote = await _leer_pdfs_upload(archivos or [])
     try:
-        resultado = await asyncio.to_thread(
-            estado_cuenta_pdf_service.procesar_lote_estados_cuenta, lote, incluir_excel=False
+        _cache_id, cuentas = await asyncio.to_thread(
+            estado_cuenta_pdf_service.procesar_lote_obtener_cuentas, lote
         )
     except EstadoCuentaPdfError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1994,16 +1994,18 @@ async def _cuentas_lote_para_bolsa(
             status_code=422,
             detail=f"No fue posible leer el/los PDF ({type(exc).__name__}).",
         ) from None
-    # Tras analizar, las filas viven en caché; el JSON público no las trae.
-    cuentas = await asyncio.to_thread(
-        estado_cuenta_pdf_service.cuentas_desde_cache, resultado.get("cache_id") or ""
-    )
-    if cuentas is None:
-        raise HTTPException(
-            status_code=422,
-            detail="No se pudieron recuperar movimientos para Bolsa Global.",
-        )
     return cuentas
+
+
+async def _payload_bolsa_global(
+    cache_id: str,
+    archivos: list[UploadFile] | None,
+) -> dict:
+    """Resuelve cuentas y calcula Bolsa Global (shared por JSON/Excel/export)."""
+    cuentas = await _cuentas_lote_para_bolsa(cache_id, archivos)
+    return await asyncio.to_thread(
+        bolsa_global_estado_cuenta_service.calcular_bolsa_lote, cuentas
+    )
 
 
 @app.post("/herramientas/estado-cuenta/bolsa-global")
@@ -2016,11 +2018,7 @@ async def calcular_bolsa_global_estado_cuenta(
     Endpoint aparte del Excel de transcripción (PR #20).
     Requiere sesión + accion.editar (middleware genérico de POST).
     """
-    cuentas = await _cuentas_lote_para_bolsa(cache_id, archivos)
-    payload = await asyncio.to_thread(
-        bolsa_global_estado_cuenta_service.calcular_bolsa_lote, cuentas
-    )
-    return payload
+    return await _payload_bolsa_global(cache_id, archivos)
 
 
 @app.post("/herramientas/estado-cuenta/bolsa-global/excel")
@@ -2029,10 +2027,7 @@ async def exportar_bolsa_global_excel(
     archivos: list[UploadFile] | None = File(None),
 ):
     """Descarga Excel dedicado de mora/capital limpio (no toca generar_excel_lote)."""
-    cuentas = await _cuentas_lote_para_bolsa(cache_id, archivos)
-    payload = await asyncio.to_thread(
-        bolsa_global_estado_cuenta_service.calcular_bolsa_lote, cuentas
-    )
+    payload = await _payload_bolsa_global(cache_id, archivos)
     excel = await asyncio.to_thread(
         bolsa_global_estado_cuenta_service.generar_excel_bolsa_global, payload
     )
@@ -2052,10 +2047,7 @@ async def exportar_bolsa_global_json(
     archivos: list[UploadFile] | None = File(None),
 ):
     """Descarga JSON del mismo resultado de Bolsa Global."""
-    cuentas = await _cuentas_lote_para_bolsa(cache_id, archivos)
-    payload = await asyncio.to_thread(
-        bolsa_global_estado_cuenta_service.calcular_bolsa_lote, cuentas
-    )
+    payload = await _payload_bolsa_global(cache_id, archivos)
     raw = await asyncio.to_thread(
         bolsa_global_estado_cuenta_service.resultado_a_json_bytes, payload
     )
