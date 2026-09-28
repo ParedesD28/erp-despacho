@@ -724,19 +724,44 @@ def cuentas_desde_cache(cache_id: str) -> list[dict] | None:
         cuentas = item[1].get("cuentas") or []
         if not cuentas:
             return None
-        # Copia superficial + copia de rows para no mutar la caché desde callers.
-        salida: list[dict] = []
-        for cuenta in cuentas:
-            copia = dict(cuenta)
-            copia["rows"] = [dict(r) for r in (cuenta.get("rows") or [])]
-            salida.append(copia)
-        return salida
+        return _copiar_cuentas_con_rows(cuentas)
+
+
+def _copiar_cuentas_con_rows(cuentas: list[dict]) -> list[dict]:
+    """Copia superficial + copia de rows para no mutar la caché desde callers."""
+    salida: list[dict] = []
+    for cuenta in cuentas:
+        copia = dict(cuenta)
+        copia["rows"] = [dict(r) for r in (cuenta.get("rows") or [])]
+        salida.append(copia)
+    return salida
+
+
+def procesar_lote_obtener_cuentas(
+    archivos: list[tuple[str, bytes]],
+) -> tuple[str, list[dict]]:
+    """
+    Parsea el lote, guarda caché y devuelve (cache_id, cuentas CON rows).
+
+    Una sola copia de rows (sin segundo lookup desde callers de Bolsa Global).
+    """
+    resultado = procesar_lote_estados_cuenta(
+        archivos, incluir_excel=False, incluir_rows=True
+    )
+    cache_id = str(resultado.get("cache_id") or "")
+    cuentas = resultado.get("cuentas_con_rows")
+    if not cache_id or cuentas is None:
+        raise EstadoCuentaPdfError(
+            "No se pudieron recuperar movimientos tras el parseo del lote."
+        )
+    return cache_id, cuentas
 
 
 def procesar_lote_estados_cuenta(
     archivos: list[tuple[str, bytes]],
     *,
     incluir_excel: bool = True,
+    incluir_rows: bool = False,
 ) -> dict:
     """
     Procesa N PDFs en aislamiento estricto (sin cruces cuenta↔cuenta).
@@ -833,6 +858,7 @@ def procesar_lote_estados_cuenta(
         cuenta.setdefault("fecha_inicio_mora", "")
     excel = generar_excel_lote(cuentas) if incluir_excel else None
     cache_id = _guardar_lote(cuentas, None)
+    cuentas_con_rows = _copiar_cuentas_con_rows(cuentas) if incluir_rows else None
     if excel is not None:
         with _cache_lock:
             guardado = _lote_cache.get(cache_id)
@@ -841,7 +867,7 @@ def procesar_lote_estados_cuenta(
                 guardado[1]["cuentas"] = []
                 guardado[1]["depuracion"] = None
                 excel.seek(0)
-    return {
+    out = {
         "archivos_recibidos": len(archivos),
         "archivos_ok": ok,
         "archivos_fallidos": fallidos,
@@ -853,3 +879,6 @@ def procesar_lote_estados_cuenta(
         ],
         "excel": excel,
     }
+    if incluir_rows:
+        out["cuentas_con_rows"] = cuentas_con_rows
+    return out

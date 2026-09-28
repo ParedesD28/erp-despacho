@@ -117,9 +117,34 @@ KW_GASTOS: frozenset[str] = frozenset(
 _PESOS_DECIMALES = 2
 _EPS = 0.005  # medio centavo COP
 
+# Prefijos controlados de interés (frozenset para lookup O(1)).
+_KW_INTERES_PREFIX: frozenset[str] = frozenset(
+    {"SANCION", "INTERES", "MULTA", "PENALIDAD", "MORA"}
+)
+
+# Regex de fecha precompilados (hot path en lotes grandes).
+_RE_FECHA_PUNTO = re.compile(r"^(\d{4})\.(\d{1,2})(?:\.(\d{1,2}))?")
+_RE_FECHA_ISO = re.compile(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
+_RE_FECHA_DMY = re.compile(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})")
+_RE_FECHA_YM = re.compile(r"^(\d{4})[.-](\d{1,2})$")
+_RE_NO_ALNUM = re.compile(r"[^A-Z0-9 ]+")
+_RE_SPACES = re.compile(r"\s+")
+
 
 def _redondear_cop(valor: float) -> float:
     return round(float(valor), _PESOS_DECIMALES)
+
+
+def resultado_vacio(*, errores: list[str] | None = None) -> dict[str, Any]:
+    """Contrato vacío estable (omitidos / entrada inválida) sin barrer filas."""
+    return ResultadoMoraCapitalLimpio(
+        fecha_inicio_mora="Sin deuda",
+        capital_limpio_a_demandar=[],
+        total_capital_demandado=0.0,
+        bolsa_global_inicial=0.0,
+        bolsa_remanente_final=0.0,
+        errores_procesamiento=list(errores or []),
+    ).as_dict()
 
 
 def _normalizar_texto(valor: Any) -> str:
@@ -130,8 +155,8 @@ def _normalizar_texto(valor: Any) -> str:
     texto = unicodedata.normalize("NFKD", str(valor))
     texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
     texto = texto.upper().strip()
-    texto = re.sub(r"[^A-Z0-9 ]+", " ", texto)
-    return re.sub(r"\s+", " ", texto).strip()
+    texto = _RE_NO_ALNUM.sub(" ", texto)
+    return _RE_SPACES.sub(" ", texto).strip()
 
 
 def _tokens(concepto_norm: str) -> list[str]:
@@ -213,19 +238,19 @@ def _extraer_mes_corte(fecha_raw: Any) -> str | None:
     if not texto:
         return None
 
-    m = re.match(r"^(\d{4})\.(\d{1,2})(?:\.(\d{1,2}))?", texto)
+    m = _RE_FECHA_PUNTO.match(texto)
     if m:
         return _mes_valido(int(m.group(1)), int(m.group(2)))
 
-    m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})", texto)
+    m = _RE_FECHA_ISO.match(texto)
     if m:
         return _mes_valido(int(m.group(1)), int(m.group(2)))
 
-    m = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})", texto)
+    m = _RE_FECHA_DMY.match(texto)
     if m:
         return _mes_valido(int(m.group(3)), int(m.group(2)))
 
-    m = re.match(r"^(\d{4})[.-](\d{1,2})$", texto)
+    m = _RE_FECHA_YM.match(texto)
     if m:
         return _mes_valido(int(m.group(1)), int(m.group(2)))
 
@@ -236,32 +261,41 @@ def _token_en_kw(token: str, keywords: frozenset[str]) -> bool:
     """Match exacto o prefijo seguro (SANCION*, INTERES*). Evita INT⊂PINTURA."""
     if token in keywords:
         return True
-    for kw in ("SANCION", "INTERES", "MULTA", "PENALIDAD", "MORA"):
+    for kw in _KW_INTERES_PREFIX:
         if kw in keywords and token.startswith(kw):
             return True
     return False
 
 
-def _clasificar_concepto(concepto_raw: Any) -> ClaseConcepto:
+def _clasificar_concepto(concepto_raw: Any, cache: dict[str, ClaseConcepto] | None = None) -> ClaseConcepto:
     """
     Prioridad: interés > gasto > capital > no_reconocido.
     Usa tokens normalizados (NFKD) — nunca substring corto suelto tipo INT.
+    `cache` opcional memoriza por texto crudo (misma cuenta / lote).
     """
+    clave = "" if concepto_raw is None else str(concepto_raw)
+    if cache is not None and clave in cache:
+        return cache[clave]
+
     normal = _normalizar_texto(concepto_raw)
     if not normal:
-        return "no_reconocido"
-    toks = _tokens(normal)
+        clase: ClaseConcepto = "no_reconocido"
+    else:
+        toks = _tokens(normal)
+        if any(_token_en_kw(t, KW_INTERESES) for t in toks):
+            clase = "interes"
+        elif any(t.startswith("INTERES") for t in toks):
+            clase = "interes"
+        elif any(_token_en_kw(t, KW_GASTOS) for t in toks):
+            clase = "gasto"
+        elif any(_token_en_kw(t, KW_CAPITAL) for t in toks):
+            clase = "capital"
+        else:
+            clase = "no_reconocido"
 
-    if any(_token_en_kw(t, KW_INTERESES) for t in toks):
-        return "interes"
-    if any(t.startswith("INTERES") for t in toks):
-        return "interes"
-
-    if any(_token_en_kw(t, KW_GASTOS) for t in toks):
-        return "gasto"
-    if any(_token_en_kw(t, KW_CAPITAL) for t in toks):
-        return "capital"
-    return "no_reconocido"
+    if cache is not None:
+        cache[clave] = clase
+    return clase
 
 
 def clasificar_concepto_bolsa(concepto_raw: Any) -> ClaseConcepto:
@@ -291,6 +325,7 @@ def determinar_mora_y_capital_limpio(
     bolsa = 0.0
     meses: dict[str, _GrupoMes] = {}
     capital_fecha_invalida: list[_ItemMes] = []
+    clase_cache: dict[str, ClaseConcepto] = {}
 
     if rows is None:
         errores.append("Entrada 'rows' es None; se procesa como lista vacía.")
@@ -300,14 +335,7 @@ def determinar_mora_y_capital_limpio(
         try:
             rows = list(rows)  # type: ignore[arg-type]
         except Exception as exc:  # noqa: BLE001
-            return ResultadoMoraCapitalLimpio(
-                fecha_inicio_mora="Sin deuda",
-                capital_limpio_a_demandar=[],
-                total_capital_demandado=0.0,
-                bolsa_global_inicial=0.0,
-                bolsa_remanente_final=0.0,
-                errores_procesamiento=[f"Entrada 'rows' no iterable: {exc}"],
-            ).as_dict()
+            return resultado_vacio(errores=[f"Entrada 'rows' no iterable: {exc}"])
 
     # ---- 1) Barrido: bolsa + agrupación por mes ----
     for idx, row in enumerate(rows):
@@ -349,7 +377,7 @@ def determinar_mora_y_capital_limpio(
             if valor <= _EPS:
                 continue
 
-            clase = _clasificar_concepto(concepto_raw)
+            clase = _clasificar_concepto(concepto_raw, clase_cache)
             if clase == "no_reconocido":
                 errores.append(
                     f"Fila {idx}: Concepto no reconocido -> '{concepto_norm or concepto_raw}'. "

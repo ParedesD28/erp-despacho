@@ -548,12 +548,14 @@
                     return;
                 }
                 const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
+                a.href = url;
                 a.download = filename;
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
+                URL.revokeObjectURL(url);
                 setStatus(kind === 'json' ? 'JSON Bolsa descargado.' : 'Excel Bolsa descargado.');
                 return;
             }
@@ -578,12 +580,14 @@
                 zip.file(`bolsa_global_${i + 1}.${ext}`, await res.arrayBuffer());
             }
             const zipBlob = await zip.generateAsync({ type: 'blob' });
+            const zipUrl = URL.createObjectURL(zipBlob);
             const a = document.createElement('a');
-            a.href = URL.createObjectURL(zipBlob);
+            a.href = zipUrl;
             a.download = `bolsa_global_lote.zip`;
             document.body.appendChild(a);
             a.click();
             a.remove();
+            URL.revokeObjectURL(zipUrl);
             setStatus(`ZIP Bolsa descargado (${jobs.length} archivo(s)).`);
         } catch (e) {
             setStatus('Fallo de red al descargar Bolsa Global.', true);

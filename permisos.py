@@ -168,6 +168,7 @@ _ROUTE_RULES: tuple[tuple[str, str], ...] = (
     ("/expedientes", NAV_EXPEDIENTES),
     ("/expediente", NAV_EXPEDIENTES),
     ("/informes", NAV_INFORMES),
+    ("/herramientas", NAV_INFORMES),
     ("/contactos", NAV_CONTACTOS),
     ("/conjuntos", NAV_CONJUNTOS),
     ("/procesos", NAV_PROCESOS),

@@ -221,6 +221,29 @@ class BolsaPermisosRutaTests(unittest.TestCase):
             permisos.denegar_acceso(abogado, "POST", "/herramientas/estado-cuenta/bolsa-global")
         )
 
+    def test_get_herramientas_exige_nav_informes(self):
+        import permisos
+
+        consulta = permisos.permisos_de_perfil(permisos.PERFIL_CONSULTA)
+        self.assertFalse(
+            permisos.denegar_acceso(consulta, "GET", "/herramientas/estado-cuenta")
+        )
+        # Perfil sin nav.informes (solo cobro parcial) no debería ver la herramienta.
+        sin_informes = frozenset({permisos.NAV_COBRO_CRM, permisos.ACCION_EDITAR})
+        self.assertTrue(
+            permisos.denegar_acceso(sin_informes, "GET", "/herramientas/estado-cuenta")
+        )
+
+
+class BolsaResultadoVacioTests(unittest.TestCase):
+    def test_resultado_vacio_contrato(self):
+        from bolsa_global_mora import resultado_vacio
+
+        r = resultado_vacio(errores=["x"])
+        self.assertEqual(r["fecha_inicio_mora"], "Sin deuda")
+        self.assertEqual(r["capital_limpio_a_demandar"], [])
+        self.assertEqual(r["errores_procesamiento"], ["x"])
+
 
 if __name__ == "__main__":
     unittest.main()
