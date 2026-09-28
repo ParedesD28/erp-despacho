@@ -120,28 +120,6 @@ def _claves_unidad(
     return {c for c in claves if c}
 
 
-def _variantes_torre_apto(
-    torre_apto: str = "",
-    bloque: str = "",
-    apartamento: str = "",
-) -> list[str]:
-    """Candidatos de unidad a partir de torre_apto o bloque+apartamento del PDF."""
-    out: list[str] = []
-    for raw in (
-        torre_apto,
-        f"{bloque}-{apartamento}" if bloque and apartamento else "",
-        f"{bloque} {apartamento}" if bloque and apartamento else "",
-        f"TORRE {bloque} APTO {apartamento}" if bloque and apartamento else "",
-        f"BLOQUE {bloque} APTO {apartamento}" if bloque and apartamento else "",
-        apartamento or "",
-        bloque or "",
-    ):
-        limpio = " ".join(str(raw or "").strip().split())
-        if limpio and limpio not in out:
-            out.append(limpio)
-    return out
-
-
 def _nucleo_conjunto(nombre: str) -> str:
     """Quita prefijos/sufijos legales (PH, URBANIZACIÓN, …) para comparar."""
     texto = _norm_texto(nombre)
