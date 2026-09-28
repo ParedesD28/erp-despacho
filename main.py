@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sms_router
 import cartas_cobro_router
+import certificados_deuda_router
 import asyncio
 import io
 import json
@@ -96,6 +97,7 @@ app.include_router(bot_api.router)
 app.include_router(agent_supervision.router)
 app.include_router(sms_router.router)
 app.include_router(cartas_cobro_router.router)
+app.include_router(certificados_deuda_router.router)
 app.include_router(usuarios_router.router)
 
 # Configuración global de observabilidad y captura de excepciones

@@ -157,6 +157,7 @@
     // (navegador/sesión) y sin esto "Descargar Excel" pide volver a cargar.
     let cachedFiles = [];
     let cacheIds = [];
+    let lastBolsaPayload = null;
 
     function money(n) {
         if (n === null || n === undefined || n === '') return '—';
@@ -311,6 +312,13 @@
                     </div>
                     ${badge}
                 </div>
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" class="btn-certificado inline-flex items-center gap-2 text-sm font-semibold bg-indigo-700 hover:bg-indigo-800 disabled:opacity-40 text-white py-1.5 px-3 rounded-lg"
+                            data-idx="${idx}" ${r.omitido || !items.length ? 'disabled' : ''}>
+                        <i data-lucide="file-text" class="w-3.5 h-3.5"></i>
+                        Certificado de deuda (.docx)
+                    </button>
+                </div>
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                     <div><p class="text-xs uppercase text-slate-500 font-bold">Inicio mora</p><p class="font-semibold text-slate-800">${esc(r.fecha_inicio_mora || '—')}</p></div>
                     <div><p class="text-xs uppercase text-slate-500 font-bold">Capital demandado</p><p class="font-semibold text-slate-800">${money(r.total_capital_demandado)}</p></div>
@@ -337,8 +345,65 @@
                 </div>`;
             bolsaBloques.appendChild(block);
         });
+        lastBolsaPayload = payload;
+        bolsaBloques.querySelectorAll('.btn-certificado').forEach(btn => {
+            btn.addEventListener('click', () => descargarCertificado(Number(btn.dataset.idx)));
+        });
         bolsaResultado.classList.remove('hidden');
         if (window.lucide) lucide.createIcons();
+    }
+
+    async function descargarCertificado(idx) {
+        const r = (lastBolsaPayload && lastBolsaPayload.resultados || [])[idx];
+        if (!r || r.omitido) {
+            setStatus('No hay capital limpio para ese deudor.', true);
+            return;
+        }
+        const items = r.capital_limpio_a_demandar || [];
+        if (!items.length) {
+            setStatus('Sin ítems de capital limpio para generar el certificado.', true);
+            return;
+        }
+        const torre = (r.bloque && r.apartamento)
+            ? `TORRE ${r.bloque} APTO ${r.apartamento}`
+            : (r.apartamento || '');
+        setStatus(`Generando certificado de deuda (${r.titular || 'titular'})…`);
+        try {
+            const res = await fetch('/herramientas/estado-cuenta/certificado-deuda', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    capital_limpio_a_demandar: items,
+                    conjunto: r.conjunto || '',
+                    bloque: r.bloque || '',
+                    apartamento: r.apartamento || '',
+                    torre_apto: torre,
+                    codigo_cuenta: r.codigo_cuenta || '',
+                    titular: r.titular || '',
+                }),
+            });
+            if (!res.ok) {
+                let data = {};
+                try { data = await res.json(); } catch (_) {}
+                setStatus(detailMsg(data, res), true);
+                return;
+            }
+            const blob = await res.blob();
+            const cd = res.headers.get('Content-Disposition') || '';
+            const m = /filename=\"([^\"]+)\"/.exec(cd);
+            const filename = (m && m[1]) || 'Certificado_deuda.docx';
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            setStatus(`Certificado descargado: ${filename}`);
+        } catch (e) {
+            setStatus('Fallo de red al generar el certificado de deuda.', true);
+        }
     }
 
     btnAnalizar.addEventListener('click', async () => {
