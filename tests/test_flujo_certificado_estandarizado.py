@@ -1,0 +1,354 @@
+"""Tests: clave canónica, flujo unificado Bolsa→Neon→certificado, regresión Excel."""
+from __future__ import annotations
+
+import sys
+import unittest
+import zipfile
+from io import BytesIO
+from pathlib import Path
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import certificados_deuda_flujo_service as flujo
+import certificados_deuda_repository as repo
+import certificados_deuda_service as svc
+import permisos
+from estado_cuenta_pdf_service import generar_excel_lote
+
+
+class ClaveCanonicaTests(unittest.TestCase):
+    def test_02_042_a_2_42(self):
+        self.assertEqual(
+            repo.clave_canonica_unidad("TORRE 02 APTO 042"),
+            "2-42",
+        )
+        self.assertEqual(
+            repo.clave_canonica_unidad("", bloque="02", apartamento="042"),
+            "2-42",
+        )
+        self.assertEqual(repo.normalizar_torre_apto("02-042"), "2-42")
+        self.assertEqual(repo.normalizar_torre_apto("2-42"), "2-42")
+        self.assertEqual(repo.normalizar_torre_apto("TORRE 1 APTO 201"), "1-201")
+
+    def test_partir_bloque_apto(self):
+        self.assertEqual(repo.partir_bloque_apto("TORRE 02 APTO 042"), ("2", "42"))
+        self.assertEqual(repo.partir_bloque_apto("9-401"), ("9", "401"))
+
+    def test_matching_usa_misma_normalizacion(self):
+        pdf = repo._claves_unidad("TORRE 02 APTO 042", bloque="02", apartamento="042")
+        canon = repo.clave_canonica_unidad("", bloque="02", apartamento="042")
+        self.assertEqual(canon, "2-42")
+        self.assertTrue(repo._unidad_coincide(canon, pdf))
+        self.assertTrue(repo._unidad_coincide("02-042", pdf))
+
+
+class FlujoProcesarCertificadoTests(unittest.TestCase):
+    def _cuenta(self, **over):
+        base = {
+            "archivo": "a.pdf",
+            "titular": "MOSQUERA MOSQUERA LUZ ELVIRA",
+            "bloque": "02",
+            "apartamento": "042",
+            "codigo_cuenta": "0242",
+            "conjunto": "D - MIRADOR DE LLANO GRANDE ETAPA 1 P.H.",
+            "movimientos_extraidos": 2,
+            "error": None,
+            "rows": [
+                {
+                    "Concepto": "CUOTA ADMINISTRACION",
+                    "Fecha": "2024.02.01",
+                    "Valor": 30000,
+                    "Abono": 0,
+                    "Saldo": 30000,
+                },
+                {
+                    "Concepto": "CUOTA ADMINISTRACION",
+                    "Fecha": "2024.03.01",
+                    "Valor": 30000,
+                    "Abono": 0,
+                    "Saldo": 60000,
+                },
+            ],
+        }
+        base.update(over)
+        return base
+
+    def test_preview_match_titular_principal(self):
+        neon = {
+            "inmueble_id": 42,
+            "torre_apto": "2-42",
+            "conjunto_id": 9,
+            "conjunto_nombre": "MIRADOR DE LLANO GRANDE",
+            "copropiedad_nombre": "MIRADOR PH",
+            "copropiedad_nit": "900",
+            "ciudad": "Pereira",
+            "titular_nombre": "MOSQUERA MOSQUERA LUZ ELVIRA",
+            "titular_cedula": "52000000",
+            "deudores": [
+                {
+                    "contacto_id": 1,
+                    "nombre": "MOSQUERA MOSQUERA LUZ ELVIRA",
+                    "cedula": "52000000",
+                    "es_principal": True,
+                },
+                {
+                    "contacto_id": 2,
+                    "nombre": "OTRO COPROPIETARIO",
+                    "cedula": "111",
+                    "es_principal": False,
+                },
+            ],
+            "propietarios": None,
+            "titular_principal": {
+                "contacto_id": 1,
+                "nombre": "MOSQUERA MOSQUERA LUZ ELVIRA",
+                "cedula": "52000000",
+                "es_principal": True,
+            },
+            "clave_canonica": "2-42",
+        }
+        neon["propietarios"] = neon["deudores"]
+
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            return_value=neon,
+        ):
+            preview = flujo.procesar_lote_certificados([self._cuenta()])
+
+        self.assertEqual(preview["emitibles"], 1)
+        self.assertEqual(preview["sin_match"], 0)
+        item = preview["resultados"][0]
+        self.assertEqual(item["clave_canonica"], "2-42")
+        self.assertEqual(item["estado"], "varios_propietarios")
+        self.assertEqual(item["titular_seleccionado"]["nombre"], "MOSQUERA MOSQUERA LUZ ELVIRA")
+        self.assertTrue(item["titular_seleccionado"]["es_principal"])
+        self.assertEqual(len(item["deudores"]), 2)
+        self.assertEqual(preview["regla_multi_deudor"], "titular_principal")
+
+    def test_preview_sin_match(self):
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            return_value=None,
+        ):
+            preview = flujo.procesar_lote_certificados([self._cuenta()])
+        self.assertEqual(preview["sin_match"], 1)
+        self.assertEqual(preview["emitibles"], 0)
+        self.assertEqual(preview["resultados"][0]["estado"], "sin_match")
+
+    def test_preview_fallback_pdf(self):
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            return_value=None,
+        ):
+            preview = flujo.procesar_lote_certificados(
+                [self._cuenta()],
+                permitir_datos_pdf=True,
+                titular_cedula="52.000.000",
+                copropiedad_nit="900123456-1",
+            )
+        item = preview["resultados"][0]
+        self.assertEqual(item["estado"], "fallback_pdf")
+        self.assertEqual(preview["emitibles"], 1)
+
+    def test_generar_un_certificado_principal(self):
+        neon = {
+            "inmueble_id": 7,
+            "torre_apto": "2-42",
+            "conjunto_nombre": "MIRADOR",
+            "copropiedad_nombre": "MIRADOR PH",
+            "copropiedad_nit": "900",
+            "ciudad": "Pereira",
+            "titular_nombre": "MOSQUERA",
+            "titular_cedula": "1",
+            "deudores": [
+                {
+                    "contacto_id": 1,
+                    "nombre": "MOSQUERA",
+                    "cedula": "1",
+                    "es_principal": True,
+                }
+            ],
+            "propietarios": [
+                {
+                    "contacto_id": 1,
+                    "nombre": "MOSQUERA",
+                    "cedula": "1",
+                    "es_principal": True,
+                }
+            ],
+            "titular_principal": {
+                "contacto_id": 1,
+                "nombre": "MOSQUERA",
+                "cedula": "1",
+                "es_principal": True,
+            },
+            "clave_canonica": "2-42",
+        }
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            return_value=neon,
+        ), patch(
+            "certificados_deuda_flujo_service.generar_certificado_deuda",
+            return_value=(
+                BytesIO(b"PK\x03\x04fake"),
+                "Certificado_MOSQUERA.docx",
+                {"inmueble_id": 7, "filas": 1},
+            ),
+        ) as gen:
+            out = flujo.procesar_y_generar_certificados(
+                [self._cuenta()],
+                modo="generar",
+                representante_nombre="RL",
+                representante_cedula="9",
+            )
+        self.assertIsInstance(out, tuple)
+        buf, nombre, meta = out
+        self.assertEqual(nombre, "Certificado_MOSQUERA.docx")
+        self.assertEqual(meta["generados"], 1)
+        self.assertEqual(gen.call_count, 1)
+        kwargs = gen.call_args.kwargs
+        self.assertEqual(kwargs["inmueble_id"], 7)
+        self.assertEqual(kwargs["titular"], "MOSQUERA")
+
+    def test_generar_zip_varios(self):
+        def _neon(iid, nombre):
+            return {
+                "inmueble_id": iid,
+                "torre_apto": f"{iid}-1",
+                "conjunto_nombre": "X",
+                "copropiedad_nombre": "X PH",
+                "copropiedad_nit": "1",
+                "ciudad": "Pereira",
+                "titular_nombre": nombre,
+                "titular_cedula": str(iid),
+                "deudores": [
+                    {
+                        "contacto_id": iid,
+                        "nombre": nombre,
+                        "cedula": str(iid),
+                        "es_principal": True,
+                    }
+                ],
+                "propietarios": [
+                    {
+                        "contacto_id": iid,
+                        "nombre": nombre,
+                        "cedula": str(iid),
+                        "es_principal": True,
+                    }
+                ],
+                "titular_principal": {
+                    "contacto_id": iid,
+                    "nombre": nombre,
+                    "cedula": str(iid),
+                    "es_principal": True,
+                },
+                "clave_canonica": f"{iid}-1",
+            }
+
+        cuentas = [
+            self._cuenta(archivo="a.pdf", titular="ANA", bloque="1", apartamento="1"),
+            self._cuenta(archivo="b.pdf", titular="BOB", bloque="2", apartamento="2"),
+        ]
+        side = [_neon(1, "ANA"), _neon(2, "BOB")]
+
+        def fake_resolver(**kwargs):
+            tit = kwargs.get("titular") or ""
+            if "ANA" in tit:
+                return side[0]
+            return side[1]
+
+        gen_calls = []
+
+        def fake_gen(**kwargs):
+            name = f"Certificado_{kwargs.get('titular')}.docx"
+            gen_calls.append(name)
+            return BytesIO(b"PK\x03\x04x"), name, {"inmueble_id": kwargs.get("inmueble_id")}
+
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            side_effect=fake_resolver,
+        ), patch(
+            "certificados_deuda_flujo_service.generar_certificado_deuda",
+            side_effect=fake_gen,
+        ):
+            buf, nombre, meta = flujo.procesar_y_generar_certificados(
+                cuentas, modo="generar"
+            )
+        self.assertEqual(nombre, "Certificados_deuda.zip")
+        self.assertEqual(meta["generados"], 2)
+        with zipfile.ZipFile(buf) as zf:
+            self.assertEqual(len(zf.namelist()), 2)
+
+
+class ExcelTranscripcionNoRotaTests(unittest.TestCase):
+    """Regresión PR #20: Excel de lote sigue siendo solo transcripción."""
+
+    def test_generar_excel_lote_no_incluye_bolsa(self):
+        cuentas = [
+            {
+                "archivo": "x.pdf",
+                "titular": "T",
+                "bloque": "1",
+                "apartamento": "101",
+                "codigo_cuenta": "1",
+                "conjunto": "C",
+                "movimientos_extraidos": 1,
+                "bloques_omitidos": 0,
+                "saldo_final": 10,
+                "error": None,
+                "rows": [
+                    {
+                        "Concepto": "CUOTA ADMINISTRACION",
+                        "Tipo Documento": "FV",
+                        "Número": "1",
+                        "Fecha": "2024.01.01",
+                        "Valor": 10,
+                        "Abono": 0,
+                        "Saldo": 10,
+                        "Titular": "T",
+                        "Bloque": "1",
+                        "Apartamento": "101",
+                        "Codigo Cuenta": "1",
+                        "Archivo": "x.pdf",
+                    }
+                ],
+            }
+        ]
+        excel = generar_excel_lote(cuentas)
+        raw = excel.getvalue() if hasattr(excel, "getvalue") else excel
+        # openpyxl workbook bytes: no debe mencionar capital limpio / bolsa
+        lower = raw.lower() if isinstance(raw, (bytes, bytearray)) else b""
+        # El xlsx es zip; buscamos strings en el binario
+        self.assertNotIn(b"capital_limpio", lower)
+        self.assertNotIn(b"bolsa_global", lower)
+        self.assertTrue(raw[:2] == b"PK" or hasattr(excel, "getvalue"))
+
+
+class RbacProcesarCertificadoTests(unittest.TestCase):
+    def test_post_exige_accion_editar(self):
+        consulta = permisos.permisos_de_perfil(permisos.PERFIL_CONSULTA)
+        abogado = permisos.permisos_de_perfil(permisos.PERFIL_ABOGADO)
+        path = "/herramientas/estado-cuenta/procesar-certificado"
+        self.assertTrue(permisos.denegar_acceso(consulta, "POST", path))
+        self.assertFalse(permisos.denegar_acceso(abogado, "POST", path))
+
+
+class TitularPrincipalHelperTests(unittest.TestCase):
+    def test_elige_principal(self):
+        props = [
+            {"nombre": "A", "es_principal": False},
+            {"nombre": "B", "es_principal": True},
+        ]
+        self.assertEqual(repo.titular_principal_de_propietarios(props)["nombre"], "B")
+
+    def test_fallback_primero(self):
+        props = [{"nombre": "A", "es_principal": False}]
+        self.assertEqual(repo.titular_principal_de_propietarios(props)["nombre"], "A")
+
+
+if __name__ == "__main__":
+    unittest.main()

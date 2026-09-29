@@ -134,9 +134,15 @@ def datos_certificado_desde_pdf(
     Fallback documentado: arma el contexto con datos del PDF cuando Neon
     no tiene la unidad. No inventa NIT ni cédula.
     """
-    torre = (torre_apto or "").strip()
+    from certificados_deuda_repository import clave_canonica_unidad
+
+    torre = clave_canonica_unidad(
+        torre_apto, bloque=bloque, apartamento=apartamento
+    )
+    if not torre:
+        torre = (torre_apto or "").strip()
     if not torre and (bloque or "").strip() and (apartamento or "").strip():
-        torre = f"TORRE {str(bloque).strip()} APTO {str(apartamento).strip()}"
+        torre = f"{str(bloque).strip()}-{str(apartamento).strip()}"
     nombre_conjunto = (conjunto or "").strip() or None
     nombre_copropiedad = (copropiedad_nombre or "").strip() or nombre_conjunto
     return {

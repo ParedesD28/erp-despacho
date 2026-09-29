@@ -64,11 +64,21 @@ def _tokens_unidad(texto: str) -> list[str]:
     return _TOKEN_UNIDAD_RE.findall(limpio)
 
 
+def _strip_ceros_token(token: str) -> str:
+    """Quita ceros a la izquierda de la parte numérica: 02→2, 042→42, T02→T2."""
+    m = re.match(r"^([A-Z]*)(0*)(\d+)([A-Z]*)$", token)
+    if not m:
+        return token
+    letters, _zeros, digits, suffix = m.groups()
+    return f"{letters}{str(int(digits))}{suffix}"
+
+
 def _clave_unidad(texto: str = "", *, bloque: str = "", apartamento: str = "") -> str:
     """
-    Clave canónica bloque-apto comparable entre formatos.
+    Clave de matching bloque-apto (puede conservar ceros; ver variantes).
 
-    Ejemplos → misma clave `1-201`:
+    Para el formato maestro al guardar usar `clave_canonica_unidad` / `normalizar_torre_apto`.
+    Ejemplos → `1-201` / `02-042` (las variantes unifican ceros):
       - "TORRE 1 APTO 201"
       - "1-201"
       - bloque=1, apartamento=201
@@ -88,13 +98,43 @@ def _clave_unidad(texto: str = "", *, bloque: str = "", apartamento: str = "") -
     return "-".join(tokens) if tokens else ""
 
 
-def _strip_ceros_token(token: str) -> str:
-    """Quita ceros a la izquierda de la parte numérica: 02→2, 042→42, T02→T2."""
-    m = re.match(r"^([A-Z]*)(0*)(\d+)([A-Z]*)$", token)
-    if not m:
-        return token
-    letters, _zeros, digits, suffix = m.groups()
-    return f"{letters}{str(int(digits))}{suffix}"
+def clave_canonica_unidad(
+    texto: str = "",
+    *,
+    bloque: str = "",
+    apartamento: str = "",
+) -> str:
+    """
+    Clave canónica de unidad para maestros Neon: `torre-apto` **sin ceros a la izquierda**.
+
+    `TORRE 02 APTO 042` / `02-042` / bloque=02+apto=042 → `2-42`.
+    """
+    clave = _clave_unidad(texto, bloque=bloque, apartamento=apartamento)
+    if not clave:
+        return ""
+    partes = [_strip_ceros_token(p) for p in clave.split("-") if p]
+    return "-".join(partes) if partes else ""
+
+
+def normalizar_torre_apto(
+    texto: str = "",
+    *,
+    bloque: str = "",
+    apartamento: str = "",
+) -> str:
+    """Normaliza `torre_apto` al formato canónico antes de INSERT/UPDATE."""
+    return clave_canonica_unidad(texto, bloque=bloque, apartamento=apartamento)
+
+
+def partir_bloque_apto(clave_o_texto: str = "") -> tuple[str, str]:
+    """Devuelve (bloque, apto) canónicos sin ceros; vacío si no hay dos tokens."""
+    canon = clave_canonica_unidad(clave_o_texto)
+    if "-" not in canon:
+        return "", ""
+    partes = canon.split("-")
+    if len(partes) < 2:
+        return "", ""
+    return partes[0], partes[-1]
 
 
 def _variantes_clave_unidad(clave: str) -> set[str]:
@@ -518,6 +558,99 @@ def describir_busqueda(
     return "; ".join(partes) if partes else "(sin criterios)"
 
 
+def listar_propietarios_inmueble(
+    inmueble_id: int,
+    *,
+    conn=None,
+) -> list[dict[str, Any]]:
+    """
+    Propietarios del inmueble (Neon). Orden: principal primero, luego id.
+
+    Regla multi-deudor del certificado: emitir **un** Word al titular
+    `es_principal` (o el primero de la lista si ninguno está marcado).
+    """
+    owns = conn is None
+    if owns:
+        conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    ip.contacto_id,
+                    ip.es_principal,
+                    c.nombre,
+                    c.identificacion AS cedula
+                FROM inmueble_propietarios ip
+                JOIN contactos c ON c.id = ip.contacto_id
+                WHERE ip.inmueble_id = %s
+                ORDER BY ip.es_principal DESC, c.id ASC
+                """,
+                (int(inmueble_id),),
+            )
+            filas = []
+            for r in cur.fetchall():
+                filas.append(
+                    {
+                        "contacto_id": int(r["contacto_id"]),
+                        "nombre": (r.get("nombre") or "").strip() or None,
+                        "cedula": (r.get("cedula") or "").strip() or None,
+                        "es_principal": bool(r.get("es_principal")),
+                    }
+                )
+            return filas
+    finally:
+        if owns and conn is not None:
+            conn.release()
+
+
+def titular_principal_de_propietarios(
+    propietarios: list[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    """Elige el titular principal (o el primero) para el certificado."""
+    if not propietarios:
+        return None
+    for p in propietarios:
+        if p.get("es_principal"):
+            return p
+    return propietarios[0]
+
+
+def enriquecer_con_propietarios(
+    datos: Optional[dict[str, Any]],
+    *,
+    conn=None,
+) -> Optional[dict[str, Any]]:
+    """Añade lista de deudores y titular_principal al dict de match Neon."""
+    if not datos or datos.get("inmueble_id") is None:
+        return datos
+    out = dict(datos)
+    propietarios = listar_propietarios_inmueble(int(out["inmueble_id"]), conn=conn)
+    if not propietarios and (out.get("titular_nombre") or out.get("titular_cedula")):
+        # Fallback legacy: contacto_id del inmueble ya proyectado en titular_*
+        propietarios = [
+            {
+                "contacto_id": None,
+                "nombre": out.get("titular_nombre"),
+                "cedula": out.get("titular_cedula"),
+                "es_principal": True,
+            }
+        ]
+    principal = titular_principal_de_propietarios(propietarios)
+    out["propietarios"] = propietarios
+    out["deudores"] = propietarios
+    out["titular_principal"] = principal
+    if principal:
+        # Asegura que el certificado use el principal aunque el LATERAL fallara.
+        if principal.get("nombre"):
+            out["titular_nombre"] = principal["nombre"]
+        if principal.get("cedula"):
+            out["titular_cedula"] = principal["cedula"]
+    # Torre canónica para respuesta UI
+    out["clave_canonica"] = clave_canonica_unidad(str(out.get("torre_apto") or ""))
+    return out
+
+
 def resolver_datos_certificado(
     *,
     inmueble_id: Optional[int] = None,
@@ -528,18 +661,22 @@ def resolver_datos_certificado(
     apartamento: str = "",
     titular: str = "",
     conn=None,
+    incluir_propietarios: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Resuelve datos maestros: prioriza inmueble_id, luego conjunto+unidad."""
+    hallado: Optional[dict[str, Any]] = None
     if inmueble_id is not None:
         hallado = obtener_por_inmueble_id(int(inmueble_id), conn=conn)
-        if hallado:
-            return hallado
-    return buscar_por_conjunto_y_unidad(
-        conjunto_id=conjunto_id,
-        conjunto_nombre=conjunto_nombre,
-        torre_apto=torre_apto,
-        bloque=bloque,
-        apartamento=apartamento,
-        titular=titular,
-        conn=conn,
-    )
+    if hallado is None:
+        hallado = buscar_por_conjunto_y_unidad(
+            conjunto_id=conjunto_id,
+            conjunto_nombre=conjunto_nombre,
+            torre_apto=torre_apto,
+            bloque=bloque,
+            apartamento=apartamento,
+            titular=titular,
+            conn=conn,
+        )
+    if incluir_propietarios and hallado:
+        return enriquecer_con_propietarios(hallado, conn=conn)
+    return hallado

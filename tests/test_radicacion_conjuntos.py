@@ -312,9 +312,17 @@ class RadicacionConjuntosTests(unittest.TestCase):
 
         def execute_nuevo_inmueble(sql, params=None):
             normalized = " ".join(str(sql).split())
-            if "FROM inmuebles_ph" in normalized and "torre_apto" in normalized:
+            if "FROM inmuebles_ph" in normalized and "AND torre_apto=%s" in normalized:
                 cur.statements.append((normalized, params))
                 cur._fetchone_queue.append(None)
+                return
+            if (
+                "FROM inmuebles_ph" in normalized
+                and "WHERE conjunto_id=%s" in normalized
+                and "AND torre_apto" not in normalized
+            ):
+                cur.statements.append((normalized, params))
+                cur._fetchall_queue.append([])
                 return
             if "INSERT INTO inmuebles_ph" in normalized:
                 cur.statements.append((normalized, params))

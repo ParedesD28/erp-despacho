@@ -41,6 +41,11 @@
                     <i data-lucide="scan-search" class="w-4 h-4"></i>
                     Analizar lote
                 </button>
+                <button type="button" id="btn-procesar-cert" disabled
+                        class="inline-flex items-center gap-2 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-2.5 px-5 rounded-lg">
+                    <i data-lucide="file-badge" class="w-4 h-4"></i>
+                    Generar certificado(s)
+                </button>
                 <button type="button" id="btn-excel" disabled
                         class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-2.5 px-5 rounded-lg">
                     <i data-lucide="download" class="w-4 h-4"></i>
@@ -51,6 +56,30 @@
                     <i data-lucide="scale" class="w-4 h-4"></i>
                     Calcular mora / capital limpio
                 </button>
+            </div>
+            <p class="text-xs text-slate-500">
+                <strong>Generar certificado(s)</strong> encadena Bolsa Global + cruce Neon
+                (clave <code>torre-apto</code> sin ceros, p.ej. <code>2-42</code>) + Word.
+                Un certificado por titular principal si hay co-propietarios.
+            </p>
+            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="chk-permitir-datos-pdf" class="mt-1 rounded border-amber-300 text-amber-800 focus:ring-amber-500">
+                    <span>
+                        <span class="font-semibold">Permitir datos del PDF</span>
+                        si Neon no tiene la unidad (certificado sin inventar NIT/cédula).
+                    </span>
+                </label>
+                <div id="pdf-fallback-fields" class="hidden grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                    <div>
+                        <label class="block text-xs font-bold uppercase text-amber-800 mb-1" for="pdf-copropiedad-nit">NIT copropiedad</label>
+                        <input type="text" id="pdf-copropiedad-nit" class="w-full rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-slate-800" placeholder="900…">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold uppercase text-amber-800 mb-1" for="pdf-titular-cedula">Cédula titular</label>
+                        <input type="text" id="pdf-titular-cedula" class="w-full rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-slate-800" placeholder="1.234.567">
+                    </div>
+                </div>
             </div>
             <p id="status" class="text-sm text-slate-500"></p>
         </div>
@@ -118,25 +147,8 @@
                     </button>
                 </div>
             </div>
-            <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
-                <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" id="chk-permitir-datos-pdf" class="mt-1 rounded border-amber-300 text-amber-800 focus:ring-amber-500">
-                    <span>
-                        <span class="font-semibold">Permitir datos del PDF</span>
-                        si Neon no tiene la unidad (certificado sin inventar NIT/cédula).
-                        Prioriza siempre el maestro Neon.
-                    </span>
-                </label>
-                <div id="pdf-fallback-fields" class="hidden grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                    <div>
-                        <label class="block text-xs font-bold uppercase text-amber-800 mb-1" for="pdf-copropiedad-nit">NIT copropiedad (obligatorio si no hay Neon)</label>
-                        <input type="text" id="pdf-copropiedad-nit" class="w-full rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-slate-800" placeholder="900…">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold uppercase text-amber-800 mb-1" for="pdf-titular-cedula">Cédula titular (obligatoria si no hay Neon)</label>
-                        <input type="text" id="pdf-titular-cedula" class="w-full rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-slate-800" placeholder="1.234.567">
-                    </div>
-                </div>
+            <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                Opciones de fallback PDF están arriba (junto a Generar certificado). Prioriza siempre el maestro Neon.
             </div>
             <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div class="bg-slate-50 rounded-lg p-4 border border-slate-100">
@@ -155,6 +167,47 @@
         </div>
         <div id="bolsa-bloques" class="space-y-4"></div>
     </div>
+
+    <div id="cert-preview" class="hidden space-y-4">
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h3 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <i data-lucide="file-badge" class="w-5 h-5 text-indigo-700"></i>
+                        Certificados · match Neon
+                    </h3>
+                    <p class="text-sm text-slate-500 mt-1">
+                        Un Word por unidad al <strong>titular principal</strong>.
+                        Co-propietarios se listan pero no generan certificado aparte.
+                    </p>
+                </div>
+                <button type="button" id="btn-descargar-certs" disabled
+                        class="inline-flex items-center gap-2 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-40 text-white font-semibold py-2 px-4 rounded-lg text-sm">
+                    <i data-lucide="download" class="w-4 h-4"></i>
+                    Descargar certificado(s)
+                </button>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                    <p class="text-xs uppercase text-slate-500 font-bold">Evaluadas</p>
+                    <p id="c-eval" class="text-xl font-black text-slate-800">—</p>
+                </div>
+                <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                    <p class="text-xs uppercase text-slate-500 font-bold">Emitibles</p>
+                    <p id="c-ok" class="text-xl font-black text-emerald-700">—</p>
+                </div>
+                <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                    <p class="text-xs uppercase text-slate-500 font-bold">Sin match</p>
+                    <p id="c-fail" class="text-xl font-black text-red-700">—</p>
+                </div>
+                <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                    <p class="text-xs uppercase text-slate-500 font-bold">Capital lote</p>
+                    <p id="c-total" class="text-xl font-black text-slate-800">—</p>
+                </div>
+            </div>
+            <div id="cert-bloques" class="space-y-3"></div>
+        </div>
+    </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
@@ -164,6 +217,8 @@
     const fileInput = document.getElementById('pdf-file');
     const statusEl = document.getElementById('status');
     const btnAnalizar = document.getElementById('btn-analizar');
+    const btnProcesarCert = document.getElementById('btn-procesar-cert');
+    const btnDescargarCerts = document.getElementById('btn-descargar-certs');
     const btnExcel = document.getElementById('btn-excel');
     const btnBolsa = document.getElementById('btn-bolsa');
     const btnBolsaExcel = document.getElementById('btn-bolsa-excel');
@@ -171,6 +226,8 @@
     const resultado = document.getElementById('resultado');
     const bolsaResultado = document.getElementById('bolsa-resultado');
     const bolsaBloques = document.getElementById('bolsa-bloques');
+    const certPreview = document.getElementById('cert-preview');
+    const certBloques = document.getElementById('cert-bloques');
     const tabla = document.getElementById('tabla-cuentas');
     const chkPermitirPdf = document.getElementById('chk-permitir-datos-pdf');
     const pdfFallbackFields = document.getElementById('pdf-fallback-fields');
@@ -186,6 +243,7 @@
     let cachedFiles = [];
     let cacheIds = [];
     let lastBolsaPayload = null;
+    let lastCertPreview = null;
 
     function money(n) {
         if (n === null || n === undefined || n === '') return '—';
@@ -265,6 +323,232 @@
         if (cacheId) fd.append('cache_id', cacheId);
         (files || []).forEach(f => fd.append('archivos', f));
         return fetch(url, { method: 'POST', body: fd });
+    }
+
+    function pdfFallbackOpts() {
+        return {
+            permitir: !!(document.getElementById('chk-permitir-datos-pdf') || {}).checked,
+            nit: ((document.getElementById('pdf-copropiedad-nit') || {}).value || '').trim(),
+            cedula: ((document.getElementById('pdf-titular-cedula') || {}).value || '').trim(),
+        };
+    }
+
+    async function postProcesarCert(modo, cacheId, files) {
+        const fd = new FormData();
+        if (cacheId) fd.append('cache_id', cacheId);
+        (files || []).forEach(f => fd.append('archivos', f));
+        fd.append('modo', modo);
+        const opts = pdfFallbackOpts();
+        fd.append('permitir_datos_pdf', opts.permitir ? 'true' : 'false');
+        if (opts.nit) fd.append('copropiedad_nit', opts.nit);
+        if (opts.cedula) fd.append('titular_cedula', opts.cedula);
+        return fetch('/herramientas/estado-cuenta/procesar-certificado', {
+            method: 'POST',
+            body: fd,
+        });
+    }
+
+    function estadoBadge(estado) {
+        const map = {
+            ok: 'text-emerald-700 bg-emerald-50 border-emerald-200|Match Neon',
+            varios_propietarios: 'text-sky-700 bg-sky-50 border-sky-200|Co-propietarios → titular principal',
+            fallback_pdf: 'text-amber-700 bg-amber-50 border-amber-200|Datos PDF',
+            sin_match: 'text-red-700 bg-red-50 border-red-200|Sin match',
+            sin_capital: 'text-slate-600 bg-slate-50 border-slate-200|Sin capital',
+            omitido: 'text-amber-700 bg-amber-50 border-amber-200|Omitido',
+        };
+        const raw = map[estado] || 'text-slate-600 bg-slate-50 border-slate-200|' + (estado || '—');
+        const [cls, label] = raw.split('|');
+        return `<span class="text-xs font-bold uppercase border px-2 py-0.5 rounded ${cls}">${esc(label)}</span>`;
+    }
+
+    function renderCertPreview(payload) {
+        document.getElementById('c-eval').textContent = payload.cuentas_evaluadas ?? 0;
+        document.getElementById('c-ok').textContent = payload.emitibles ?? 0;
+        document.getElementById('c-fail').textContent = payload.sin_match ?? 0;
+        document.getElementById('c-total').textContent = money(payload.total_capital_demandado_lote);
+        certBloques.innerHTML = '';
+        (payload.resultados || []).forEach((r) => {
+            const deudores = r.deudores || [];
+            const sel = r.titular_seleccionado;
+            const deudaHtml = deudores.length
+                ? `<ul class="text-sm text-slate-700 list-disc list-inside">
+                    ${deudores.map(d => {
+                        const tag = d.es_principal ? ' <span class="text-xs font-bold text-indigo-700">(principal)</span>' : '';
+                        return `<li>${esc(d.nombre || '—')} · CC ${esc(d.cedula || '—')}${tag}</li>`;
+                    }).join('')}
+                   </ul>`
+                : '<p class="text-sm text-slate-400">Sin deudores Neon.</p>';
+            const block = document.createElement('div');
+            block.className = 'border border-slate-200 rounded-lg p-4 space-y-2';
+            block.innerHTML = `
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                        <p class="font-bold text-slate-800">${esc(r.titular_pdf || 'Sin titular')} · ${esc(r.archivo || '')}</p>
+                        <p class="text-sm text-slate-500">
+                            PDF B${esc(r.bloque || '—')} · ${esc(r.apartamento || '—')}
+                            → clave <code class="text-indigo-800">${esc(r.clave_canonica || '—')}</code>
+                            ${r.inmueble_id ? ` · inmueble #${esc(r.inmueble_id)}` : ''}
+                        </p>
+                    </div>
+                    ${estadoBadge(r.estado)}
+                </div>
+                <div class="text-sm">
+                    <p class="text-xs uppercase text-slate-500 font-bold mb-1">Deudores Neon</p>
+                    ${deudaHtml}
+                    ${sel ? `<p class="mt-1 text-sm text-indigo-900">Certificado → <strong>${esc(sel.nombre || '—')}</strong> (CC ${esc(sel.cedula || '—')})</p>` : ''}
+                    ${r.error ? `<p class="mt-1 text-sm text-red-700 font-semibold">${esc(r.error)}</p>` : ''}
+                    ${r.criterios && r.estado === 'sin_match' ? `<p class="mt-1 text-xs text-slate-500">Buscado: ${esc(r.criterios)}</p>` : ''}
+                </div>`;
+            certBloques.appendChild(block);
+        });
+        lastCertPreview = payload;
+        const canDl = (payload.emitibles || 0) > 0;
+        if (btnDescargarCerts) btnDescargarCerts.disabled = !canDl;
+        certPreview.classList.remove('hidden');
+        if (window.lucide) lucide.createIcons();
+    }
+
+    async function runProcesarCertificado(autoDownload) {
+        const jobs = bolsaJobs();
+        if (!jobs.length) {
+            setStatus('Analice el lote antes de generar certificados, o vuelva a cargar los PDF.', true);
+            return null;
+        }
+        if (btnProcesarCert) btnProcesarCert.disabled = true;
+        let merged = {
+            cuentas_evaluadas: 0,
+            cuentas_con_capital: 0,
+            total_capital_demandado_lote: 0,
+            emitibles: 0,
+            sin_match: 0,
+            resultados: [],
+        };
+        try {
+            for (let i = 0; i < jobs.length; i++) {
+                const job = jobs[i];
+                setStatus(`Procesando certificados ${i + 1} de ${jobs.length} (Bolsa + Neon)…`);
+                let res = await postProcesarCert('preview', job.id, []);
+                if (!res.ok && (res.status === 404 || res.status === 400 || res.status === 422) && job.files.length) {
+                    res = await postProcesarCert('preview', '', job.files);
+                }
+                let data = {};
+                try { data = await res.json(); } catch (_) { data = {}; }
+                if (!res.ok) {
+                    setStatus(detailMsg(data, res), true);
+                    if (btnProcesarCert) btnProcesarCert.disabled = false;
+                    return null;
+                }
+                merged.cuentas_evaluadas += data.cuentas_evaluadas || 0;
+                merged.cuentas_con_capital += data.cuentas_con_capital || 0;
+                merged.total_capital_demandado_lote += Number(data.total_capital_demandado_lote || 0);
+                merged.emitibles += data.emitibles || 0;
+                merged.sin_match += data.sin_match || 0;
+                merged.resultados = merged.resultados.concat(data.resultados || []);
+            }
+            merged.total_capital_demandado_lote = Math.round(merged.total_capital_demandado_lote * 100) / 100;
+            renderCertPreview(merged);
+            if (merged.sin_match && !merged.emitibles) {
+                setStatus(
+                    'Sin match Neon. Active «Permitir datos del PDF», indique NIT y cédula, y reintente.',
+                    true
+                );
+            } else if (merged.sin_match) {
+                setStatus(
+                    `Preview listo: ${merged.emitibles} emitible(s), ${merged.sin_match} sin match. Puede descargar los OK.`
+                );
+            } else {
+                setStatus(`Preview listo: ${merged.emitibles} certificado(s) emitible(s) (titular principal).`);
+            }
+            if (autoDownload && merged.emitibles > 0) {
+                await descargarCertificadosUnificados();
+            }
+            if (btnProcesarCert) btnProcesarCert.disabled = false;
+            return merged;
+        } catch (e) {
+            setStatus('Fallo de red al procesar certificados.', true);
+            if (btnProcesarCert) btnProcesarCert.disabled = false;
+            return null;
+        }
+    }
+
+    async function descargarCertificadosUnificados() {
+        const jobs = bolsaJobs();
+        if (!jobs.length) {
+            setStatus('No hay lote en memoria para generar certificados.', true);
+            return;
+        }
+        if (btnDescargarCerts) btnDescargarCerts.disabled = true;
+        try {
+            // Un solo job: descarga directa. Varios: ZIP cliente de cada respuesta.
+            if (jobs.length === 1) {
+                setStatus('Generando certificado(s) Word…');
+                let res = await postProcesarCert('generar', jobs[0].id, []);
+                if (!res.ok && jobs[0].files.length) {
+                    res = await postProcesarCert('generar', '', jobs[0].files);
+                }
+                if (!res.ok) {
+                    let data = {};
+                    try { data = await res.json(); } catch (_) {}
+                    setStatus(detailMsg(data, res), true);
+                    if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+                    return;
+                }
+                const blob = await res.blob();
+                const cd = res.headers.get('Content-Disposition') || '';
+                const m = /filename=\"([^\"]+)\"/.exec(cd);
+                const filename = (m && m[1]) || 'Certificados_deuda.docx';
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+                setStatus(`Descargado: ${filename}`);
+                if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+                return;
+            }
+            if (!window.JSZip) {
+                setStatus('No se pudo cargar JSZip para empaquetar varios grupos.', true);
+                if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+                return;
+            }
+            const zip = new JSZip();
+            for (let i = 0; i < jobs.length; i++) {
+                setStatus(`Generando certificados grupo ${i + 1} de ${jobs.length}…`);
+                let res = await postProcesarCert('generar', jobs[i].id, []);
+                if (!res.ok && jobs[i].files.length) {
+                    res = await postProcesarCert('generar', '', jobs[i].files);
+                }
+                if (!res.ok) {
+                    let data = {};
+                    try { data = await res.json(); } catch (_) {}
+                    setStatus(detailMsg(data, res), true);
+                    if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+                    return;
+                }
+                const cd = res.headers.get('Content-Disposition') || '';
+                const m = /filename=\"([^\"]+)\"/.exec(cd);
+                const filename = (m && m[1]) || `certificados_${i + 1}.docx`;
+                zip.file(filename, await res.arrayBuffer());
+            }
+            const zipBlob = await zip.generateAsync({ type: 'blob' });
+            const zipUrl = URL.createObjectURL(zipBlob);
+            const a = document.createElement('a');
+            a.href = zipUrl;
+            a.download = 'Certificados_deuda_lote.zip';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(zipUrl);
+            setStatus(`ZIP de certificados descargado (${jobs.length} grupo(s)).`);
+            if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+        } catch (e) {
+            setStatus('Fallo de red al descargar certificados.', true);
+            if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+        }
     }
 
     async function fetchExcel(cacheId, files) {
@@ -450,8 +734,12 @@
         cacheIds = [];
         btnExcel.disabled = true;
         btnBolsa.disabled = true;
+        if (btnProcesarCert) btnProcesarCert.disabled = true;
         bolsaResultado.classList.add('hidden');
         bolsaBloques.innerHTML = '';
+        if (certPreview) certPreview.classList.add('hidden');
+        if (certBloques) certBloques.innerHTML = '';
+        lastCertPreview = null;
         const groups = chunk(files, BATCH_SIZE);
         let cuentas = [];
         let ok = 0, fail = 0, movs = 0;
@@ -483,10 +771,11 @@
             resultado.classList.remove('hidden');
             btnExcel.disabled = !(movs > 0);
             btnBolsa.disabled = !(ok > 0 || movs > 0 || fail > 0);
+            if (btnProcesarCert) btnProcesarCert.disabled = !(ok > 0 || movs > 0);
             setStatus(
                 fail
-                    ? `Listo: ${ok} OK, ${fail} fallido(s). Puede descargar Excel o calcular mora.`
-                    : `Listo: ${ok} cuenta(s), ${movs} movimientos. Descargue Excel o calcule mora / capital limpio.`
+                    ? `Listo: ${ok} OK, ${fail} fallido(s). Genere certificado(s), Excel o mora.`
+                    : `Listo: ${ok} cuenta(s), ${movs} movimientos. Use «Generar certificado(s)» o Excel / Bolsa.`
             );
             if (window.lucide) lucide.createIcons();
         } catch (e) {
@@ -620,6 +909,12 @@
     }
 
     btnBolsa.addEventListener('click', () => { runBolsaJson(); });
+    if (btnProcesarCert) {
+        btnProcesarCert.addEventListener('click', () => { runProcesarCertificado(false); });
+    }
+    if (btnDescargarCerts) {
+        btnDescargarCerts.addEventListener('click', () => { descargarCertificadosUnificados(); });
+    }
 
     async function downloadBolsa(kind) {
         const jobs = bolsaJobs();
