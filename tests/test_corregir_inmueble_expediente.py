@@ -174,7 +174,7 @@ class CorregirInmuebleExpedienteTests(unittest.TestCase):
             if "UPDATE inmuebles_ph" in s and "torre_apto" in s
         ]
         self.assertEqual(len(updates), 1)
-        self.assertEqual(updates[0][0], "TORRE 1 APTO 101")
+        self.assertEqual(updates[0][0], "1-101")
         inserts = [s for s, _ in cur.statements if "INSERT INTO inmuebles_ph" in s]
         self.assertEqual(inserts, [])
         # Mismo id: no debe reasignar proceso

@@ -119,7 +119,15 @@ def radicar_proceso(
     tipo_cartera = str(tipo_cartera or "").strip().upper()
     radicado_rama = str(radicado_rama or "").strip().upper()
     juzgado = str(juzgado or "").strip() or None
-    apto = str(apto or "").strip()
+    apto_raw = str(apto or "").strip()
+    # Estándar maestro: torre-apto sin ceros (`2-42`).
+    from certificados_deuda_repository import (
+        normalizar_torre_apto,
+        _claves_unidad,
+        _unidad_coincide,
+    )
+
+    apto = normalizar_torre_apto(apto_raw) or apto_raw
     conjunto_id_raw = str(conjunto_id_raw or "").strip()
     conjunto_nombre = str(conjunto_nombre or "").strip()
     documento_referencia = str(documento_referencia or "").strip()
@@ -329,7 +337,7 @@ def radicar_proceso(
                     conjunto_id = int(conjunto["id"])
                     cur.execute(
                         """
-                        SELECT id
+                        SELECT id, torre_apto
                         FROM inmuebles_ph
                         WHERE conjunto_id=%s
                           AND torre_apto=%s
@@ -338,9 +346,29 @@ def radicar_proceso(
                         (conjunto_id, apto),
                     )
                     inmueble = cur.fetchone()
+                    if not inmueble:
+                        cur.execute(
+                            """
+                            SELECT id, torre_apto
+                            FROM inmuebles_ph
+                            WHERE conjunto_id=%s
+                            """,
+                            (conjunto_id,),
+                        )
+                        claves = _claves_unidad(apto)
+                        for row in cur.fetchall() or []:
+                            torre_row = str(row.get("torre_apto") or "")
+                            if _unidad_coincide(torre_row, claves):
+                                inmueble = row
+                                break
 
                     if inmueble:
                         inmueble_id = inmueble["id"]
+                        if str(inmueble.get("torre_apto") or "") != apto:
+                            cur.execute(
+                                "UPDATE inmuebles_ph SET torre_apto=%s WHERE id=%s",
+                                (apto, inmueble_id),
+                            )
                     else:
                         demandado_principal = contacts[demandados[0]]
                         cur.execute(

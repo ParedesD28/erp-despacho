@@ -492,7 +492,16 @@ def corregir_inmueble_proceso(
         return proceso.get("inmueble_id")
 
     radicado_interno = str(radicado_interno or "").strip()
-    torre_apto = str(torre_apto or "").strip()
+    torre_apto_raw = str(torre_apto or "").strip()
+    # Estándar maestro: `torre-apto` sin ceros a la izquierda (2-42).
+    from certificados_deuda_repository import (
+        clave_canonica_unidad,
+        normalizar_torre_apto,
+        _unidad_coincide,
+        _claves_unidad,
+    )
+
+    torre_apto = normalizar_torre_apto(torre_apto_raw) or torre_apto_raw
     obligaciones = obligaciones or []
     inmueble_anterior_id = proceso.get("inmueble_id")
     if inmueble_anterior_id is not None:
@@ -536,19 +545,36 @@ def corregir_inmueble_proceso(
             raise ValueError("El conjunto residencial seleccionado no es válido")
         conjunto_nombre = str(_row_value(conj, "nombre", _row_value(conj, 1)) or "").strip()
 
+    torre_actual = str(info_actual.get("torre_apto") or "").strip()
     mismo_apto = (
         inmueble_anterior_id
-        and str(info_actual.get("torre_apto") or "").strip() == torre_apto
         and int(info_actual.get("conjunto_id") or 0) == conjunto_id
+        and (
+            torre_actual == torre_apto
+            or clave_canonica_unidad(torre_actual) == clave_canonica_unidad(torre_apto)
+            or _unidad_coincide(torre_actual, _claves_unidad(torre_apto))
+        )
     )
     if mismo_apto:
+        # Si el maestro aún trae ceros (02-042), normaliza en sitio.
+        if torre_actual != torre_apto:
+            cur.execute(
+                """
+                UPDATE inmuebles_ph
+                SET torre_apto=%s
+                WHERE id=%s
+                """,
+                (torre_apto, inmueble_anterior_id),
+            )
         _upsert_propietarios_inmueble(cur, inmueble_anterior_id, contactos_demandados)
         return inmueble_anterior_id
 
     # ¿Ya existe unidad con ese conjunto + apto?
+    # 1) Match exacto sobre clave canónica (formato maestro).
+    # 2) Fallback flexible (02-042 ≡ 2-42) si el maestro aún no se migró.
     cur.execute(
         """
-        SELECT id
+        SELECT id, torre_apto
         FROM inmuebles_ph
         WHERE conjunto_id=%s
           AND torre_apto=%s
@@ -557,9 +583,33 @@ def corregir_inmueble_proceso(
         (conjunto_id, torre_apto),
     )
     existente = cur.fetchone()
+    if not existente:
+        cur.execute(
+            """
+            SELECT id, torre_apto
+            FROM inmuebles_ph
+            WHERE conjunto_id=%s
+            """,
+            (conjunto_id,),
+        )
+        claves_busqueda = _claves_unidad(torre_apto)
+        for row in cur.fetchall() or []:
+            torre_row = str(_row_value(row, "torre_apto", _row_value(row, 1)) or "")
+            if _unidad_coincide(torre_row, claves_busqueda):
+                existente = row
+                break
+
     target_id = None
     if existente:
         target_id = int(_row_value(existente, "id", _row_value(existente, 0)))
+        torre_existente = str(
+            _row_value(existente, "torre_apto", _row_value(existente, 1)) or ""
+        )
+        if torre_existente and torre_existente != torre_apto:
+            cur.execute(
+                "UPDATE inmuebles_ph SET torre_apto=%s WHERE id=%s",
+                (torre_apto, target_id),
+            )
         if inmueble_anterior_id and target_id == inmueble_anterior_id:
             _upsert_propietarios_inmueble(cur, target_id, contactos_demandados)
             return target_id
