@@ -1881,6 +1881,8 @@ def vista_estado_cuenta_pdf(request: Request):
             "request": request,
             "max_mb": int(MAX_PDF_BYTES / (1024 * 1024)),
             "max_archivos": MAX_ARCHIVOS_LOTE,
+            "ui_batch_size": getattr(estado_cuenta_pdf_service, "UI_BATCH_SIZE", 15),
+            "parse_workers": getattr(estado_cuenta_pdf_service, "PARSE_WORKERS", 4),
         },
     )
 
@@ -1923,7 +1925,7 @@ async def analizar_estado_cuenta_pdf_endpoint(archivos: list[UploadFile] = File(
         raise HTTPException(
             status_code=422,
             detail=f"No fue posible leer el/los PDF ({type(exc).__name__}). "
-            "Si el lote es grande, intente en grupos de 10.",
+            f"Si el lote es grande, intente en grupos de {getattr(estado_cuenta_pdf_service, 'UI_BATCH_SIZE', 15)}.",
         ) from None
 
     return {
@@ -1933,6 +1935,7 @@ async def analizar_estado_cuenta_pdf_endpoint(archivos: list[UploadFile] = File(
         "movimientos_totales": resultado["movimientos_totales"],
         "cache_id": resultado.get("cache_id") or "",
         "cuentas": resultado["cuentas"],
+        "parse_workers": getattr(estado_cuenta_pdf_service, "PARSE_WORKERS", 4),
     }
 
 
@@ -1964,7 +1967,7 @@ async def exportar_estado_cuenta_pdf_excel(
             raise HTTPException(
                 status_code=422,
                 detail=f"No fue posible convertir el/los PDF ({type(exc).__name__}). "
-                "Si el lote es grande, intente en grupos de 10.",
+                f"Si el lote es grande, intente en grupos de {getattr(estado_cuenta_pdf_service, 'UI_BATCH_SIZE', 15)}.",
             ) from None
         if resultado["movimientos_totales"] == 0:
             raise HTTPException(
