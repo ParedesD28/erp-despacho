@@ -190,7 +190,8 @@ class BolsaCacheYTranscripcionTests(unittest.TestCase):
         self.assertIn("Resumen Bolsa", wb2.sheetnames)
         self.assertIn("Capital limpio", wb2.sheetnames)
 
-    def test_tras_armar_excel_cache_libera_cuentas(self):
+    def test_tras_armar_excel_cache_conserva_cuentas(self):
+        """Excel cachea bytes pero deja rows para Bolsa/certificados (anti re-parseo)."""
         resultado = procesar_lote_estados_cuenta(
             [("malo.pdf", b"no-es-pdf")],
             incluir_excel=False,
@@ -199,8 +200,12 @@ class BolsaCacheYTranscripcionTests(unittest.TestCase):
         self.assertIsNotNone(cuentas_desde_cache(cache_id))
         libro = excel_desde_cache(cache_id)
         self.assertIsNotNone(libro)
-        # Tras generar Excel de transcripción se liberan rows (anti-OOM).
-        self.assertIsNone(cuentas_desde_cache(cache_id))
+        self.assertTrue(libro.getvalue().startswith(b"PK"))
+        # Rows siguen disponibles tras Excel de transcripción.
+        self.assertIsNotNone(cuentas_desde_cache(cache_id))
+        # Segunda descarga Excel reusa bytes cacheados.
+        otra = excel_desde_cache(cache_id)
+        self.assertTrue(otra.getvalue().startswith(b"PK"))
 
 
 class BolsaPermisosRutaTests(unittest.TestCase):

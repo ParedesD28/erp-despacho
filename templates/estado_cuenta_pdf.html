@@ -115,11 +115,26 @@
                 <p id="m-movs" class="text-2xl font-black text-slate-800 mt-1">—</p>
             </div>
         </div>
+        <div id="filtros-analizar" class="grid grid-cols-1 md:grid-cols-3 gap-3 items-end border border-slate-200 rounded-lg p-3 bg-slate-50">
+            <div>
+                <label class="block text-xs font-bold uppercase text-slate-500 mb-1" for="filtro-conjunto-analizar">Conjunto</label>
+                <select id="filtro-conjunto-analizar" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800">
+                    <option value="">Todos</option>
+                </select>
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs font-bold uppercase text-slate-500 mb-1" for="filtro-busqueda-analizar">Buscar</label>
+                <input type="search" id="filtro-busqueda-analizar" placeholder="Titular, archivo, bloque, cuenta…"
+                       class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800">
+            </div>
+            <p id="filtro-analizar-count" class="md:col-span-3 text-xs text-slate-500"></p>
+        </div>
         <div class="overflow-x-auto border border-slate-200 rounded-lg">
             <table class="min-w-full text-sm">
                 <thead class="bg-slate-900 text-white text-xs uppercase">
                     <tr>
                         <th class="text-left px-3 py-2">Archivo</th>
+                        <th class="text-left px-3 py-2">Conjunto</th>
                         <th class="text-left px-3 py-2">Titular</th>
                         <th class="text-left px-3 py-2">Bloque/Apto</th>
                         <th class="text-right px-3 py-2">Movs</th>
@@ -216,6 +231,28 @@
                     <p id="c-total" class="text-xl font-black text-slate-800">—</p>
                 </div>
             </div>
+            <div id="filtros-cert" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end border border-slate-200 rounded-lg p-3 bg-slate-50">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-slate-500 mb-1" for="filtro-conjunto-cert">Conjunto</label>
+                    <select id="filtro-conjunto-cert" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm">
+                        <option value="">Todos</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-slate-500 mb-1" for="filtro-busqueda-cert">Buscar</label>
+                    <input type="search" id="filtro-busqueda-cert" placeholder="Titular, archivo, clave…"
+                           class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm">
+                </div>
+                <label class="flex items-center gap-2 text-sm text-slate-700 cursor-pointer pb-1">
+                    <input type="checkbox" id="filtro-solo-neon" class="rounded border-slate-300 text-indigo-700 focus:ring-indigo-500" checked>
+                    <span>Solo match Neon</span>
+                </label>
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" id="btn-sel-visibles" class="text-xs font-semibold border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-white">Seleccionar visibles</button>
+                    <button type="button" id="btn-sel-ninguno" class="text-xs font-semibold border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-white">Ninguno</button>
+                </div>
+                <p id="filtro-cert-count" class="md:col-span-4 text-xs text-slate-500"></p>
+            </div>
             <div id="cert-bloques" class="space-y-3"></div>
         </div>
     </div>
@@ -259,6 +296,18 @@
     let cacheIds = [];
     let lastBolsaPayload = null;
     let lastCertPreview = null;
+    let lastCuentasAnalizadas = [];
+    let certJobMap = []; // [{ jobIndex, localIndex }] alineado a resultados merged
+
+    const filtroConjuntoAnalizar = document.getElementById('filtro-conjunto-analizar');
+    const filtroBusquedaAnalizar = document.getElementById('filtro-busqueda-analizar');
+    const filtroAnalizarCount = document.getElementById('filtro-analizar-count');
+    const filtroConjuntoCert = document.getElementById('filtro-conjunto-cert');
+    const filtroBusquedaCert = document.getElementById('filtro-busqueda-cert');
+    const filtroSoloNeon = document.getElementById('filtro-solo-neon');
+    const filtroCertCount = document.getElementById('filtro-cert-count');
+    const btnSelVisibles = document.getElementById('btn-sel-visibles');
+    const btnSelNinguno = document.getElementById('btn-sel-ninguno');
 
     function money(n) {
         if (n === null || n === undefined || n === '') return '—';
@@ -289,6 +338,63 @@
     function hideProgress() {
         if (progressWrap) progressWrap.classList.add('hidden');
         if (progressBar) progressBar.style.width = '0%';
+    }
+
+    function fillConjuntoSelect(selectEl, valores) {
+        if (!selectEl) return;
+        const prev = selectEl.value || '';
+        const unicos = Array.from(new Set((valores || []).filter(Boolean))).sort((a, b) =>
+            a.localeCompare(b, 'es', { sensitivity: 'base' })
+        );
+        selectEl.innerHTML = '<option value="">Todos</option>' +
+            unicos.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+        if (prev && unicos.includes(prev)) selectEl.value = prev;
+    }
+
+    function pasaFiltroCuenta(c, conjunto, q) {
+        if (conjunto) {
+            const nombre = String(c.conjunto || '');
+            if (nombre !== conjunto && !nombre.toLowerCase().includes(conjunto.toLowerCase())) {
+                return false;
+            }
+        }
+        if (q) {
+            const hay = [
+                c.titular, c.archivo, c.bloque, c.apartamento,
+                c.codigo_cuenta, c.conjunto,
+            ].map(x => String(x || '').toLowerCase()).join(' ');
+            if (!hay.includes(q.toLowerCase())) return false;
+        }
+        return true;
+    }
+
+    function esEmitibleCert(r) {
+        return r && (r.estado === 'ok' || r.estado === 'varios_propietarios' || r.estado === 'fallback_pdf');
+    }
+
+    function esMatchNeon(r) {
+        return r && (r.estado === 'ok' || r.estado === 'varios_propietarios');
+    }
+
+    function pasaFiltroCert(r) {
+        const conjunto = (filtroConjuntoCert && filtroConjuntoCert.value) || '';
+        const q = (filtroBusquedaCert && filtroBusquedaCert.value) || '';
+        const soloNeon = !!(filtroSoloNeon && filtroSoloNeon.checked);
+        if (soloNeon && !esMatchNeon(r)) return false;
+        if (conjunto) {
+            const nombre = String(r.conjunto || r.conjunto_nombre || '');
+            if (nombre !== conjunto && !nombre.toLowerCase().includes(conjunto.toLowerCase())) {
+                return false;
+            }
+        }
+        if (q) {
+            const hay = [
+                r.titular_pdf, r.archivo, r.bloque, r.apartamento,
+                r.clave_canonica, r.codigo_cuenta, r.conjunto,
+            ].map(x => String(x || '').toLowerCase()).join(' ');
+            if (!hay.includes(q.toLowerCase())) return false;
+        }
+        return true;
     }
 
     function detailMsg(data, res) {
@@ -366,7 +472,7 @@
         };
     }
 
-    async function postProcesarCert(modo, cacheId, files) {
+    async function postProcesarCert(modo, cacheId, files, indices) {
         const fd = new FormData();
         if (cacheId) fd.append('cache_id', cacheId);
         (files || []).forEach(f => fd.append('archivos', f));
@@ -375,6 +481,16 @@
         fd.append('permitir_datos_pdf', opts.permitir ? 'true' : 'false');
         if (opts.nit) fd.append('copropiedad_nit', opts.nit);
         if (opts.cedula) fd.append('titular_cedula', opts.cedula);
+        if (indices && indices.length) {
+            fd.append('indices', JSON.stringify(indices));
+        }
+        if (filtroSoloNeon && filtroSoloNeon.checked && modo === 'generar') {
+            fd.append('solo_match_neon', 'true');
+        }
+        const conj = (filtroConjuntoCert && filtroConjuntoCert.value) || '';
+        if (conj && modo === 'generar') fd.append('filtro_conjunto', conj);
+        const q = (filtroBusquedaCert && filtroBusquedaCert.value) || '';
+        if (q && modo === 'generar') fd.append('filtro_busqueda', q);
         return fetch('/herramientas/estado-cuenta/procesar-certificado', {
             method: 'POST',
             body: fd,
@@ -400,8 +516,29 @@
         document.getElementById('c-ok').textContent = payload.emitibles ?? 0;
         document.getElementById('c-fail').textContent = payload.sin_match ?? 0;
         document.getElementById('c-total').textContent = money(payload.total_capital_demandado_lote);
+        fillConjuntoSelect(
+            filtroConjuntoCert,
+            (payload.resultados || []).map(r => r.conjunto || r.conjunto_nombre || '').filter(Boolean)
+        );
+        lastCertPreview = payload;
+        applyFiltrosCert();
+        certPreview.classList.remove('hidden');
+        if (window.lucide) lucide.createIcons();
+    }
+
+    function applyFiltrosCert() {
+        const payload = lastCertPreview;
+        if (!payload) return;
         certBloques.innerHTML = '';
-        (payload.resultados || []).forEach((r) => {
+        let visibles = 0;
+        let seleccionables = 0;
+        (payload.resultados || []).forEach((r, globalIdx) => {
+            const visible = pasaFiltroCert(r);
+            const emitible = esEmitibleCert(r);
+            const block = document.createElement('div');
+            block.className = 'border border-slate-200 rounded-lg p-4 space-y-2' + (visible ? '' : ' hidden');
+            block.dataset.globalIdx = String(globalIdx);
+            if (visible) visibles += 1;
             const deudores = r.deudores || [];
             const sel = r.titular_seleccionado;
             const deudaHtml = deudores.length
@@ -412,20 +549,29 @@
                     }).join('')}
                    </ul>`
                 : '<p class="text-sm text-slate-400">Sin deudores Neon.</p>';
-            const block = document.createElement('div');
-            block.className = 'border border-slate-200 rounded-lg p-4 space-y-2';
+            const checked = emitible && visible && (filtroSoloNeon && filtroSoloNeon.checked ? esMatchNeon(r) : true);
+            if (checked) seleccionables += 1;
+            const chk = emitible
+                ? `<label class="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                     <input type="checkbox" class="cert-sel rounded border-slate-300 text-indigo-700"
+                            data-global-idx="${globalIdx}" ${checked ? 'checked' : ''}>
+                     Incluir en descarga
+                   </label>`
+                : '<span class="text-xs text-slate-400">No emitible</span>';
             block.innerHTML = `
                 <div class="flex flex-wrap items-start justify-between gap-2">
                     <div>
                         <p class="font-bold text-slate-800">${esc(r.titular_pdf || 'Sin titular')} · ${esc(r.archivo || '')}</p>
                         <p class="text-sm text-slate-500">
-                            PDF B${esc(r.bloque || '—')} · ${esc(r.apartamento || '—')}
+                            ${esc(r.conjunto || '—')}
+                            · PDF B${esc(r.bloque || '—')} · ${esc(r.apartamento || '—')}
                             → clave <code class="text-indigo-800">${esc(r.clave_canonica || '—')}</code>
                             ${r.inmueble_id ? ` · inmueble #${esc(r.inmueble_id)}` : ''}
                         </p>
                     </div>
                     ${estadoBadge(r.estado)}
                 </div>
+                ${chk}
                 <div class="text-sm">
                     <p class="text-xs uppercase text-slate-500 font-bold mb-1">Deudores Neon</p>
                     ${deudaHtml}
@@ -435,11 +581,30 @@
                 </div>`;
             certBloques.appendChild(block);
         });
-        lastCertPreview = payload;
-        const canDl = (payload.emitibles || 0) > 0;
-        if (btnDescargarCerts) btnDescargarCerts.disabled = !canDl;
-        certPreview.classList.remove('hidden');
-        if (window.lucide) lucide.createIcons();
+        if (filtroCertCount) {
+            filtroCertCount.textContent = `Mostrando ${visibles} de ${(payload.resultados || []).length}. Seleccionados al render: ${seleccionables}.`;
+        }
+        syncDescargarEnabled();
+    }
+
+    function indicesSeleccionadosPorJob() {
+        const jobs = bolsaJobs();
+        const porJob = jobs.map(() => []);
+        certBloques.querySelectorAll('.cert-sel:checked').forEach(chk => {
+            const g = Number(chk.dataset.globalIdx);
+            const map = certJobMap[g];
+            if (!map) return;
+            const block = chk.closest('[data-global-idx]');
+            if (block && block.classList.contains('hidden')) return;
+            if (porJob[map.jobIndex]) porJob[map.jobIndex].push(map.localIndex);
+        });
+        return porJob;
+    }
+
+    function syncDescargarEnabled() {
+        if (!btnDescargarCerts) return;
+        const n = certBloques.querySelectorAll('.cert-sel:checked').length;
+        btnDescargarCerts.disabled = !(n > 0);
     }
 
     async function runProcesarCertificado(autoDownload) {
@@ -457,6 +622,7 @@
             sin_match: 0,
             resultados: [],
         };
+        certJobMap = [];
         try {
             for (let i = 0; i < jobs.length; i++) {
                 const job = jobs[i];
@@ -477,7 +643,11 @@
                 merged.total_capital_demandado_lote += Number(data.total_capital_demandado_lote || 0);
                 merged.emitibles += data.emitibles || 0;
                 merged.sin_match += data.sin_match || 0;
-                merged.resultados = merged.resultados.concat(data.resultados || []);
+                const batch = data.resultados || [];
+                batch.forEach((r, localIdx) => {
+                    certJobMap.push({ jobIndex: i, localIndex: localIdx });
+                    merged.resultados.push(r);
+                });
             }
             merged.total_capital_demandado_lote = Math.round(merged.total_capital_demandado_lote * 100) / 100;
             renderCertPreview(merged);
@@ -488,10 +658,10 @@
                 );
             } else if (merged.sin_match) {
                 setStatus(
-                    `Preview listo: ${merged.emitibles} emitible(s), ${merged.sin_match} sin match. Puede descargar los OK.`
+                    `Preview listo: ${merged.emitibles} emitible(s), ${merged.sin_match} sin match. Filtre y descargue.`
                 );
             } else {
-                setStatus(`Preview listo: ${merged.emitibles} certificado(s) emitible(s) (titular principal).`);
+                setStatus(`Preview listo: ${merged.emitibles} certificado(s) emitible(s). Use filtros si hay varios conjuntos.`);
             }
             if (autoDownload && merged.emitibles > 0) {
                 await descargarCertificadosUnificados();
@@ -511,14 +681,23 @@
             setStatus('No hay lote en memoria para generar certificados.', true);
             return;
         }
+        const porJob = indicesSeleccionadosPorJob();
+        const totalSel = porJob.reduce((n, arr) => n + arr.length, 0);
+        if (!totalSel) {
+            setStatus('Seleccione al menos una cuenta visible (checkbox) para descargar.', true);
+            return;
+        }
         if (btnDescargarCerts) btnDescargarCerts.disabled = true;
         try {
-            // Un solo job: descarga directa. Varios: ZIP cliente de cada respuesta.
-            if (jobs.length === 1) {
-                setStatus('Generando certificado(s) Word…');
-                let res = await postProcesarCert('generar', jobs[0].id, []);
-                if (!res.ok && jobs[0].files.length) {
-                    res = await postProcesarCert('generar', '', jobs[0].files);
+            const jobsConSel = jobs
+                .map((job, i) => ({ job, indices: porJob[i] || [], i }))
+                .filter(x => x.indices.length);
+            if (jobsConSel.length === 1) {
+                const { job, indices } = jobsConSel[0];
+                setStatus(`Generando ${indices.length} certificado(s) Word…`);
+                let res = await postProcesarCert('generar', job.id, [], indices);
+                if (!res.ok && job.files.length) {
+                    res = await postProcesarCert('generar', '', job.files, indices);
                 }
                 if (!res.ok) {
                     let data = {};
@@ -539,7 +718,7 @@
                 a.click();
                 a.remove();
                 URL.revokeObjectURL(url);
-                setStatus(`Descargado: ${filename}`);
+                setStatus(`Descargado: ${filename} (${indices.length} cuenta(s)).`);
                 if (btnDescargarCerts) btnDescargarCerts.disabled = false;
                 return;
             }
@@ -549,11 +728,12 @@
                 return;
             }
             const zip = new JSZip();
-            for (let i = 0; i < jobs.length; i++) {
-                setStatus(`Generando certificados grupo ${i + 1} de ${jobs.length}…`);
-                let res = await postProcesarCert('generar', jobs[i].id, []);
-                if (!res.ok && jobs[i].files.length) {
-                    res = await postProcesarCert('generar', '', jobs[i].files);
+            for (let k = 0; k < jobsConSel.length; k++) {
+                const { job, indices } = jobsConSel[k];
+                setStatus(`Generando certificados grupo ${k + 1} de ${jobsConSel.length} (${indices.length})…`);
+                let res = await postProcesarCert('generar', job.id, [], indices);
+                if (!res.ok && job.files.length) {
+                    res = await postProcesarCert('generar', '', job.files, indices);
                 }
                 if (!res.ok) {
                     let data = {};
@@ -564,7 +744,7 @@
                 }
                 const cd = res.headers.get('Content-Disposition') || '';
                 const m = /filename=\"([^\"]+)\"/.exec(cd);
-                const filename = (m && m[1]) || `certificados_${i + 1}.docx`;
+                const filename = (m && m[1]) || `certificados_${k + 1}.docx`;
                 zip.file(filename, await res.arrayBuffer());
             }
             const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -576,7 +756,7 @@
             a.click();
             a.remove();
             URL.revokeObjectURL(zipUrl);
-            setStatus(`ZIP de certificados descargado (${jobs.length} grupo(s)).`);
+            setStatus(`ZIP de certificados descargado (${totalSel} cuenta(s), ${jobsConSel.length} grupo(s)).`);
             if (btnDescargarCerts) btnDescargarCerts.disabled = false;
         } catch (e) {
             setStatus('Fallo de red al descargar certificados.', true);
@@ -601,8 +781,22 @@
     }
 
     function renderCuentas(cuentas) {
+        lastCuentasAnalizadas = cuentas || [];
+        fillConjuntoSelect(
+            filtroConjuntoAnalizar,
+            lastCuentasAnalizadas.map(c => c.conjunto || '').filter(Boolean)
+        );
+        applyFiltrosAnalizar();
+    }
+
+    function applyFiltrosAnalizar() {
+        const conjunto = (filtroConjuntoAnalizar && filtroConjuntoAnalizar.value) || '';
+        const q = (filtroBusquedaAnalizar && filtroBusquedaAnalizar.value) || '';
         tabla.innerHTML = '';
-        (cuentas || []).forEach(c => {
+        let visibles = 0;
+        (lastCuentasAnalizadas || []).forEach(c => {
+            if (!pasaFiltroCuenta(c, conjunto, q)) return;
+            visibles += 1;
             const tr = document.createElement('tr');
             const ok = !c.error && c.movimientos_extraidos > 0 && !c.alerta_calidad;
             const estado = c.error
@@ -610,6 +804,7 @@
                 : (ok ? '<span class="text-emerald-700 font-semibold">OK</span>' : '<span class="text-amber-700 font-semibold">Revisar</span>');
             tr.innerHTML = `
                 <td class="px-3 py-2 font-medium text-slate-700">${esc(c.archivo || '')}</td>
+                <td class="px-3 py-2 text-slate-600">${esc(c.conjunto || '—')}</td>
                 <td class="px-3 py-2">${esc(c.titular || '—')}</td>
                 <td class="px-3 py-2">B${esc(c.bloque || '—')} · ${esc(c.apartamento || '—')}</td>
                 <td class="px-3 py-2 text-right">${c.movimientos_extraidos ?? 0}</td>
@@ -618,6 +813,10 @@
                 <td class="px-3 py-2">${estado}</td>`;
             tabla.appendChild(tr);
         });
+        if (filtroAnalizarCount) {
+            filtroAnalizarCount.textContent =
+                `Mostrando ${visibles} de ${(lastCuentasAnalizadas || []).length} cuenta(s).`;
+        }
     }
 
     function renderBolsa(payload) {
@@ -1034,6 +1233,40 @@
 
     btnBolsaExcel.addEventListener('click', () => downloadBolsa('excel'));
     btnBolsaJson.addEventListener('click', () => downloadBolsa('json'));
+
+    if (filtroConjuntoAnalizar) {
+        filtroConjuntoAnalizar.addEventListener('change', applyFiltrosAnalizar);
+    }
+    if (filtroBusquedaAnalizar) {
+        filtroBusquedaAnalizar.addEventListener('input', applyFiltrosAnalizar);
+    }
+    function onFiltroCertChange() {
+        applyFiltrosCert();
+    }
+    if (filtroConjuntoCert) filtroConjuntoCert.addEventListener('change', onFiltroCertChange);
+    if (filtroBusquedaCert) filtroBusquedaCert.addEventListener('input', onFiltroCertChange);
+    if (filtroSoloNeon) filtroSoloNeon.addEventListener('change', onFiltroCertChange);
+    if (certBloques) {
+        certBloques.addEventListener('change', (ev) => {
+            if (ev.target && ev.target.classList && ev.target.classList.contains('cert-sel')) {
+                syncDescargarEnabled();
+            }
+        });
+    }
+    if (btnSelVisibles) {
+        btnSelVisibles.addEventListener('click', () => {
+            certBloques.querySelectorAll('[data-global-idx]:not(.hidden) .cert-sel').forEach(chk => {
+                chk.checked = true;
+            });
+            syncDescargarEnabled();
+        });
+    }
+    if (btnSelNinguno) {
+        btnSelNinguno.addEventListener('click', () => {
+            certBloques.querySelectorAll('.cert-sel').forEach(chk => { chk.checked = false; });
+            syncDescargarEnabled();
+        });
+    }
 })();
 </script>
 {% endblock %}

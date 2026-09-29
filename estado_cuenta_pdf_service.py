@@ -787,7 +787,11 @@ def _guardar_lote(cuentas: list[dict], depuracion: dict | None) -> str:
 
 
 def excel_desde_cache(cache_id: str) -> io.BytesIO | None:
-    """Arma el Excel con el análisis ya hecho. None si el servidor se reinició."""
+    """Arma el Excel con el análisis ya hecho. None si el servidor se reinició.
+
+    Conserva `cuentas`/`rows` en caché para que Bolsa/certificados reutilicen
+    el mismo `cache_id` sin re-parsear (TTL y `_CACHE_MAX` limitan RAM).
+    """
     if not cache_id:
         return None
     with _cache_lock:
@@ -804,9 +808,9 @@ def excel_desde_cache(cache_id: str) -> io.BytesIO | None:
     with _cache_lock:
         vigente = _lote_cache.get(cache_id)
         if vigente:
+            # Retiene cuentas+rows para Bolsa/certificados sin re-parsear.
+            # Excel bytes quedan cacheados; TTL/_CACHE_MAX siguen limitando RAM.
             vigente[1]["excel"] = data
-            vigente[1]["cuentas"] = []
-            vigente[1]["depuracion"] = None
     excel.seek(0)
     return excel
 
@@ -814,8 +818,8 @@ def excel_desde_cache(cache_id: str) -> io.BytesIO | None:
 def cuentas_desde_cache(cache_id: str) -> list[dict] | None:
     """
     Devuelve las cuentas del lote (con `rows`) si siguen en RAM.
-    No genera Excel ni vacía la caché (sirve para Bolsa Global / utilidades).
-    None si el id expiró, no existe, o ya se liberaron las filas tras armar Excel.
+    No genera Excel ni vacía la caché (sirve para Bolsa Global / certificados).
+    None si el id expiró o no existe.
     """
     if not cache_id:
         return None
@@ -900,9 +904,8 @@ def procesar_lote_estados_cuenta(
         with _cache_lock:
             guardado = _lote_cache.get(cache_id)
             if guardado:
+                # Conserva rows: Bolsa/certificados reutilizan cache_id sin re-parsear.
                 guardado[1]["excel"] = excel.getvalue()
-                guardado[1]["cuentas"] = []
-                guardado[1]["depuracion"] = None
                 excel.seek(0)
     out = {
         "archivos_recibidos": len(archivos),

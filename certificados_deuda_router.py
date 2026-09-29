@@ -196,6 +196,18 @@ async def procesar_certificado_unificado(
         "",
         description="Opcional: índices JSON del preview a emitir, p.ej. [0,2]",
     ),
+    filtro_conjunto: str = Form(
+        "",
+        description="Opcional: filtrar por nombre de conjunto (substring).",
+    ),
+    filtro_busqueda: str = Form(
+        "",
+        description="Opcional: búsqueda en titular/archivo/unidad/cuenta.",
+    ),
+    solo_match_neon: bool = Form(
+        False,
+        description="Si true, solo emite cuentas con match Neon (ok/varios_propietarios).",
+    ),
 ):
     """
     Flujo unificado: Bolsa Global → lookup Neon (clave canónica) → certificado(s).
@@ -206,6 +218,8 @@ async def procesar_certificado_unificado(
       (titular principal).
     - `modo=generar`: un `.docx` o `.zip` si hay varios; un Word por unidad
       al titular principal de `inmueble_propietarios`.
+      Acepta `indices` y/o filtros (`filtro_conjunto`, `filtro_busqueda`,
+      `solo_match_neon`).
 
     Acepta `cache_id` (tras Analizar) y/o `archivos` PDF.
     """
@@ -233,6 +247,9 @@ async def procesar_certificado_unificado(
             dia_vencimiento=int(dia_vencimiento or 5),
             ciudad=ciudad,
             indices=idxs,
+            filtro_conjunto=filtro_conjunto,
+            filtro_busqueda=filtro_busqueda,
+            solo_match_neon=solo_match_neon,
         )
     except CertificadoNoEncontradoError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
