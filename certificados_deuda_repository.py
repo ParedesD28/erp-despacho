@@ -591,8 +591,9 @@ def listar_propietarios_inmueble(
     """
     Propietarios del inmueble (Neon). Orden: principal primero, luego id.
 
-    Regla multi-deudor del certificado: emitir **un** Word al titular
-    `es_principal` (o el primero de la lista si ninguno está marcado).
+    Regla producto: **un Word por unidad** que relaciona a TODOS; el principal
+    llena `titular_*` de la plantilla. No hay rol codeudor aquí (gap: solo
+    co-propietarios de `inmueble_propietarios`).
     """
     owns = conn is None
     if owns:
@@ -615,12 +616,15 @@ def listar_propietarios_inmueble(
             )
             filas = []
             for r in cur.fetchall():
+                es_prin = bool(r.get("es_principal"))
                 filas.append(
                     {
                         "contacto_id": int(r["contacto_id"]),
                         "nombre": (r.get("nombre") or "").strip() or None,
                         "cedula": (r.get("cedula") or "").strip() or None,
-                        "es_principal": bool(r.get("es_principal")),
+                        "es_principal": es_prin,
+                        # Gap: Neon no distingue codeudor; rol documental de PH.
+                        "rol": "principal" if es_prin else "co_propietario",
                     }
                 )
             return filas
@@ -641,10 +645,67 @@ def titular_principal_de_propietarios(
     return propietarios[0]
 
 
+def diagnosticar_propietarios(
+    propietarios: list[dict[str, Any]],
+    *,
+    titular_pdf: str = "",
+) -> dict[str, Any]:
+    """
+    Señales de calidad para preview (no bloquean por sí solas).
+
+    Cédula faltante en secundario → advertencia; en principal la valida
+    `validar_datos_criticos` al emitir.
+    """
+    props = list(propietarios or [])
+    principales = [p for p in props if p.get("es_principal")]
+    principal = titular_principal_de_propietarios(props)
+    advertencias: list[str] = []
+    if props and not principales:
+        advertencias.append(
+            "Ningún propietario marcado es_principal; se usa el primero de la lista."
+        )
+    if len(principales) > 1:
+        advertencias.append(
+            f"Varios propietarios marcados es_principal ({len(principales)}); "
+            "se usa el primero por id."
+        )
+    for p in props:
+        if p is principal:
+            continue
+        if not (p.get("cedula") or "").strip():
+            advertencias.append(
+                f"Cédula faltante en co-propietario: {p.get('nombre') or '—'}"
+            )
+    pdf_norm = _norm_texto(titular_pdf)
+    prin_norm = _norm_texto(str((principal or {}).get("nombre") or ""))
+    titular_pdf_distinto = False
+    if pdf_norm and prin_norm and len(pdf_norm) >= 4:
+        if not (
+            pdf_norm == prin_norm
+            or pdf_norm in prin_norm
+            or prin_norm in pdf_norm
+        ):
+            titular_pdf_distinto = True
+            advertencias.append(
+                "Titular del PDF no coincide con el principal Neon; "
+                "el Word usa el principal y lista a todos."
+            )
+    return {
+        "n_propietarios": len(props),
+        "n_principales": len(principales),
+        "sin_principal_marcado": bool(props) and not principales,
+        "varios_principales": len(principales) > 1,
+        "titular_pdf_distinto_de_principal": titular_pdf_distinto,
+        "advertencias": advertencias,
+        "principal": principal,
+    }
+
+
 def enriquecer_con_propietarios(
     datos: Optional[dict[str, Any]],
     *,
     conn=None,
+    titular_pdf: str = "",
 ) -> Optional[dict[str, Any]]:
     """Añade lista de deudores y titular_principal al dict de match Neon."""
     if not datos or datos.get("inmueble_id") is None:
@@ -659,12 +720,16 @@ def enriquecer_con_propietarios(
                 "nombre": out.get("titular_nombre"),
                 "cedula": out.get("titular_cedula"),
                 "es_principal": True,
+                "rol": "principal",
             }
         ]
-    principal = titular_principal_de_propietarios(propietarios)
+    diag = diagnosticar_propietarios(propietarios, titular_pdf=titular_pdf)
+    principal = diag.get("principal")
     out["propietarios"] = propietarios
     out["deudores"] = propietarios
     out["titular_principal"] = principal
+    out["diagnostico_propietarios"] = diag
+    out["advertencias"] = list(diag.get("advertencias") or [])
     if principal:
         # Asegura que el certificado use el principal aunque el LATERAL fallara.
         if principal.get("nombre"):
@@ -703,5 +768,7 @@ def resolver_datos_certificado(
             conn=conn,
         )
     if incluir_propietarios and hallado:
-        return enriquecer_con_propietarios(hallado, conn=conn)
+        return enriquecer_con_propietarios(
+            hallado, conn=conn, titular_pdf=titular
+        )
     return hallado

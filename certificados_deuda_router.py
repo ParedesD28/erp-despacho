@@ -214,14 +214,16 @@ async def procesar_certificado_unificado(
 
     Auth: sesión + accion.editar (POST genérico).
 
-    - `modo=preview`: JSON con deudores, estado match y regla multi-deudor
-      (titular principal).
-    - `modo=generar`: un `.docx` o `.zip` si hay varios; un Word por unidad
-      al titular principal de `inmueble_propietarios`.
+    - `modo=preview`: JSON con deudores (todos los propietarios), estados
+      (`ok` / `varios_propietarios` / `sin_match` / …), `sin_match_detalle`
+      y regla `unidad_todos_propietarios`.
+    - `modo=generar`: un `.docx` o `.zip`; **un Word por unidad** (principal
+      en plantilla; lista completa en contexto). No prorratea Bolsa.
       Acepta `indices` y/o filtros (`filtro_conjunto`, `filtro_busqueda`,
       `solo_match_neon`).
 
     Acepta `cache_id` (tras Analizar) y/o `archivos` PDF.
+    `sin_match` = fallo de cruce Neon (no confundir con co-propietarios).
     """
     # Import diferido evita ciclo con main (helpers de caché/upload).
     import main as erp_main

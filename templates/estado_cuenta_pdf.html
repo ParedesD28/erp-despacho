@@ -62,7 +62,8 @@
             <p class="text-xs text-slate-500">
                 <strong>Generar certificado(s)</strong> encadena Bolsa Global + cruce Neon
                 (clave <code>torre-apto</code> sin ceros, p.ej. <code>2-42</code>) + Word.
-                Un certificado por titular principal si hay co-propietarios.
+                Un certificado por <strong>unidad</strong> (titular principal + lista de
+                co-propietarios). Analizar OK = parseo PDF; sin match = Neon no cruzó.
             </p>
             <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
                 <label class="flex items-start gap-2 cursor-pointer">
@@ -203,8 +204,9 @@
                         Certificados · match Neon
                     </h3>
                     <p class="text-sm text-slate-500 mt-1">
-                        Un Word por unidad al <strong>titular principal</strong>.
-                        Co-propietarios se listan pero no generan certificado aparte.
+                        <strong>Un Word por unidad</strong> (misma Bolsa de la cuenta; no prorratea).
+                        Lista <em>todos</em> los propietarios Neon; el Word nombra al principal.
+                        <span class="text-slate-400">«Sin match» ≠ co-propietarios: es fallo de cruce Neon.</span>
                     </p>
                 </div>
                 <button type="button" id="btn-descargar-certs" disabled
@@ -223,12 +225,41 @@
                     <p id="c-ok" class="text-xl font-black text-emerald-700">—</p>
                 </div>
                 <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
-                    <p class="text-xs uppercase text-slate-500 font-bold">Sin match</p>
+                    <p class="text-xs uppercase text-slate-500 font-bold">Sin match Neon</p>
                     <p id="c-fail" class="text-xl font-black text-red-700">—</p>
                 </div>
                 <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
                     <p class="text-xs uppercase text-slate-500 font-bold">Capital lote</p>
                     <p id="c-total" class="text-xl font-black text-slate-800">—</p>
+                </div>
+            </div>
+            <div id="cert-sin-match-panel" class="hidden rounded-lg border border-red-300 bg-red-50 px-4 py-3 space-y-2">
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                        <p class="text-sm font-bold text-red-900">Sin match Neon (no son co-propietarios)</p>
+                        <p class="text-xs text-red-800 mt-0.5">
+                            El PDF parseó bien (Analizar OK), pero conjunto + torre/apto no cruzaron con maestros.
+                            Use «Permitir datos del PDF» + NIT/cédula, o cargue el inmueble en Neon.
+                        </p>
+                    </div>
+                    <button type="button" id="btn-ver-sin-match"
+                            class="text-xs font-semibold border border-red-300 bg-white text-red-800 rounded-lg px-3 py-1.5 hover:bg-red-100">
+                        Ver sin match en lista
+                    </button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-xs">
+                        <thead class="text-red-900 uppercase">
+                            <tr>
+                                <th class="text-left py-1 pr-2">Archivo</th>
+                                <th class="text-left py-1 pr-2">Titular PDF</th>
+                                <th class="text-left py-1 pr-2">Bloque/Apto → clave</th>
+                                <th class="text-left py-1 pr-2">Conjunto</th>
+                                <th class="text-left py-1">Motivo</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cert-sin-match-tbody" class="divide-y divide-red-200 text-red-950"></tbody>
+                    </table>
                 </div>
             </div>
             <div id="filtros-cert" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end border border-slate-200 rounded-lg p-3 bg-slate-50">
@@ -500,15 +531,50 @@
     function estadoBadge(estado) {
         const map = {
             ok: 'text-emerald-700 bg-emerald-50 border-emerald-200|Match Neon',
-            varios_propietarios: 'text-sky-700 bg-sky-50 border-sky-200|Co-propietarios → titular principal',
+            varios_propietarios: 'text-sky-700 bg-sky-50 border-sky-200|Varios propietarios (1 Word)',
             fallback_pdf: 'text-amber-700 bg-amber-50 border-amber-200|Datos PDF',
-            sin_match: 'text-red-700 bg-red-50 border-red-200|Sin match',
+            sin_match: 'text-red-700 bg-red-50 border-red-200|Sin match Neon',
             sin_capital: 'text-slate-600 bg-slate-50 border-slate-200|Sin capital',
             omitido: 'text-amber-700 bg-amber-50 border-amber-200|Omitido',
         };
         const raw = map[estado] || 'text-slate-600 bg-slate-50 border-slate-200|' + (estado || '—');
         const [cls, label] = raw.split('|');
         return `<span class="text-xs font-bold uppercase border px-2 py-0.5 rounded ${cls}">${esc(label)}</span>`;
+    }
+
+    function renderSinMatchPanel(payload) {
+        const panel = document.getElementById('cert-sin-match-panel');
+        const tbody = document.getElementById('cert-sin-match-tbody');
+        if (!panel || !tbody) return;
+        const rows = payload.sin_match_detalle
+            || (payload.resultados || []).filter(r => r.estado === 'sin_match').map(r => ({
+                archivo: r.archivo,
+                titular_pdf: r.titular_pdf,
+                conjunto: r.conjunto,
+                bloque: r.bloque,
+                apartamento: r.apartamento,
+                clave_canonica: r.clave_canonica,
+                motivo: r.motivo || 'sin_inmueble_neon',
+                motivo_detalle: r.motivo_detalle || r.error || '',
+                criterios: r.criterios || '',
+            }));
+        if (!rows.length) {
+            panel.classList.add('hidden');
+            tbody.innerHTML = '';
+            return;
+        }
+        panel.classList.remove('hidden');
+        tbody.innerHTML = rows.map(r => {
+            const unidad = `B${esc(r.bloque || '—')} · ${esc(r.apartamento || '—')} → <code>${esc(r.clave_canonica || '—')}</code>`;
+            const motivo = esc(r.motivo_detalle || r.motivo || 'Sin inmueble en Neon');
+            return `<tr>
+                <td class="py-1.5 pr-2 font-semibold">${esc(r.archivo || '—')}</td>
+                <td class="py-1.5 pr-2">${esc(r.titular_pdf || '—')}</td>
+                <td class="py-1.5 pr-2">${unidad}</td>
+                <td class="py-1.5 pr-2">${esc(r.conjunto || '—')}</td>
+                <td class="py-1.5">${motivo}</td>
+            </tr>`;
+        }).join('');
     }
 
     function renderCertPreview(payload) {
@@ -521,6 +587,7 @@
             (payload.resultados || []).map(r => r.conjunto || r.conjunto_nombre || '').filter(Boolean)
         );
         lastCertPreview = payload;
+        renderSinMatchPanel(payload);
         applyFiltrosCert();
         certPreview.classList.remove('hidden');
         if (window.lucide) lucide.createIcons();
@@ -536,19 +603,28 @@
             const visible = pasaFiltroCert(r);
             const emitible = esEmitibleCert(r);
             const block = document.createElement('div');
-            block.className = 'border border-slate-200 rounded-lg p-4 space-y-2' + (visible ? '' : ' hidden');
+            const esSinMatch = r.estado === 'sin_match';
+            block.className = 'border rounded-lg p-4 space-y-2'
+                + (esSinMatch ? ' border-red-300 bg-red-50/40' : ' border-slate-200')
+                + (visible ? '' : ' hidden');
             block.dataset.globalIdx = String(globalIdx);
             if (visible) visibles += 1;
             const deudores = r.deudores || [];
             const sel = r.titular_seleccionado;
+            const advertencias = r.advertencias || [];
             const deudaHtml = deudores.length
                 ? `<ul class="text-sm text-slate-700 list-disc list-inside">
                     ${deudores.map(d => {
                         const tag = d.es_principal ? ' <span class="text-xs font-bold text-indigo-700">(principal)</span>' : '';
-                        return `<li>${esc(d.nombre || '—')} · CC ${esc(d.cedula || '—')}${tag}</li>`;
+                        const rol = d.rol && d.rol !== 'principal' && !d.es_principal
+                            ? ` <span class="text-xs text-slate-500">[${esc(d.rol)}]</span>` : '';
+                        const ced = d.cedula ? esc(d.cedula) : '<span class="text-amber-700 font-semibold">s/d</span>';
+                        return `<li>${esc(d.nombre || '—')} · CC ${ced}${tag}${rol}</li>`;
                     }).join('')}
                    </ul>`
-                : '<p class="text-sm text-slate-400">Sin deudores Neon.</p>';
+                : (esSinMatch
+                    ? '<p class="text-sm text-red-800">Sin deudores Neon — la unidad no cruzó (no es lista de codeudores).</p>'
+                    : '<p class="text-sm text-slate-400">Sin deudores Neon.</p>');
             const checked = emitible && visible && (filtroSoloNeon && filtroSoloNeon.checked ? esMatchNeon(r) : true);
             if (checked) seleccionables += 1;
             const chk = emitible
@@ -558,6 +634,13 @@
                      Incluir en descarga
                    </label>`
                 : '<span class="text-xs text-slate-400">No emitible</span>';
+            const advHtml = advertencias.length
+                ? `<ul class="mt-1 text-xs text-amber-800 list-disc list-inside">${advertencias.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`
+                : '';
+            const motivoHtml = esSinMatch
+                ? `<p class="mt-1 text-sm font-semibold text-red-800">${esc(r.motivo_detalle || r.error || 'Sin match Neon')}</p>
+                   ${r.criterios ? `<p class="mt-1 text-xs text-red-700/80">Buscado: ${esc(r.criterios)}</p>` : ''}`
+                : (r.error ? `<p class="mt-1 text-sm text-red-700 font-semibold">${esc(r.error)}</p>` : '');
             block.innerHTML = `
                 <div class="flex flex-wrap items-start justify-between gap-2">
                     <div>
@@ -568,16 +651,20 @@
                             → clave <code class="text-indigo-800">${esc(r.clave_canonica || '—')}</code>
                             ${r.inmueble_id ? ` · inmueble #${esc(r.inmueble_id)}` : ''}
                         </p>
+                        <p class="text-xs uppercase tracking-wide text-slate-500 mt-1">
+                            Estado: <span class="font-bold text-slate-700">${esc(r.estado || '—')}</span>
+                            ${r.motivo ? ` · motivo <code>${esc(r.motivo)}</code>` : ''}
+                        </p>
                     </div>
                     ${estadoBadge(r.estado)}
                 </div>
                 ${chk}
                 <div class="text-sm">
-                    <p class="text-xs uppercase text-slate-500 font-bold mb-1">Deudores Neon</p>
+                    <p class="text-xs uppercase text-slate-500 font-bold mb-1">Propietarios relacionados (Neon)</p>
                     ${deudaHtml}
-                    ${sel ? `<p class="mt-1 text-sm text-indigo-900">Certificado → <strong>${esc(sel.nombre || '—')}</strong> (CC ${esc(sel.cedula || '—')})</p>` : ''}
-                    ${r.error ? `<p class="mt-1 text-sm text-red-700 font-semibold">${esc(r.error)}</p>` : ''}
-                    ${r.criterios && r.estado === 'sin_match' ? `<p class="mt-1 text-xs text-slate-500">Buscado: ${esc(r.criterios)}</p>` : ''}
+                    ${sel ? `<p class="mt-1 text-sm text-indigo-900">Word (titular plantilla) → <strong>${esc(sel.nombre || '—')}</strong> (CC ${esc(sel.cedula || '—')}) · 1 doc / unidad</p>` : ''}
+                    ${advHtml}
+                    ${motivoHtml}
                 </div>`;
             certBloques.appendChild(block);
         });
@@ -620,6 +707,7 @@
             total_capital_demandado_lote: 0,
             emitibles: 0,
             sin_match: 0,
+            sin_match_detalle: [],
             resultados: [],
         };
         certJobMap = [];
@@ -643,6 +731,9 @@
                 merged.total_capital_demandado_lote += Number(data.total_capital_demandado_lote || 0);
                 merged.emitibles += data.emitibles || 0;
                 merged.sin_match += data.sin_match || 0;
+                if (Array.isArray(data.sin_match_detalle)) {
+                    merged.sin_match_detalle.push(...data.sin_match_detalle);
+                }
                 const batch = data.resultados || [];
                 batch.forEach((r, localIdx) => {
                     certJobMap.push({ jobIndex: i, localIndex: localIdx });
@@ -650,15 +741,36 @@
                 });
             }
             merged.total_capital_demandado_lote = Math.round(merged.total_capital_demandado_lote * 100) / 100;
+            if (!merged.sin_match_detalle.length && merged.sin_match) {
+                merged.sin_match_detalle = (merged.resultados || [])
+                    .filter(r => r.estado === 'sin_match')
+                    .map(r => ({
+                        archivo: r.archivo,
+                        titular_pdf: r.titular_pdf,
+                        conjunto: r.conjunto,
+                        bloque: r.bloque,
+                        apartamento: r.apartamento,
+                        clave_canonica: r.clave_canonica,
+                        motivo: r.motivo || 'sin_inmueble_neon',
+                        motivo_detalle: r.motivo_detalle || r.error || '',
+                        criterios: r.criterios || '',
+                    }));
+            }
             renderCertPreview(merged);
             if (merged.sin_match && !merged.emitibles) {
                 setStatus(
-                    'Sin match Neon. Active «Permitir datos del PDF», indique NIT y cédula, y reintente.',
+                    'Sin match Neon (PDF OK, sin cruce de maestros). Active «Permitir datos del PDF», indique NIT y cédula, y reintente. Ver panel rojo.',
                     true
                 );
             } else if (merged.sin_match) {
+                const nombres = (merged.sin_match_detalle || [])
+                    .map(x => x.archivo || '?')
+                    .slice(0, 5)
+                    .join(', ');
                 setStatus(
-                    `Preview listo: ${merged.emitibles} emitible(s), ${merged.sin_match} sin match. Filtre y descargue.`
+                    `Preview: ${merged.emitibles} emitible(s), ${merged.sin_match} sin match Neon`
+                    + (nombres ? ` (${nombres}${merged.sin_match > 5 ? '…' : ''})` : '')
+                    + '. Ver panel rojo — no son co-propietarios.'
                 );
             } else {
                 setStatus(`Preview listo: ${merged.emitibles} certificado(s) emitible(s). Use filtros si hay varios conjuntos.`);
@@ -1246,6 +1358,17 @@
     if (filtroConjuntoCert) filtroConjuntoCert.addEventListener('change', onFiltroCertChange);
     if (filtroBusquedaCert) filtroBusquedaCert.addEventListener('input', onFiltroCertChange);
     if (filtroSoloNeon) filtroSoloNeon.addEventListener('change', onFiltroCertChange);
+    const btnVerSinMatch = document.getElementById('btn-ver-sin-match');
+    if (btnVerSinMatch) {
+        btnVerSinMatch.addEventListener('click', () => {
+            if (filtroSoloNeon) filtroSoloNeon.checked = false;
+            if (filtroBusquedaCert) filtroBusquedaCert.value = '';
+            applyFiltrosCert();
+            const panel = document.getElementById('cert-sin-match-panel');
+            if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            setStatus('Filtro «Solo match Neon» desmarcado: la lista muestra también sin match.');
+        });
+    }
     if (certBloques) {
         certBloques.addEventListener('change', (ev) => {
             if (ev.target && ev.target.classList && ev.target.classList.contains('cert-sel')) {
