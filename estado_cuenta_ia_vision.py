@@ -17,15 +17,34 @@ from typing import Any
 # Un PDF imagen a la vez: no tumba lotes de nativos COLON en paralelo.
 _IA_SEMAPHORE = threading.Semaphore(1)
 _IA_TIMEOUT_S = max(30, min(int(os.environ.get("ESTADO_CUENTA_IA_TIMEOUT_S", "120")), 300))
-_DEFAULT_MODEL = os.environ.get(
-    "ESTADO_CUENTA_IA_MODEL",
-    "claude-sonnet-5-5",
-)
+
+
+def _modelo_default() -> str:
+    """ESTADO_CUENTA_IA_MODEL → ANTHROPIC_MODEL → claude-sonnet-5-5."""
+    for key in ("ESTADO_CUENTA_IA_MODEL", "ANTHROPIC_MODEL"):
+        val = (os.environ.get(key) or "").strip()
+        if val:
+            return val
+    return "claude-sonnet-5-5"
+
+
 # PDFs largos (6–7 págs.) generan JSON grande; 8k truncaba mid-string.
 _MAX_TOKENS = max(4096, min(int(os.environ.get("ESTADO_CUENTA_IA_MAX_TOKENS", "32000")), 64000))
 
+# tool_choice type "tool"/"any" rompe prod en modelos que no lo soportan.
+# Default seguro: texto JSON + parse/repair/retry (sin tools).
+# Opt-in: ESTADO_CUENTA_IA_USE_TOOLS=1 solo si el modelo sí soporta tools forzados.
+def _use_tools_habilitado() -> bool:
+    flag = (os.environ.get("ESTADO_CUENTA_IA_USE_TOOLS") or "").strip().lower()
+    return flag in ("1", "true", "yes", "on")
+
+
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
 _TOOL_NAME = "extraer_estado_cuenta"
+_TOOL_CHOICE_UNSUPPORTED_RE = re.compile(
+    r"tool_choice|type\s*[\"']?(?:tool|any)[\"']?\s*are not supported",
+    re.IGNORECASE,
+)
 
 _MOVIMIENTO_SCHEMA = {
     "type": "object",
@@ -410,9 +429,46 @@ def _mapear_error_api(exc: Exception, modelo: str) -> EstadoCuentaIaError | None
     if "not_found" in msg.lower() or ("model" in msg.lower() and "404" in msg):
         return EstadoCuentaIaError(
             f"Modelo Claude no disponible ({modelo}). "
-            "Ajuste ESTADO_CUENTA_IA_MODEL."
+            "Ajuste ESTADO_CUENTA_IA_MODEL o ANTHROPIC_MODEL."
         )
     return None
+
+
+def _es_error_tool_choice_no_soportado(exc: Exception) -> bool:
+    msg = str(exc)
+    nombre = type(exc).__name__
+    if _TOOL_CHOICE_UNSUPPORTED_RE.search(msg):
+        return True
+    # BadRequest 400 típico de Anthropic cuando el modelo no acepta tool/any
+    if nombre in ("BadRequestError", "APIError") and "tool_choice" in msg.lower():
+        return True
+    return False
+
+
+def _construir_kwargs_mensaje(
+    *,
+    modelo: str,
+    content: list[dict[str, Any]],
+    use_tools: bool,
+    include_output_config: bool,
+) -> dict[str, Any]:
+    """
+    Arma kwargs de messages.create.
+    Default prod-safe: sin tools ni tool_choice (JSON por prompt + parse).
+    """
+    kwargs: dict[str, Any] = {
+        "model": modelo,
+        "max_tokens": _MAX_TOKENS,
+        "system": _SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": content}],
+    }
+    if use_tools:
+        kwargs["tools"] = [_TOOL_SCHEMA]
+        # type "any" también falla en modelos sin tools; solo "tool" opt-in.
+        kwargs["tool_choice"] = {"type": "tool", "name": _TOOL_NAME}
+    if include_output_config:
+        kwargs["output_config"] = {"effort": "medium"}
+    return kwargs
 
 
 def _llamar_claude_pdf(
@@ -420,8 +476,15 @@ def _llamar_claude_pdf(
     *,
     model: str | None = None,
     retry_json: bool = False,
+    use_tools: bool | None = None,
 ) -> dict[str, Any] | str:
-    """Envía el PDF a Claude (document + tool JSON) y retorna dict o texto."""
+    """
+    Envía el PDF a Claude y retorna dict (tool_use) o texto JSON.
+
+    Por defecto NO usa tool_choice (portable). Opt-in tools vía
+    ESTADO_CUENTA_IA_USE_TOOLS=1; si la API responde 400 por tool_choice,
+    reintenta automáticamente en modo texto.
+    """
     api_key = _require_api_key()
     try:
         import anthropic
@@ -431,17 +494,23 @@ def _llamar_claude_pdf(
         ) from exc
 
     b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
-    modelo = model or _DEFAULT_MODEL
+    modelo = model or _modelo_default()
     client = anthropic.Anthropic(api_key=api_key, timeout=_IA_TIMEOUT_S)
+    tools_on = _use_tools_habilitado() if use_tools is None else use_tools
 
-    user_text = (
-        _RETRY_USER
-        if retry_json
-        else (
+    if retry_json:
+        user_text = _RETRY_USER
+    elif tools_on:
+        user_text = (
             "Extrae cabecera y movimientos del estado de cuenta. "
             "Usa la herramienta extraer_estado_cuenta con el JSON completo."
         )
-    )
+    else:
+        user_text = (
+            "Extrae cabecera y movimientos del estado de cuenta. "
+            "Responde ÚNICAMENTE con el objeto JSON completo "
+            "(cabecera + movimientos), sin markdown ni texto adicional."
+        )
     content: list[dict[str, Any]] = [
         {
             "type": "document",
@@ -454,39 +523,25 @@ def _llamar_claude_pdf(
         {"type": "text", "text": user_text},
     ]
 
-    kwargs: dict[str, Any] = {
-        "model": modelo,
-        "max_tokens": _MAX_TOKENS,
-        "system": _SYSTEM_PROMPT,
-        "tools": [_TOOL_SCHEMA],
-        "tool_choice": {"type": "tool", "name": _TOOL_NAME},
-        "messages": [{"role": "user", "content": content}],
-    }
-    # effort opcional (modelos nuevos); ignorar si el SDK/API lo rechaza
-    try:
-        kwargs["output_config"] = {"effort": "medium"}
-    except Exception:
-        pass
+    def _create(use_tools_flag: bool, with_output_config: bool):
+        kwargs = _construir_kwargs_mensaje(
+            modelo=modelo,
+            content=content,
+            use_tools=use_tools_flag,
+            include_output_config=with_output_config,
+        )
+        return client.messages.create(**kwargs), kwargs
 
+    # output_config/effort solo en modelos nuevos; default OFF para portabilidad.
+    # Tools/tool_choice solo si use_tools=True (opt-in); si 400 → texto.
     with _IA_SEMAPHORE:
         try:
-            message = client.messages.create(**kwargs)
-        except TypeError:
-            # SDK viejo sin output_config / tool params distintos
-            kwargs.pop("output_config", None)
-            try:
-                message = client.messages.create(**kwargs)
-            except Exception as exc:
-                mapped = _mapear_error_api(exc, modelo)
-                if mapped:
-                    raise mapped from exc
-                raise
+            message, used_kwargs = _create(tools_on, False)
         except Exception as exc:
-            # Reintento sin output_config si el API lo rechaza
-            if "output_config" in str(exc).lower() or "effort" in str(exc).lower():
-                kwargs.pop("output_config", None)
+            if tools_on and _es_error_tool_choice_no_soportado(exc):
+                # Modelo sin tool_choice → fallback texto (prod-safe)
                 try:
-                    message = client.messages.create(**kwargs)
+                    message, used_kwargs = _create(False, False)
                 except Exception as exc2:
                     mapped = _mapear_error_api(exc2, modelo)
                     if mapped:
@@ -498,6 +553,7 @@ def _llamar_claude_pdf(
                     raise mapped from exc
                 raise
 
+    _ = used_kwargs  # disponible si se instrumenta logging
     return _extraer_payload_mensaje(message)
 
 

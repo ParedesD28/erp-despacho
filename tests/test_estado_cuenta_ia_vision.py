@@ -9,7 +9,11 @@ from unittest.mock import MagicMock, patch
 
 from estado_cuenta_ia_vision import (
     EstadoCuentaIaError,
+    _construir_kwargs_mensaje,
+    _es_error_tool_choice_no_soportado,
+    _modelo_default,
     _parse_json_respuesta,
+    _use_tools_habilitado,
     extraer_estado_cuenta_via_ia,
     ia_fallback_habilitado,
     reparar_json_ligero,
@@ -410,6 +414,158 @@ class AnalizarFallbackMockTests(unittest.TestCase):
         self.assertIsInstance(payload, dict)
         parcial = validar_y_mapear_respuesta_ia(payload)
         self.assertEqual(parcial["rows"][0]["Concepto"], "CUOTA ADMIN")
+
+
+class SinToolChoiceTests(unittest.TestCase):
+    """Default prod-safe: sin tool_choice tool/any (evita BadRequest 400)."""
+
+    def test_use_tools_default_off(self):
+        with patch.dict(os.environ, {"ESTADO_CUENTA_IA_USE_TOOLS": ""}, clear=False):
+            os.environ.pop("ESTADO_CUENTA_IA_USE_TOOLS", None)
+            self.assertFalse(_use_tools_habilitado())
+
+    def test_kwargs_default_sin_tools_ni_tool_choice(self):
+        kwargs = _construir_kwargs_mensaje(
+            modelo="claude-sonnet-5-5",
+            content=[{"type": "text", "text": "x"}],
+            use_tools=False,
+            include_output_config=False,
+        )
+        self.assertNotIn("tools", kwargs)
+        self.assertNotIn("tool_choice", kwargs)
+        self.assertEqual(kwargs["model"], "claude-sonnet-5-5")
+
+    def test_kwargs_opt_in_tools(self):
+        kwargs = _construir_kwargs_mensaje(
+            modelo="claude-sonnet-5-5",
+            content=[{"type": "text", "text": "x"}],
+            use_tools=True,
+            include_output_config=False,
+        )
+        self.assertIn("tools", kwargs)
+        self.assertEqual(kwargs["tool_choice"]["type"], "tool")
+        self.assertEqual(kwargs["tool_choice"]["name"], "extraer_estado_cuenta")
+
+    def test_detecta_error_tool_choice_400(self):
+        class BadRequestError(Exception):
+            pass
+
+        exc = BadRequestError(
+            'tool_choice: type "tool" and "any" are not supported for this model.'
+        )
+        self.assertTrue(_es_error_tool_choice_no_soportado(exc))
+
+    def test_llamar_claude_default_no_envia_tool_choice(self):
+        """Path sin tools: messages.create no debe recibir tool_choice."""
+        bueno = {
+            "cabecera": {
+                "titular": "T",
+                "bloque": "1",
+                "apartamento": "103",
+                "codigo_cuenta": "1103",
+                "conjunto": None,
+                "nit": None,
+            },
+            "movimientos": [_mov_minimo()],
+        }
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = json.dumps(bueno)
+        message = MagicMock()
+        message.content = [text_block]
+
+        captured: dict = {}
+
+        class FakeMessages:
+            def create(self, **kwargs):
+                captured["kwargs"] = kwargs
+                if "tool_choice" in kwargs:
+                    raise AssertionError(
+                        "tool_choice no debe enviarse en el path default sin tools"
+                    )
+                return message
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                self.messages = FakeMessages()
+
+        with patch.dict(
+            os.environ,
+            {
+                "ANTHROPIC_API_KEY": "sk-test",
+                "ESTADO_CUENTA_IA_USE_TOOLS": "",
+            },
+            clear=False,
+        ):
+            os.environ.pop("ESTADO_CUENTA_IA_USE_TOOLS", None)
+            with patch("anthropic.Anthropic", FakeClient):
+                from estado_cuenta_ia_vision import _llamar_claude_pdf
+
+                payload = _llamar_claude_pdf(b"%PDF-fake", use_tools=False)
+
+        self.assertNotIn("tool_choice", captured["kwargs"])
+        self.assertNotIn("tools", captured["kwargs"])
+        self.assertIsInstance(payload, str)
+        parcial = validar_y_mapear_respuesta_ia(_parse_json_respuesta(payload))
+        self.assertEqual(parcial["cabecera"]["codigo_cuenta"], "1103")
+
+    def test_fallback_texto_si_tool_choice_400(self):
+        """Si opt-in tools falla con 400, reintenta sin tools (no propaga 400)."""
+        bueno = {
+            "cabecera": {
+                "titular": "U",
+                "bloque": "1",
+                "apartamento": "404",
+                "codigo_cuenta": "1404",
+            },
+            "movimientos": [_mov_minimo()],
+        }
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = json.dumps(bueno)
+        message_ok = MagicMock()
+        message_ok.content = [text_block]
+
+        class BadRequestError(Exception):
+            pass
+
+        calls: list[dict] = []
+
+        class FakeMessages:
+            def create(self, **kwargs):
+                calls.append(kwargs)
+                if "tool_choice" in kwargs:
+                    raise BadRequestError(
+                        'Error code: 400 - tool_choice: type "tool" and "any" '
+                        "are not supported for this model."
+                    )
+                return message_ok
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                self.messages = FakeMessages()
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}, clear=False):
+            with patch("anthropic.Anthropic", FakeClient):
+                from estado_cuenta_ia_vision import _llamar_claude_pdf
+
+                payload = _llamar_claude_pdf(b"%PDF-fake", use_tools=True)
+
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertIn("tool_choice", calls[0])
+        self.assertNotIn("tool_choice", calls[-1])
+        self.assertIsInstance(payload, str)
+        data = _parse_json_respuesta(payload)
+        self.assertEqual(data["cabecera"]["codigo_cuenta"], "1404")
+
+    def test_modelo_respeta_anthropic_model_env(self):
+        with patch.dict(
+            os.environ,
+            {"ESTADO_CUENTA_IA_MODEL": "", "ANTHROPIC_MODEL": "claude-3-5-haiku-latest"},
+            clear=False,
+        ):
+            os.environ.pop("ESTADO_CUENTA_IA_MODEL", None)
+            self.assertEqual(_modelo_default(), "claude-3-5-haiku-latest")
 
 
 class ParserInline1502Tests(unittest.TestCase):
