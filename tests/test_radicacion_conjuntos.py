@@ -143,6 +143,10 @@ class RadicacionConjuntosTests(unittest.TestCase):
         self.assertIn("selectDemandantes.clear()", html)
         self.assertIn("CUOTAS_ADMINISTRACION", html)
         self.assertIn('name="conjunto_id"', html)
+        self.assertIn('name="bloque"', html)
+        self.assertIn('name="apartamento"', html)
+        self.assertIn("Se guardará como:", html)
+        self.assertIn("componer_torre_apto_form", (ROOT / "main.py").read_text(encoding="utf-8"))
 
     def test_precheck_ya_no_exige_demandante_antes_del_conjunto(self):
         """Regresión producción: ValueError('Debe existir al menos un demandante')
@@ -408,6 +412,118 @@ class RadicacionConjuntosTests(unittest.TestCase):
         ]
         self.assertEqual(len(propietarios), 1)
         self.assertEqual(propietarios[0], (777, 88, True))
+
+    def test_persiste_canonico_2_42_desde_apto_normalizado(self):
+        """Radicación con apto compuesto bloque+apto INSERTA torre_apto=2-42."""
+        cur = _FakeCursor()
+        original_execute = cur.execute
+        inserted = {}
+
+        def execute_nuevo_inmueble(sql, params=None):
+            normalized = " ".join(str(sql).split())
+            if "FROM inmuebles_ph" in normalized and "AND torre_apto=%s" in normalized:
+                cur.statements.append((normalized, params))
+                self.assertEqual(params[1], "2-42")
+                cur._fetchone_queue.append(None)
+                return
+            if (
+                "FROM inmuebles_ph" in normalized
+                and "WHERE conjunto_id=%s" in normalized
+                and "AND torre_apto" not in normalized
+            ):
+                cur.statements.append((normalized, params))
+                cur._fetchall_queue.append([])
+                return
+            if "INSERT INTO inmuebles_ph" in normalized:
+                cur.statements.append((normalized, params))
+                inserted["params"] = params
+                cur._fetchone_queue.append({"id": 888})
+                return
+            return original_execute(sql, params)
+
+        cur.execute = execute_nuevo_inmueble
+        conn = _FakeConn(cur)
+
+        with patch.object(radicacion_service.db, "get_connection", return_value=conn):
+            with patch.object(
+                radicacion_service.catalogos_service,
+                "obtener_tipo_proceso",
+                return_value={"id": 1, "codigo": "EJECUTIVO"},
+            ):
+                with patch.object(
+                    radicacion_service.catalogos_service,
+                    "obtener_tipo_obligacion",
+                    return_value={
+                        "id": 3,
+                        "codigo": "CUOTAS_ADMINISTRACION",
+                        "requiere_conjunto": True,
+                        "requiere_inmueble": True,
+                        "requiere_documento": False,
+                    },
+                ):
+                    with patch.object(
+                        radicacion_service.catalogos_service,
+                        "obtener_conjunto",
+                        return_value={
+                            "id": 7,
+                            "nombre": "CONJUNTO DEMO",
+                            "contacto_id": 55,
+                        },
+                    ):
+                        with patch.object(
+                            radicacion_service.expedientes_service,
+                            "_cols",
+                            return_value={
+                                "radicado_interno",
+                                "radicado_rama",
+                                "estado_rama",
+                                "tipo_cartera",
+                                "tipo_proceso_id",
+                                "naturaleza",
+                                "etapa_actual",
+                                "juzgado",
+                                "estado",
+                                "inmueble_id",
+                                "pretensiones",
+                                "medidas_cautelares",
+                                "abogado_id",
+                            },
+                        ):
+                            with patch.object(
+                                radicacion_service.expedientes_service,
+                                "_table_exists",
+                                return_value=True,
+                            ):
+                                with patch.object(
+                                    radicacion_service.obligaciones_service,
+                                    "crear_obligacion",
+                                    return_value=999,
+                                ):
+                                    with patch.object(
+                                        radicacion_service.obligaciones_service,
+                                        "vincular_partes_obligacion",
+                                    ):
+                                        with patch.object(
+                                            radicacion_service.obligaciones_service,
+                                            "vincular_obligacion_a_proceso",
+                                        ):
+                                            from certificados_deuda_repository import (
+                                                componer_torre_apto_form,
+                                            )
+
+                                            apto = componer_torre_apto_form(
+                                                bloque="02", apartamento="042"
+                                            )
+                                            resultado = radicacion_service.radicar_proceso(
+                                                **_base_kwargs(
+                                                    demandantes=[],
+                                                    apto=apto,
+                                                )
+                                            )
+
+        self.assertEqual(apto, "2-42")
+        self.assertEqual(resultado["radicado_interno"], "EXP-0042")
+        self.assertEqual(inserted["params"][3], "2-42")
 
     def test_cuotas_rechaza_demandante_manual(self):
         cur = _FakeCursor()

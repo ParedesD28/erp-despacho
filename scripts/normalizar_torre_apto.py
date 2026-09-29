@@ -20,6 +20,7 @@ import os
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -30,6 +31,63 @@ from certificados_deuda_repository import (  # noqa: E402
     _unidad_coincide,
     normalizar_torre_apto,
 )
+
+
+def planear_filas(filas: list[dict[str, Any]]) -> tuple[list[dict], list[dict]]:
+    """Calcula cambios y conflictos sobre una muestra de filas (sin I/O).
+
+    Cada fila: ``{"id", "conjunto_id", "torre_apto"}``.
+    Idempotente: canónicos y vacíos no generan cambio; basura sin tokens tampoco.
+    """
+    cambios: list[dict] = []
+    for f in filas:
+        actual = (f.get("torre_apto") or "").strip()
+        if not actual:
+            continue
+        canon = normalizar_torre_apto(actual)
+        if not canon or canon == actual:
+            continue
+        cambios.append(
+            {
+                "id": int(f["id"]),
+                "conjunto_id": f.get("conjunto_id"),
+                "actual": actual,
+                "canonico": canon,
+            }
+        )
+
+    por_conjunto: dict[object, list[dict]] = defaultdict(list)
+    for f in filas:
+        por_conjunto[f.get("conjunto_id")].append(f)
+
+    conflictos: list[dict] = []
+    ids_cambio = {c["id"]: c for c in cambios}
+    for cid, grupo in por_conjunto.items():
+        proyectado = []
+        for f in grupo:
+            tid = int(f["id"])
+            torre = (
+                ids_cambio[tid]["canonico"]
+                if tid in ids_cambio
+                else (f.get("torre_apto") or "").strip()
+            )
+            proyectado.append({"id": tid, "torre_apto": torre})
+        for i, a in enumerate(proyectado):
+            for b in proyectado[i + 1 :]:
+                if not a["torre_apto"] or not b["torre_apto"]:
+                    continue
+                if a["torre_apto"] == b["torre_apto"] or _unidad_coincide(
+                    a["torre_apto"], _claves_unidad(b["torre_apto"])
+                ):
+                    if a["id"] in ids_cambio or b["id"] in ids_cambio:
+                        conflictos.append(
+                            {
+                                "conjunto_id": cid,
+                                "ids": sorted([a["id"], b["id"]]),
+                                "claves": [a["torre_apto"], b["torre_apto"]],
+                            }
+                        )
+    return cambios, conflictos
 
 
 def _conectar():
@@ -53,54 +111,7 @@ def planear(cur) -> tuple[list[dict], list[dict]]:
         """
     )
     filas = [dict(r) for r in cur.fetchall()]
-    cambios: list[dict] = []
-    for f in filas:
-        actual = (f.get("torre_apto") or "").strip()
-        canon = normalizar_torre_apto(actual)
-        if not canon or canon == actual:
-            continue
-        cambios.append(
-            {
-                "id": int(f["id"]),
-                "conjunto_id": f.get("conjunto_id"),
-                "actual": actual,
-                "canonico": canon,
-            }
-        )
-
-    # Conflictos: mismo conjunto + clave canónica / match unidad
-    por_conjunto: dict[object, list[dict]] = defaultdict(list)
-    for f in filas:
-        por_conjunto[f.get("conjunto_id")].append(f)
-
-    conflictos: list[dict] = []
-    ids_cambio = {c["id"]: c for c in cambios}
-    for cid, grupo in por_conjunto.items():
-        # Simula estado post-normalización
-        proyectado = []
-        for f in grupo:
-            tid = int(f["id"])
-            torre = (
-                ids_cambio[tid]["canonico"]
-                if tid in ids_cambio
-                else (f.get("torre_apto") or "").strip()
-            )
-            proyectado.append({"id": tid, "torre_apto": torre})
-        for i, a in enumerate(proyectado):
-            for b in proyectado[i + 1 :]:
-                if a["torre_apto"] == b["torre_apto"] or _unidad_coincide(
-                    a["torre_apto"], _claves_unidad(b["torre_apto"])
-                ):
-                    # Solo reportar si al menos uno cambia
-                    if a["id"] in ids_cambio or b["id"] in ids_cambio:
-                        conflictos.append(
-                            {
-                                "conjunto_id": cid,
-                                "ids": sorted([a["id"], b["id"]]),
-                                "claves": [a["torre_apto"], b["torre_apto"]],
-                            }
-                        )
-    return cambios, conflictos
+    return planear_filas(filas)
 
 
 def main() -> int:
@@ -135,7 +146,10 @@ def main() -> int:
             if len(cambios) > 50:
                 print(f"  … y {len(cambios) - 50} más")
             for conf in conflictos[:20]:
-                print(f"  CONFLICTO conjunto={conf['conjunto_id']} ids={conf['ids']} claves={conf['claves']}")
+                print(
+                    f"  CONFLICTO conjunto={conf['conjunto_id']} "
+                    f"ids={conf['ids']} claves={conf['claves']}"
+                )
 
             if not apply:
                 print("Dry-run OK. Pase --apply para escribir (omite conflictos).")
@@ -146,12 +160,14 @@ def main() -> int:
                 if c["id"] in conflicto_ids:
                     continue
                 cur.execute(
-                    "UPDATE inmuebles_ph SET torre_apto=%s WHERE id=%s AND torre_apto IS DISTINCT FROM %s",
+                    "UPDATE inmuebles_ph SET torre_apto=%s "
+                    "WHERE id=%s AND torre_apto IS DISTINCT FROM %s",
                     (c["canonico"], c["id"], c["canonico"]),
                 )
                 aplicados += cur.rowcount
             conn.commit()
-            print(f"Aplicados: {aplicados} (omitidos por conflicto: {len(conflicto_ids & {c['id'] for c in cambios})})")
+            omitidos = len(conflicto_ids & {c["id"] for c in cambios})
+            print(f"Aplicados: {aplicados} (omitidos por conflicto: {omitidos})")
             return 0
     finally:
         conn.close()
