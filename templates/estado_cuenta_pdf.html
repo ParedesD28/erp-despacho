@@ -23,6 +23,8 @@
             suma abonos y calcula la diferencia, y abre una hoja por cada deudor.
             <strong>Bolsa Global</strong> (mora / capital limpio) es un cálculo aparte:
             no altera la descarga de transcripción.
+            Los certificados se unifican en <strong>un solo ZIP plano</strong> con todos
+            los grupos de análisis seleccionados (no solo el último grupo).
             Solo PDF nativos COLON (no escaneos).
         </p>
     </div>
@@ -212,7 +214,7 @@
                 <button type="button" id="btn-descargar-certs" disabled
                         class="inline-flex items-center gap-2 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-40 text-white font-semibold py-2 px-4 rounded-lg text-sm">
                     <i data-lucide="download" class="w-4 h-4"></i>
-                    Descargar certificado(s)
+                    <span class="btn-certs-label">Descargar certificado(s)</span>
                 </button>
             </div>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -692,6 +694,56 @@
         if (!btnDescargarCerts) return;
         const n = certBloques.querySelectorAll('.cert-sel:checked').length;
         btnDescargarCerts.disabled = !(n > 0);
+        const label = btnDescargarCerts.querySelector('.btn-certs-label');
+        if (label) {
+            label.textContent = n > 0
+                ? `Descargar ${n} certificado(s)`
+                : 'Descargar certificado(s)';
+        }
+    }
+
+    /** Nombres únicos en ZIP (JSZip pisa entradas con el mismo path). */
+    function uniqueZipEntryName(usados, name) {
+        let base = name || 'Certificado_deuda.docx';
+        if (!(base in usados)) {
+            usados[base] = 0;
+            return base;
+        }
+        usados[base] += 1;
+        const n = usados[base];
+        const i = base.lastIndexOf('.');
+        if (i > 0) return `${base.slice(0, i)}_${n}${base.slice(i)}`;
+        return `${base}_${n}`;
+    }
+
+    /**
+     * Aplana docx sueltos o ZIP del servidor en un único ZIP plano.
+     * Evita anidar Certificados_deuda.zip × N grupos (colisión de nombre
+     * que dejaba solo el último grupo, p.ej. 16 de 31).
+     */
+    async function empaquetarCertificadosPlanos(partes) {
+        const zip = new JSZip();
+        const usados = {};
+        let total = 0;
+        for (let i = 0; i < partes.length; i++) {
+            const { filename, buffer } = partes[i];
+            const lower = String(filename || '').toLowerCase();
+            if (lower.endsWith('.zip')) {
+                const inner = await JSZip.loadAsync(buffer);
+                const names = Object.keys(inner.files);
+                for (let j = 0; j < names.length; j++) {
+                    const entry = inner.files[names[j]];
+                    if (!entry || entry.dir) continue;
+                    const leaf = names[j].split('/').pop() || names[j];
+                    zip.file(uniqueZipEntryName(usados, leaf), await entry.async('arraybuffer'));
+                    total += 1;
+                }
+            } else {
+                zip.file(uniqueZipEntryName(usados, filename || `certificado_${i + 1}.docx`), buffer);
+                total += 1;
+            }
+        }
+        return { zip, total };
     }
 
     async function runProcesarCertificado(autoDownload) {
@@ -804,9 +856,14 @@
             const jobsConSel = jobs
                 .map((job, i) => ({ job, indices: porJob[i] || [], i }))
                 .filter(x => x.indices.length);
-            if (jobsConSel.length === 1) {
-                const { job, indices } = jobsConSel[0];
-                setStatus(`Generando ${indices.length} certificado(s) Word…`);
+            const partes = [];
+            for (let k = 0; k < jobsConSel.length; k++) {
+                const { job, indices } = jobsConSel[k];
+                setStatus(
+                    jobsConSel.length > 1
+                        ? `Generando certificados grupo ${k + 1} de ${jobsConSel.length} (${indices.length} de ${totalSel} seleccionados)…`
+                        : `Generando ${indices.length} certificado(s) Word…`
+                );
                 let res = await postProcesarCert('generar', job.id, [], indices);
                 if (!res.ok && job.files.length) {
                     res = await postProcesarCert('generar', '', job.files, indices);
@@ -818,47 +875,44 @@
                     if (btnDescargarCerts) btnDescargarCerts.disabled = false;
                     return;
                 }
-                const blob = await res.blob();
                 const cd = res.headers.get('Content-Disposition') || '';
                 const m = /filename=\"([^\"]+)\"/.exec(cd);
-                const filename = (m && m[1]) || 'Certificados_deuda.docx';
+                const filename = (m && m[1]) || (
+                    indices.length === 1 ? 'Certificado_deuda.docx' : 'Certificados_deuda.zip'
+                );
+                partes.push({ filename, buffer: await res.arrayBuffer() });
+            }
+
+            // Un solo grupo y un solo docx → descarga directa (sin ZIP envoltorio).
+            if (jobsConSel.length === 1 && partes.length === 1
+                && !String(partes[0].filename || '').toLowerCase().endsWith('.zip')) {
+                const blob = new Blob([partes[0].buffer], {
+                    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = filename;
+                a.download = partes[0].filename || 'Certificado_deuda.docx';
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
                 URL.revokeObjectURL(url);
-                setStatus(`Descargado: ${filename} (${indices.length} cuenta(s)).`);
+                setStatus(`Descargado: ${partes[0].filename || 'Certificado_deuda.docx'} (${totalSel} cuenta(s)).`);
                 if (btnDescargarCerts) btnDescargarCerts.disabled = false;
                 return;
             }
+
             if (!window.JSZip) {
-                setStatus('No se pudo cargar JSZip para empaquetar varios grupos.', true);
+                setStatus('No se pudo cargar JSZip para empaquetar certificados.', true);
                 if (btnDescargarCerts) btnDescargarCerts.disabled = false;
                 return;
             }
-            const zip = new JSZip();
-            for (let k = 0; k < jobsConSel.length; k++) {
-                const { job, indices } = jobsConSel[k];
-                setStatus(`Generando certificados grupo ${k + 1} de ${jobsConSel.length} (${indices.length})…`);
-                let res = await postProcesarCert('generar', job.id, [], indices);
-                if (!res.ok && job.files.length) {
-                    res = await postProcesarCert('generar', '', job.files, indices);
-                }
-                if (!res.ok) {
-                    let data = {};
-                    try { data = await res.json(); } catch (_) {}
-                    setStatus(detailMsg(data, res), true);
-                    if (btnDescargarCerts) btnDescargarCerts.disabled = false;
-                    return;
-                }
-                const cd = res.headers.get('Content-Disposition') || '';
-                const m = /filename=\"([^\"]+)\"/.exec(cd);
-                const filename = (m && m[1]) || `certificados_${k + 1}.docx`;
-                zip.file(filename, await res.arrayBuffer());
-            }
+            setStatus(
+                jobsConSel.length > 1
+                    ? `Unificando ${totalSel} certificado(s) de ${jobsConSel.length} grupos en un ZIP plano…`
+                    : `Empaquetando ${totalSel} certificado(s)…`
+            );
+            const { zip, total } = await empaquetarCertificadosPlanos(partes);
             const zipBlob = await zip.generateAsync({ type: 'blob' });
             const zipUrl = URL.createObjectURL(zipBlob);
             const a = document.createElement('a');
@@ -868,7 +922,11 @@
             a.click();
             a.remove();
             URL.revokeObjectURL(zipUrl);
-            setStatus(`ZIP de certificados descargado (${totalSel} cuenta(s), ${jobsConSel.length} grupo(s)).`);
+            setStatus(
+                `ZIP plano descargado: ${total} certificado(s)`
+                + (jobsConSel.length > 1 ? ` en ${jobsConSel.length} grupos de análisis` : '')
+                + '.'
+            );
             if (btnDescargarCerts) btnDescargarCerts.disabled = false;
         } catch (e) {
             setStatus('Fallo de red al descargar certificados.', true);
