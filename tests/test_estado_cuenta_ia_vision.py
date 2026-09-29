@@ -4,14 +4,22 @@ from __future__ import annotations
 import json
 import os
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from estado_cuenta_ia_vision import (
     EstadoCuentaIaError,
+    _parse_json_respuesta,
+    extraer_estado_cuenta_via_ia,
     ia_fallback_habilitado,
+    reparar_json_ligero,
     validar_y_mapear_respuesta_ia,
 )
 from estado_cuenta_pdf_service import EstadoCuentaPdfError, analizar_estado_cuenta_pdf
+
+_SAMPLES = Path(
+    "/cursor/stores/bc-2b92a817-5490-4c88-a556-8ad39d11cb5d/docs/samples"
+)
 
 
 def _json_ia_1204() -> dict:
@@ -176,7 +184,6 @@ def _json_ia_1204() -> dict:
 
 def _pdf_sin_texto() -> bytes:
     """PDF mínimo de 2 páginas sin texto seleccionable (pypdf-friendly)."""
-    # Construye un PDF trivial con 2 páginas vacías vía reportlab si está, si no bytes fijos.
     try:
         from reportlab.pdfgen import canvas
         from reportlab.lib.pagesizes import letter
@@ -189,7 +196,6 @@ def _pdf_sin_texto() -> bytes:
         c.save()
         return buf.getvalue()
     except Exception:
-        # Fallback: PDF 1.4 con 2 páginas vacías (sin operadores de texto).
         return (
             b"%PDF-1.4\n"
             b"1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n"
@@ -203,6 +209,18 @@ def _pdf_sin_texto() -> bytes:
             b"xref\n0 7\n0000000000 65535 f \n"
             b"trailer<< /Size 7 /Root 1 0 R >>\nstartxref\n0\n%%EOF\n"
         )
+
+
+def _mov_minimo(concepto: str = "CUOTA ADMIN") -> dict:
+    return {
+        "concepto": concepto,
+        "tipo_documento": "FAC",
+        "numero": "0001234",
+        "fecha": "2026.01.01",
+        "valor": 100,
+        "abono": 0,
+        "saldo": 100,
+    }
 
 
 class ValidacionJsonIaTests(unittest.TestCase):
@@ -223,20 +241,91 @@ class ValidacionJsonIaTests(unittest.TestCase):
     def test_normaliza_fecha_con_guiones(self):
         data = {
             "cabecera": {"titular": "X", "bloque": "1", "apartamento": "1", "codigo_cuenta": "1"},
-            "movimientos": [
-                {
-                    "concepto": "CUOTA ADMIN",
-                    "tipo_documento": "FAC",
-                    "numero": "0001234",
-                    "fecha": "2026-01-01",
-                    "valor": 100,
-                    "abono": 0,
-                    "saldo": 100,
-                }
-            ],
+            "movimientos": [_mov_minimo()],
         }
+        data["movimientos"][0]["fecha"] = "2026-01-01"
         parcial = validar_y_mapear_respuesta_ia(data)
         self.assertEqual(parcial["rows"][0]["Fecha"], "2026.01.01")
+
+
+class ParseJsonRobustoTests(unittest.TestCase):
+    def test_concepto_con_comillas_sin_escapar(self):
+        # típico fallo prod: Expecting ',' delimiter en concepto
+        roto = (
+            '{\n  "cabecera": {"titular": "X", "bloque": "1", "apartamento": "103",'
+            ' "codigo_cuenta": "1103", "conjunto": null, "nit": null},\n'
+            '  "movimientos": [\n'
+            '    {"concepto": "CUOTA "ESPECIAL" ADMINISTRACION", "tipo_documento": "FAC",'
+            ' "numero": "0001111", "fecha": "2026.01.01", "valor": 100, "abono": 0, "saldo": 100}\n'
+            "  ]\n}"
+        )
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads(roto)
+        data = _parse_json_respuesta(roto)
+        self.assertEqual(
+            data["movimientos"][0]["concepto"],
+            'CUOTA "ESPECIAL" ADMINISTRACION',
+        )
+        parcial = validar_y_mapear_respuesta_ia(data)
+        self.assertEqual(parcial["rows"][0]["Valor"], 100.0)
+
+    def test_fenced_markdown_json(self):
+        bueno = {
+            "cabecera": {"titular": "Y", "bloque": "1", "apartamento": "1", "codigo_cuenta": "1"},
+            "movimientos": [_mov_minimo("RETROACTIVO AÑO 2026")],
+        }
+        fenced = "Aquí va:\n```json\n" + json.dumps(bueno, ensure_ascii=False) + "\n```\n"
+        data = _parse_json_respuesta(fenced)
+        self.assertEqual(data["movimientos"][0]["concepto"], "RETROACTIVO AÑO 2026")
+
+    def test_trailing_comma(self):
+        crudo = (
+            '{"cabecera": {"titular": "Z", "bloque": "1", "apartamento": "1",'
+            ' "codigo_cuenta": "1", "conjunto": null, "nit": null},'
+            ' "movimientos": [{"concepto": "CUOTA ADMIN", "tipo_documento": "FAC",'
+            ' "numero": "0001234", "fecha": "2026.01.01", "valor": 50, "abono": 0,'
+            ' "saldo": 50,},],}'
+        )
+        data = _parse_json_respuesta(crudo)
+        self.assertEqual(data["movimientos"][0]["valor"], 50)
+
+    def test_reparar_no_cambia_montos(self):
+        bueno = json.dumps(
+            {
+                "cabecera": {},
+                "movimientos": [
+                    {
+                        "concepto": "X",
+                        "tipo_documento": "FAC",
+                        "numero": "1",
+                        "fecha": "2026.01.01",
+                        "valor": 1234567,
+                        "abono": 0,
+                        "saldo": 1234567,
+                    }
+                ],
+            }
+        )
+        fixed = reparar_json_ligero(bueno)
+        self.assertEqual(json.loads(fixed)["movimientos"][0]["valor"], 1234567)
+
+    def test_retry_cuando_json_invalido(self):
+        bueno = {
+            "cabecera": {"titular": "R", "bloque": "1", "apartamento": "1", "codigo_cuenta": "9"},
+            "movimientos": [_mov_minimo()],
+        }
+        calls = {"n": 0}
+
+        def fake_call(pdf_bytes, *, model=None, retry_json=False):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return '{"cabecera": {, "movimientos": []'  # basura
+            return bueno
+
+        with patch("estado_cuenta_ia_vision._llamar_claude_pdf", side_effect=fake_call):
+            parcial = extraer_estado_cuenta_via_ia(b"%PDF-fake")
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(parcial["rows"][0]["Concepto"], "CUOTA ADMIN")
 
 
 class FlagIaTests(unittest.TestCase):
@@ -304,6 +393,38 @@ class AnalizarFallbackMockTests(unittest.TestCase):
                 _require_api_key()
             self.assertIn("configure ANTHROPIC_API_KEY", str(ctx.exception))
 
+    def test_tool_use_payload_directo(self):
+        """Si Claude responde con tool_use, el input dict se usa sin json.loads."""
+        message = MagicMock()
+        tool_block = MagicMock()
+        tool_block.type = "tool_use"
+        tool_block.name = "extraer_estado_cuenta"
+        tool_block.input = {
+            "cabecera": {"titular": "T", "bloque": "1", "apartamento": "1", "codigo_cuenta": "1"},
+            "movimientos": [_mov_minimo()],
+        }
+        message.content = [tool_block]
+        from estado_cuenta_ia_vision import _extraer_payload_mensaje
+
+        payload = _extraer_payload_mensaje(message)
+        self.assertIsInstance(payload, dict)
+        parcial = validar_y_mapear_respuesta_ia(payload)
+        self.assertEqual(parcial["rows"][0]["Concepto"], "CUOTA ADMIN")
+
+
+class ParserInline1502Tests(unittest.TestCase):
+    @unittest.skipUnless((_SAMPLES / "1502.pdf").is_file(), "sample 1502.pdf no disponible")
+    def test_1502_texto_inline_nativo(self):
+        out = analizar_estado_cuenta_pdf((_SAMPLES / "1502.pdf").read_bytes())
+        self.assertEqual(out["fuente_parseo"], "colon_texto")
+        self.assertGreaterEqual(out["movimientos_extraidos"], 100)
+        self.assertEqual(out["titular"], "CORTES DIAZ MICHAEL JOHEL")
+        self.assertEqual(out["bloque"], "1")
+        self.assertEqual(out["apartamento"], "502")
+        self.assertEqual(out["codigo_cuenta"], "1502")
+        self.assertEqual(out["inconsistencias_saldo"], 0)
+        self.assertAlmostEqual(out["saldo_final"], 8471643.0)
+
 
 @unittest.skipUnless(
     bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip())
@@ -312,13 +433,9 @@ class AnalizarFallbackMockTests(unittest.TestCase):
 )
 class SmokeIa1204Tests(unittest.TestCase):
     def test_1204_pdf_real(self):
-        from pathlib import Path
-
         from bolsa_global_estado_cuenta_service import calcular_bolsa_por_cuenta
 
-        sample = Path(
-            "/cursor/stores/bc-2b92a817-5490-4c88-a556-8ad39d11cb5d/docs/samples/1204.pdf"
-        )
+        sample = _SAMPLES / "1204.pdf"
         if not sample.is_file():
             self.skipTest("sample 1204.pdf no disponible")
         out = analizar_estado_cuenta_pdf(sample.read_bytes())
@@ -338,7 +455,6 @@ class SmokeIa1204Tests(unittest.TestCase):
         }
         bolsa = calcular_bolsa_por_cuenta(cuenta)
         self.assertFalse(bolsa.get("omitido"))
-        # Evidencia mínima para el reporte del agente
         print(
             json.dumps(
                 {
