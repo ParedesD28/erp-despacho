@@ -45,11 +45,75 @@ class CorregirInmuebleExpedienteTests(unittest.TestCase):
         html = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(
             encoding="utf-8"
         )
+        self.assertIn('name="bloque"', html)
+        self.assertIn('name="apartamento"', html)
         self.assertIn('name="torre_apto"', html)
         self.assertIn('name="conjunto_id"', html)
         self.assertIn("/expediente/guardar-estructurado", html)
+        self.assertIn("Se guardará como:", html)
         self.assertNotIn("CORREGIR INMUEBLE", html.upper())
         self.assertIn("se reutiliza el inmueble si ya existe", html)
+
+    def test_persiste_canonico_desde_bloque_apartamento_separados(self):
+        """bloque=02 + apartamento=042 → UPDATE con 2-42 (vía torre_apto ya compuesto)."""
+        cur = _RecordingCursor(
+            responses=[
+                {"id": 7, "nombre": "CONJUNTO DEMO"},
+                None,  # no existe destino exacto
+                {"n": 1},  # solo este proceso
+            ]
+        )
+
+        def table_exists(cursor, table):
+            return table in {
+                "inmuebles_ph",
+                "conjuntos_residenciales",
+                "inmueble_propietarios",
+            }
+
+        original = expedientes_service._table_exists
+        expedientes_service._table_exists = table_exists
+        try:
+            from certificados_deuda_repository import componer_torre_apto_form
+
+            canon = componer_torre_apto_form(bloque="02", apartamento="042")
+            self.assertEqual(canon, "2-42")
+            nuevo = expedientes_service.corregir_inmueble_proceso(
+                cur,
+                radicado_interno="EXP-0100",
+                proceso={
+                    "inmueble_id": 300,
+                    "inmueble": {
+                        "id": 300,
+                        "conjunto_id": 7,
+                        "conjunto_residencial": "CONJUNTO DEMO",
+                        "torre_apto": "TORRE 02 APTO 099",
+                    },
+                },
+                torre_apto=canon,
+                conjunto_id_raw="7",
+                contactos_demandados=[{"id": 88}],
+                obligaciones=[{"id": 11}],
+            )
+        finally:
+            expedientes_service._table_exists = original
+
+        self.assertEqual(nuevo, 300)
+        updates = [
+            p
+            for s, p in cur.statements
+            if "UPDATE inmuebles_ph" in s and "torre_apto" in s
+        ]
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0][0], "2-42")
+
+    def test_handler_guardar_estructurado_invoca_corregir_inmueble(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("corregir_inmueble_proceso", source)
+        self.assertIn("componer_torre_apto_form", source)
+        self.assertIn('form.get("bloque")', source)
+        self.assertIn('form.get("apartamento")', source)
+        self.assertIn("except ValueError as exc", source)
 
     def test_reutiliza_inmueble_existente_sin_clonar(self):
         """Si ya hay apto en el conjunto, se reutiliza y no se hace INSERT."""
@@ -270,12 +334,6 @@ class CorregirInmuebleExpedienteTests(unittest.TestCase):
         self.assertFalse(
             any("UPDATE procesos SET inmueble_id" in s for s, _ in cur.statements)
         )
-
-    def test_handler_guardar_estructurado_invoca_corregir_inmueble(self):
-        source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn("corregir_inmueble_proceso", source)
-        self.assertIn('form.get("torre_apto")', source)
-        self.assertIn("except ValueError as exc", source)
 
 
 if __name__ == "__main__":

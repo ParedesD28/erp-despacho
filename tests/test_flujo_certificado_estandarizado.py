@@ -37,6 +37,28 @@ class ClaveCanonicaTests(unittest.TestCase):
         self.assertEqual(repo.partir_bloque_apto("TORRE 02 APTO 042"), ("2", "42"))
         self.assertEqual(repo.partir_bloque_apto("9-401"), ("9", "401"))
 
+    def test_componer_form_bloque_apartamento_prioriza_sobre_legacy(self):
+        self.assertEqual(
+            repo.componer_torre_apto_form(bloque="02", apartamento="042"),
+            "2-42",
+        )
+        self.assertEqual(
+            repo.componer_torre_apto_form(
+                bloque="9",
+                apartamento="401",
+                texto_legacy="TORRE 1 APTO 201",
+            ),
+            "9-401",
+        )
+        self.assertEqual(
+            repo.componer_torre_apto_form(texto_legacy="02-042"),
+            "2-42",
+        )
+        self.assertEqual(
+            repo.componer_torre_apto_form(bloque="", apartamento="", texto_legacy=""),
+            "",
+        )
+
     def test_matching_usa_misma_normalizacion(self):
         pdf = repo._claves_unidad("TORRE 02 APTO 042", bloque="02", apartamento="042")
         canon = repo.clave_canonica_unidad("", bloque="02", apartamento="042")

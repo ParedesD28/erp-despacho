@@ -132,8 +132,19 @@
                         </select>
                     </div>
                     <div>
-                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Torre / apartamento *</label>
-                        <input type="text" id="apto" name="apto" placeholder="Ej. Torre 2 Apto 304" class="w-full px-4 py-2 border rounded-md uppercase">
+                        <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Unidad (torre + apto) *</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-[10px] font-semibold text-slate-500 uppercase mb-1" for="bloque">Torre / bloque</label>
+                                <input type="text" id="bloque" name="bloque" inputmode="numeric" autocomplete="off" placeholder="Ej. 2" class="w-full px-4 py-2 border rounded-md" maxlength="12">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-semibold text-slate-500 uppercase mb-1" for="apartamento">Apartamento</label>
+                                <input type="text" id="apartamento" name="apartamento" inputmode="numeric" autocomplete="off" placeholder="Ej. 42" class="w-full px-4 py-2 border rounded-md" maxlength="12">
+                            </div>
+                        </div>
+                        <input type="hidden" id="apto" name="apto" value="">
+                        <p id="preview-clave-unidad" class="text-[11px] text-slate-500 mt-2">Se guardará como: —</p>
                     </div>
                 </div>
             </section>
@@ -226,8 +237,16 @@ function configurarRadicacion(){
     document.getElementById('bloque-propiedad').classList.toggle('hidden',!esPH);
     document.getElementById('conjunto_id').disabled=!esPH;
     document.getElementById('conjunto_id').required=esPH;
-    document.getElementById('apto').disabled=!esPH;
-    document.getElementById('apto').required=esPH;
+    ['bloque','apartamento','apto'].forEach(id=>{
+        const el=document.getElementById(id);
+        if(!el) return;
+        el.disabled=!esPH;
+    });
+    const bloqueEl=document.getElementById('bloque');
+    const aptoNumEl=document.getElementById('apartamento');
+    if(bloqueEl) bloqueEl.required=esPH;
+    if(aptoNumEl) aptoNumEl.required=esPH;
+    actualizarPreviewClaveUnidad();
 
     document.getElementById('bloque-obligacion').classList.toggle('hidden',!esEjecutivo);
     document.getElementById('documento_referencia').disabled=!requiereDocumento;
@@ -253,6 +272,36 @@ function configurarRadicacion(){
 document.getElementById('naturaleza').addEventListener('change', configurarRadicacion);
 document.getElementById('tipo_obligacion').addEventListener('change', configurarRadicacion);
 document.getElementById('tipo_cartera').addEventListener('change', configurarRadicacion);
+
+function stripCerosToken(token){
+    const m=String(token||'').trim().toUpperCase().match(/^([A-Z]*)(0*)(\d+)([A-Z]*)$/);
+    if(!m) return String(token||'').trim();
+    return `${m[1]}${String(parseInt(m[3],10))}${m[4]}`;
+}
+
+function claveCanonicoPreview(bloque, apartamento){
+    const b=stripCerosToken(bloque);
+    const a=stripCerosToken(apartamento);
+    if(b && a) return `${b}-${a}`;
+    return '';
+}
+
+function actualizarPreviewClaveUnidad(){
+    const bloque=document.getElementById('bloque')?.value||'';
+    const apartamento=document.getElementById('apartamento')?.value||'';
+    const clave=claveCanonicoPreview(bloque, apartamento);
+    const hidden=document.getElementById('apto');
+    if(hidden) hidden.value=clave;
+    const preview=document.getElementById('preview-clave-unidad');
+    if(preview){
+        preview.textContent=clave
+            ? `Se guardará como: ${clave}`
+            : 'Se guardará como: —';
+    }
+}
+
+document.getElementById('bloque')?.addEventListener('input', actualizarPreviewClaveUnidad);
+document.getElementById('apartamento')?.addEventListener('input', actualizarPreviewClaveUnidad);
 
 function validarFormulario(){
     const naturaleza=document.getElementById('naturaleza').value;
@@ -288,8 +337,12 @@ function validarFormulario(){
     }
 
     if(naturaleza==='EJECUTIVO' && tipoObligacion==='CUOTAS_ADMINISTRACION'){
-        if(!document.getElementById('conjunto_id').value || !document.getElementById('apto').value.trim()){
-            alert('Selecciona el conjunto y la torre/apartamento.');
+        actualizarPreviewClaveUnidad();
+        const conjunto=document.getElementById('conjunto_id').value;
+        const bloque=(document.getElementById('bloque')?.value||'').trim();
+        const apartamento=(document.getElementById('apartamento')?.value||'').trim();
+        if(!conjunto || !bloque || !apartamento){
+            alert('Selecciona el conjunto e indica torre/bloque y apartamento.');
             return false;
         }
     }

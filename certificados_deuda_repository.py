@@ -126,6 +126,31 @@ def normalizar_torre_apto(
     return clave_canonica_unidad(texto, bloque=bloque, apartamento=apartamento)
 
 
+def componer_torre_apto_form(
+    *,
+    bloque: str = "",
+    apartamento: str = "",
+    texto_legacy: str = "",
+) -> str:
+    """
+    Compone la clave canónica desde formularios UI.
+
+    Prioridad: bloque+apartamento separados → texto libre legacy (`apto` / `torre_apto`).
+    """
+    b = str(bloque or "").strip()
+    a = str(apartamento or "").strip()
+    legacy = str(texto_legacy or "").strip()
+    if b and a:
+        return normalizar_torre_apto("", bloque=b, apartamento=a) or f"{b}-{a}".strip("-")
+    if legacy:
+        return normalizar_torre_apto(legacy) or legacy
+    if a:
+        return normalizar_torre_apto(a) or a
+    if b:
+        return normalizar_torre_apto(b) or b
+    return ""
+
+
 def partir_bloque_apto(clave_o_texto: str = "") -> tuple[str, str]:
     """Devuelve (bloque, apto) canónicos sin ceros; vacío si no hay dos tokens."""
     canon = clave_canonica_unidad(clave_o_texto)

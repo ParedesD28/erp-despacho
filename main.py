@@ -698,7 +698,13 @@ async def crear_expediente_completo(request: Request):
     medidas = str(form.get("medidas_cautelares") or "").strip()
     conjunto_id_raw = str(form.get("conjunto_id") or "").strip()
     conjunto_nombre = str(form.get("conjunto_residencial") or "").strip()
-    apto = str(form.get("apto") or "").strip()
+    from certificados_deuda_repository import componer_torre_apto_form
+
+    apto = componer_torre_apto_form(
+        bloque=str(form.get("bloque") or "").strip(),
+        apartamento=str(form.get("apartamento") or "").strip(),
+        texto_legacy=str(form.get("apto") or "").strip(),
+    )
 
     juzgado = None
     if tipo_cartera == "JURIDICO":
@@ -836,6 +842,12 @@ def detalle_expediente(request: Request, radicado: str):
                 )
                 audit = expedientes_service._audit(cur, radicado)
                 conjuntos = catalogos_service.listar_conjuntos(cur, activos=True)
+                from certificados_deuda_repository import partir_bloque_apto
+
+                torre_actual = str(
+                    (proceso.get("inmueble") or {}).get("torre_apto") or ""
+                ).strip()
+                inmueble_bloque, inmueble_apartamento = partir_bloque_apto(torre_actual)
                 return render_template(
                     "detalle_expediente_v4.html",
                     {
@@ -851,6 +863,8 @@ def detalle_expediente(request: Request, radicado: str):
                         "acuerdos_crm": acuerdos,
                         "audit_ediciones": audit,
                         "conjuntos": conjuntos,
+                        "inmueble_bloque": inmueble_bloque,
+                        "inmueble_apartamento": inmueble_apartamento,
                         "demandante_ids": {str(x.get("identificacion")) for x in demandantes if x.get("identificacion")},
                         "demandado_ids": {str(x.get("identificacion")) for x in demandados if x.get("identificacion")},
                     },
@@ -1070,7 +1084,13 @@ async def guardar_expediente_estructurado(request: Request):
                     )
 
                 # Corrección de inmueble dentro del mismo editor (sin botón aparte).
-                torre_apto_form = str(form.get("torre_apto") or "").strip()
+                from certificados_deuda_repository import componer_torre_apto_form
+
+                torre_apto_form = componer_torre_apto_form(
+                    bloque=str(form.get("bloque") or "").strip(),
+                    apartamento=str(form.get("apartamento") or "").strip(),
+                    texto_legacy=str(form.get("torre_apto") or "").strip(),
+                )
                 conjunto_id_form = str(form.get("conjunto_id") or "").strip()
                 if proceso.get("inmueble_id") or torre_apto_form:
                     expedientes_service.corregir_inmueble_proceso(
