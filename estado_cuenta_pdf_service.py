@@ -45,6 +45,16 @@ _BLOQUE_NUMERO_INLINE_RE = re.compile(
     r"Bloque\s+(\S+)\s+N[uú]mero\s+(\S+)",
     re.IGNORECASE,
 )
+# Print-to-PDF a veces deja el movimiento en UNA línea:
+#   CONCEPTO TIPO NUMERO YYYY.MM.DD VALOR ABONO SALDO
+_MOV_INLINE_RE = re.compile(
+    r"^(.+?)\s+([A-Za-z]{2,6})\s+(\d{4,12})\s+"
+    r"(\d{4}\.\d{2}\.\d{2})\s+"
+    r"(-?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s+"
+    r"(-?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s+"
+    r"(-?\d{1,3}(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*$"
+)
+_DATE_INLINE_RE = re.compile(r"\d{4}\.\d{2}\.\d{2}")
 _DECORATIVE_CHARS = set("-._")
 _RUIDO_CONCEPTO = {
     "periodo",
@@ -234,6 +244,11 @@ def extraer_cabecera_portada(lineas: list[str]) -> dict:
         if inline:
             cabecera["bloque"] = inline.group(1)
             cabecera["apartamento"] = inline.group(2)
+            # Layout Print-to-PDF: "1502" / "Bloque 1 Numero 502" / "TITULAR"
+            if i > 0 and _CODIGO_CUENTA_RE.match(lineas[i - 1]):
+                cabecera["codigo_cuenta"] = lineas[i - 1]
+            if i + 1 < len(lineas) and _es_titular_candidato(lineas[i + 1]):
+                cabecera["titular"] = lineas[i + 1]
 
         if linea.lower() == "bloque" and i + 1 < len(lineas):
             cabecera["bloque"] = lineas[i + 1]
@@ -250,6 +265,52 @@ def extraer_cabecera_portada(lineas: list[str]) -> dict:
         cabecera["advertencia_encoding"] = True
 
     return cabecera
+
+
+def _extraer_movimientos_inline(
+    lineas: list[str], cabecera: dict
+) -> tuple[list[dict], list[dict], int]:
+    """
+    Parser para layout COLON en una sola línea (típico Print-to-PDF con texto).
+    Retorna (rows, omitidos_detalle, fechas_detectadas).
+    """
+    rows: list[dict] = []
+    omitidos: list[dict] = []
+    fechas = 0
+    for i, linea in enumerate(lineas):
+        if not _DATE_INLINE_RE.search(linea):
+            continue
+        m = _MOV_INLINE_RE.match(linea)
+        if not m:
+            # Línea con fecha pero no es movimiento (Periodo, ruido) — no cuenta
+            continue
+        fechas += 1
+        concepto, tipo, numero, fecha, valor_raw, abono_raw, saldo_raw = m.groups()
+        try:
+            mov = _validar_bloque_transaccion(
+                concepto.strip(),
+                tipo.strip(),
+                numero.strip(),
+                fecha.strip(),
+                valor_raw.strip(),
+                abono_raw.strip(),
+                saldo_raw.strip(),
+            )
+            mov["Archivo"] = None
+            mov["Titular"] = cabecera.get("titular")
+            mov["Bloque"] = cabecera.get("bloque")
+            mov["Apartamento"] = cabecera.get("apartamento")
+            mov["Codigo Cuenta"] = cabecera.get("codigo_cuenta")
+            rows.append(mov)
+        except (ValueError, TypeError) as exc:
+            omitidos.append(
+                {
+                    "indice": i,
+                    "fecha": fecha,
+                    "motivo": str(exc) or "bloque inline inválido",
+                }
+            )
+    return rows, omitidos, fechas
 
 
 def _validar_bloque_transaccion(concepto, tipo, numero, fecha, valor_raw, abono_raw, saldo_raw) -> dict:
@@ -462,7 +523,18 @@ def analizar_estado_cuenta_pdf(source: Source) -> dict:
             )
         i += 1
 
+    # Layout Print-to-PDF con texto en una línea (ej. 1502): fechas no van solas.
     if fechas_detectadas == 0:
+        rows_inl, omit_inl, fechas_inl = _extraer_movimientos_inline(lineas, cabecera)
+        if fechas_inl > 0:
+            rows = rows_inl
+            omitidos_detalle = omit_inl
+            fechas_detectadas = fechas_inl
+
+    if fechas_detectadas == 0:
+        # Texto presente pero inútil para el parser → último recurso IA.
+        if ia_fallback_habilitado():
+            return _analizar_via_ia_vision(pdf_bytes, len(reader.pages))
         raise EstadoCuentaPdfError(
             "No se detectaron fechas de movimiento. "
             "Verifique que sea un estado de cuenta COLON con texto seleccionable."
