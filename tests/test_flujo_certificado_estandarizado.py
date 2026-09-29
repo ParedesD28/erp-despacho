@@ -305,12 +305,136 @@ class FlujoProcesarCertificadoTests(unittest.TestCase):
             side_effect=fake_gen,
         ):
             buf, nombre, meta = flujo.procesar_y_generar_certificados(
-                cuentas, modo="generar"
+                cuentas, modo="generar",
+                representante_nombre="RL LOTE",
+                representante_cedula="12.345.678",
             )
         self.assertEqual(nombre, "Certificados_deuda.zip")
         self.assertEqual(meta["generados"], 2)
         with zipfile.ZipFile(buf) as zf:
             self.assertEqual(len(zf.namelist()), 2)
+
+    def test_generar_falla_early_sin_antefirma(self):
+        neon = {
+            "inmueble_id": 7,
+            "torre_apto": "2-42",
+            "conjunto_nombre": "MIRADOR",
+            "copropiedad_nombre": "MIRADOR PH",
+            "copropiedad_nit": "900",
+            "ciudad": "Pereira",
+            "titular_nombre": "MOSQUERA",
+            "titular_cedula": "1",
+            "deudores": [
+                {
+                    "contacto_id": 1,
+                    "nombre": "MOSQUERA",
+                    "cedula": "1",
+                    "es_principal": True,
+                }
+            ],
+            "propietarios": [
+                {
+                    "contacto_id": 1,
+                    "nombre": "MOSQUERA",
+                    "cedula": "1",
+                    "es_principal": True,
+                }
+            ],
+            "titular_principal": {
+                "contacto_id": 1,
+                "nombre": "MOSQUERA",
+                "cedula": "1",
+                "es_principal": True,
+            },
+            "clave_canonica": "2-42",
+        }
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            return_value=neon,
+        ), patch(
+            "certificados_deuda_flujo_service.generar_certificado_deuda",
+        ) as gen:
+            with self.assertRaises(flujo.CertificadoDatosFaltantesError) as ctx:
+                flujo.procesar_y_generar_certificados(
+                    [self._cuenta()],
+                    modo="generar",
+                )
+            self.assertEqual(ctx.exception.fuente, "antefirma")
+            gen.assert_not_called()
+
+    def test_generar_pasa_misma_antefirma_a_todos(self):
+        def _neon(iid, nombre):
+            return {
+                "inmueble_id": iid,
+                "torre_apto": f"{iid}-1",
+                "conjunto_nombre": "X",
+                "copropiedad_nombre": "X PH",
+                "copropiedad_nit": "1",
+                "ciudad": "Pereira",
+                "titular_nombre": nombre,
+                "titular_cedula": str(iid),
+                "deudores": [
+                    {
+                        "contacto_id": iid,
+                        "nombre": nombre,
+                        "cedula": str(iid),
+                        "es_principal": True,
+                    }
+                ],
+                "propietarios": [
+                    {
+                        "contacto_id": iid,
+                        "nombre": nombre,
+                        "cedula": str(iid),
+                        "es_principal": True,
+                    }
+                ],
+                "titular_principal": {
+                    "contacto_id": iid,
+                    "nombre": nombre,
+                    "cedula": str(iid),
+                    "es_principal": True,
+                },
+                "clave_canonica": f"{iid}-1",
+            }
+
+        cuentas = [
+            self._cuenta(archivo="a.pdf", titular="ANA", bloque="1", apartamento="1"),
+            self._cuenta(archivo="b.pdf", titular="BOB", bloque="2", apartamento="2"),
+        ]
+
+        def fake_resolver(**kwargs):
+            tit = kwargs.get("titular") or ""
+            if "ANA" in tit:
+                return _neon(1, "ANA")
+            return _neon(2, "BOB")
+
+        rl_kwargs = []
+
+        def fake_gen(**kwargs):
+            rl_kwargs.append(
+                (kwargs.get("representante_nombre"), kwargs.get("representante_cedula"))
+            )
+            name = f"Certificado_{kwargs.get('titular')}.docx"
+            return BytesIO(b"PK\x03\x04x"), name, {"inmueble_id": kwargs.get("inmueble_id")}
+
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            side_effect=fake_resolver,
+        ), patch(
+            "certificados_deuda_flujo_service.generar_certificado_deuda",
+            side_effect=fake_gen,
+        ):
+            buf, nombre, meta = flujo.procesar_y_generar_certificados(
+                cuentas,
+                modo="generar",
+                representante_nombre="  GLADYS RL  ",
+                representante_cedula=" 35.319.382 ",
+            )
+        self.assertEqual(nombre, "Certificados_deuda.zip")
+        self.assertEqual(meta["representante_nombre"], "GLADYS RL")
+        self.assertEqual(meta["representante_cedula"], "35.319.382")
+        self.assertEqual(rl_kwargs, [("GLADYS RL", "35.319.382"), ("GLADYS RL", "35.319.382")])
 
 
 class FiltrosLoteCertificadoTests(unittest.TestCase):
@@ -448,6 +572,8 @@ class FiltrosLoteCertificadoTests(unittest.TestCase):
                 titular_cedula="1",
                 copropiedad_nit="900",
                 solo_match_neon=True,
+                representante_nombre="RL",
+                representante_cedula="9",
             )
         self.assertEqual(meta["generados"], 1)
         self.assertEqual(gen_calls, ["ANA"])

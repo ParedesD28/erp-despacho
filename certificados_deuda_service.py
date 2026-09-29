@@ -113,17 +113,44 @@ class CertificadoDatosFaltantesError(ValueError):
     def __init__(self, faltantes: list[str], *, fuente: str = "neon"):
         self.faltantes = list(faltantes)
         self.fuente = fuente
+        detalle = "; ".join(self.faltantes)
         if fuente == "pdf":
-            detalle = "; ".join(self.faltantes)
             super().__init__(
                 "Faltan datos críticos para emitir con datos del PDF "
                 f"(sin inventar NIT/cédula): {detalle}. "
                 "Indique copropiedad_nit y titular_cedula en el body, "
                 "o cargue el maestro en Neon."
             )
+        elif fuente == "antefirma":
+            super().__init__(
+                "Falta la antefirma del representante legal (obligatoria "
+                f"antes de generar/descargar): {detalle}. "
+                "Indique representante_nombre y representante_cedula."
+            )
         else:
-            detalle = "; ".join(self.faltantes)
             super().__init__(f"Faltan datos críticos en Neon: {detalle}")
+
+
+def validar_antefirma_representante(
+    representante_nombre: str = "",
+    representante_cedula: str = "",
+) -> tuple[str, str]:
+    """
+    Early-return: exige nombre y cédula del representante legal (texto no vacío).
+
+    Misma antefirma se aplica a todos los Word del lote. No valida formato de
+    cédula más allá de no vacío.
+    """
+    nombre = (representante_nombre or "").strip()
+    cedula = (representante_cedula or "").strip()
+    faltantes: list[str] = []
+    if not nombre:
+        faltantes.append("nombre completo del representante legal")
+    if not cedula:
+        faltantes.append("cédula del representante legal")
+    if faltantes:
+        raise CertificadoDatosFaltantesError(faltantes, fuente="antefirma")
+    return nombre, cedula
 
 
 def datos_certificado_desde_pdf(
@@ -603,6 +630,9 @@ def generar_certificado_deuda(
         datos["copropiedad_nit"] = copropiedad_nit.strip()
 
     validar_datos_criticos(datos)
+    rl_nombre, rl_cedula = validar_antefirma_representante(
+        representante_nombre, representante_cedula
+    )
 
     filas = agrupar_capital_limpio(
         capital_limpio_a_demandar,
@@ -612,8 +642,8 @@ def generar_certificado_deuda(
         datos_neon=datos,
         filas=filas,
         ciudad=ciudad,
-        representante_nombre=representante_nombre,
-        representante_cedula=representante_cedula,
+        representante_nombre=rl_nombre,
+        representante_cedula=rl_cedula,
     )
     buffer = renderizar_docx(contexto)
     nombre = nombre_archivo_certificado(str(datos.get("titular_nombre") or ""))
@@ -625,6 +655,8 @@ def generar_certificado_deuda(
         "total_saldo": contexto.get("total_saldo"),
         "n_propietarios": len(contexto.get("propietarios") or []),
         "hay_varios_propietarios": bool(contexto.get("hay_varios_propietarios")),
+        "representante_nombre": rl_nombre,
+        "representante_cedula": rl_cedula,
         "placeholders": list(PLANTILLA_PLACEHOLDERS)
         + list(PLANTILLA_PLACEHOLDERS_MULTI),
         "plantilla": str(PLANTILLA_PATH.name),

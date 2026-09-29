@@ -484,6 +484,8 @@ class GeneracionWordTests(unittest.TestCase):
                 bloque="1",
                 apartamento="101",
                 titular="ANA PEREZ",
+                representante_nombre="RL",
+                representante_cedula="1",
             )
             kwargs = mocked.call_args.kwargs
             self.assertEqual(kwargs["titular"], "ANA PEREZ")
@@ -538,6 +540,71 @@ class GeneracionWordTests(unittest.TestCase):
             self.assertIn("sin inventar NIT/cédula", msg)
             self.assertIn("NIT", msg)
             self.assertIn("cédula", msg)
+
+    def test_validar_antefirma_exige_nombre_y_cedula(self):
+        with self.assertRaises(svc.CertificadoDatosFaltantesError) as ctx:
+            svc.validar_antefirma_representante("", "1.2.3")
+        self.assertEqual(ctx.exception.fuente, "antefirma")
+        self.assertIn("nombre completo", str(ctx.exception))
+
+        with self.assertRaises(svc.CertificadoDatosFaltantesError) as ctx2:
+            svc.validar_antefirma_representante("RL DEMO", "  ")
+        self.assertEqual(ctx2.exception.fuente, "antefirma")
+        self.assertIn("cédula", str(ctx2.exception))
+
+        nombre, cedula = svc.validar_antefirma_representante(
+            "  GLADYS DEMO  ", " 35.319.382 "
+        )
+        self.assertEqual(nombre, "GLADYS DEMO")
+        self.assertEqual(cedula, "35.319.382")
+
+    def test_generar_falla_sin_antefirma_representante(self):
+        with patch(
+            "certificados_deuda_service.resolver_datos_certificado",
+            return_value={
+                "inmueble_id": 7,
+                "copropiedad_nombre": "PH Demo",
+                "copropiedad_nit": "900",
+                "titular_nombre": "JUAN LOPEZ",
+                "titular_cedula": "555",
+                "torre_apto": "2-202",
+                "conjunto_nombre": "Demo",
+                "ciudad": "Pereira",
+            },
+        ):
+            with self.assertRaises(svc.CertificadoDatosFaltantesError) as ctx:
+                svc.generar_certificado_deuda(
+                    capital_limpio_a_demandar=[
+                        {
+                            "fecha": "2024.06.01",
+                            "concepto": "CUOTA ADMINISTRACION",
+                            "valor_a_demandar": 40,
+                        }
+                    ],
+                    inmueble_id=7,
+                )
+            self.assertEqual(ctx.exception.fuente, "antefirma")
+            self.assertIn("representante", str(ctx.exception).lower())
+
+    def test_contexto_incluye_representante_en_placeholders(self):
+        ctx = svc.construir_contexto_plantilla(
+            datos_neon={
+                "copropiedad_nombre": "PH",
+                "copropiedad_nit": "1",
+                "torre_apto": "1-1",
+                "conjunto_nombre": "PH",
+                "titular_nombre": "A",
+                "titular_cedula": "2",
+                "ciudad": "Pereira",
+            },
+            filas=[],
+            representante_nombre="RL FIRMA",
+            representante_cedula="99.888.777",
+        )
+        self.assertEqual(ctx["representante_nombre"], "RL FIRMA")
+        self.assertEqual(ctx["representante_cedula"], "99.888.777")
+        self.assertIn("representante_nombre", svc.PLANTILLA_PLACEHOLDERS)
+        self.assertIn("representante_cedula", svc.PLANTILLA_PLACEHOLDERS)
 
 
 class RbacCertificadoTests(unittest.TestCase):
