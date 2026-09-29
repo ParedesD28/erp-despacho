@@ -1,10 +1,12 @@
 """Flujo unificado: Bolsa Global → lookup Neon → Certificado(s) Word.
 
 Orquesta parseo ya cacheado / Bolsa + matching canónico + docxtpl.
-Regla multi-deudor: **un certificado por titular principal**
-(`inmueble_propietarios.es_principal`); co-propietarios se listan en preview
-pero no generan Word adicionales (más seguro litigiosamente: un demandado
-principal por unidad).
+
+Regla multi-propietario: **un Word por unidad (cuenta)** que relaciona a
+TODOS los propietarios de `inmueble_propietarios`. El principal llena
+`titular_*` de la plantilla; co-propietarios van en preview + contexto
+docxtpl. Misma Bolsa/capital de la cuenta — **nunca** prorratear.
+`sin_match` = fallo de cruce Neon (no confundir con co-propietarios).
 """
 from __future__ import annotations
 
@@ -25,16 +27,22 @@ from certificados_deuda_service import (
 )
 
 
-REGLA_MULTI_DEUDOR = "titular_principal"
+REGLA_MULTI_DEUDOR = "unidad_todos_propietarios"
 REGLA_MULTI_DEUDOR_DOC = (
-    "Un certificado por titular principal de inmueble_propietarios "
-    "(es_principal=true; si ninguno, el primero). Co-propietarios se informan "
-    "en preview pero no reciben Word aparte."
+    "Un Word por unidad (cuenta) que lista todos los propietarios "
+    "relacionados; titular_nombre/cedula = principal (o primero). "
+    "Misma Bolsa/capital de la cuenta — no prorratear. "
+    "Co-propietarios no reciben Word aparte. "
+    "sin_match = unidad/conjunto no hallado en Neon (no son codeudores)."
 )
 
 # Estados con match Neon usable (sin fallback PDF).
 ESTADOS_MATCH_NEON = frozenset({"ok", "varios_propietarios"})
 ESTADOS_EMITIBLES = frozenset({"ok", "varios_propietarios", "fallback_pdf"})
+
+MOTIVO_SIN_MATCH = "sin_inmueble_neon"
+MOTIVO_SIN_CAPITAL = "sin_capital_limpio"
+MOTIVO_OMITIDO = "pdf_omitido"
 
 
 def indices_filtrados_preview(
@@ -84,6 +92,29 @@ def indices_filtrados_preview(
     return out
 
 
+def resumen_sin_match(preview: dict[str, Any]) -> list[dict[str, Any]]:
+    """Filas compactas para UI: archivo, unidad PDF, motivo (no son co-propietarios)."""
+    out: list[dict[str, Any]] = []
+    for r in preview.get("resultados") or []:
+        if r.get("estado") != "sin_match":
+            continue
+        out.append(
+            {
+                "archivo": r.get("archivo") or "",
+                "titular_pdf": r.get("titular_pdf") or "",
+                "conjunto": r.get("conjunto") or "",
+                "bloque": r.get("bloque") or "",
+                "apartamento": r.get("apartamento") or "",
+                "clave_canonica": r.get("clave_canonica") or "",
+                "codigo_cuenta": r.get("codigo_cuenta") or "",
+                "motivo": r.get("motivo") or MOTIVO_SIN_MATCH,
+                "motivo_detalle": r.get("motivo_detalle") or r.get("error") or "",
+                "criterios": r.get("criterios") or "",
+            }
+        )
+    return out
+
+
 def _meta_cuenta_bolsa(resultado: dict[str, Any]) -> dict[str, Any]:
     bloque = str(resultado.get("bloque") or "").strip()
     apto = str(resultado.get("apartamento") or "").strip()
@@ -129,6 +160,9 @@ def _lookup_cuenta(
             "inmueble_id": None,
             "deudores": [],
             "titular_seleccionado": None,
+            "advertencias": [],
+            "motivo": MOTIVO_OMITIDO,
+            "motivo_detalle": "PDF omitido / no parseado",
             "error": "PDF omitido / no parseado",
             "criterios": "",
         }
@@ -139,6 +173,9 @@ def _lookup_cuenta(
             "inmueble_id": None,
             "deudores": [],
             "titular_seleccionado": None,
+            "advertencias": [],
+            "motivo": MOTIVO_SIN_CAPITAL,
+            "motivo_detalle": "Sin capital limpio a demandar (Bolsa)",
             "error": "Sin capital limpio a demandar",
             "criterios": "",
         }
@@ -173,6 +210,7 @@ def _lookup_cuenta(
         principal = hallado.get("titular_principal") or (
             deudores[0] if deudores else None
         )
+        advertencias = list(hallado.get("advertencias") or [])
         estado = "ok"
         if len(deudores) > 1:
             estado = "varios_propietarios"
@@ -186,7 +224,11 @@ def _lookup_cuenta(
             "copropiedad_nit": hallado.get("copropiedad_nit"),
             "deudores": deudores,
             "titular_seleccionado": principal,
+            "advertencias": advertencias,
+            "diagnostico_propietarios": hallado.get("diagnostico_propietarios"),
             "regla_multi_deudor": REGLA_MULTI_DEUDOR,
+            "motivo": None,
+            "motivo_detalle": None,
             "error": None,
             "criterios": criterios,
             "datos_neon": hallado,
@@ -203,6 +245,7 @@ def _lookup_cuenta(
                     "nombre": meta["titular_pdf"] or None,
                     "cedula": (titular_cedula or "").strip() or None,
                     "es_principal": True,
+                    "rol": "principal",
                 }
             ],
             "titular_seleccionado": {
@@ -210,28 +253,40 @@ def _lookup_cuenta(
                 "nombre": meta["titular_pdf"] or None,
                 "cedula": (titular_cedula or "").strip() or None,
                 "es_principal": True,
+                "rol": "principal",
             },
+            "advertencias": [
+                "Fallback PDF: sin lista de co-propietarios Neon "
+                "(cargue el maestro para relacionar a todos)."
+            ],
             "copropiedad_nit": (copropiedad_nit or "").strip() or None,
             "copropiedad_nombre": (copropiedad_nombre or "").strip()
             or meta["conjunto"]
             or None,
             "regla_multi_deudor": REGLA_MULTI_DEUDOR,
+            "motivo": None,
+            "motivo_detalle": None,
             "error": None,
             "criterios": criterios,
             "datos_neon": None,
         }
 
+    detalle = (
+        "No se encontró inmueble/titular en Neon para este conjunto+unidad. "
+        "No son co-propietarios: el PDF parseó bien pero el maestro no cruzó. "
+        "Active 'Permitir datos del PDF' e indique NIT y cédula, "
+        "o cargue el inmueble en Neon."
+    )
     return {
         **meta,
         "estado": "sin_match",
         "inmueble_id": None,
         "deudores": [],
         "titular_seleccionado": None,
-        "error": (
-            "No se encontró inmueble/titular en Neon. "
-            "Active 'Permitir datos del PDF' e indique NIT y cédula, "
-            "o cargue el maestro."
-        ),
+        "advertencias": [],
+        "motivo": MOTIVO_SIN_MATCH,
+        "motivo_detalle": detalle,
+        "error": detalle,
         "criterios": criterios,
     }
 
@@ -269,7 +324,7 @@ def procesar_lote_certificados(
         and x.get("capital_limpio_a_demandar")
     ]
     sin_match = [x for x in resultados if x.get("estado") == "sin_match"]
-    return {
+    preview = {
         "cuentas_evaluadas": bolsa.get("cuentas_evaluadas") or 0,
         "cuentas_con_capital": bolsa.get("cuentas_con_capital") or 0,
         "total_capital_demandado_lote": bolsa.get("total_capital_demandado_lote") or 0,
@@ -280,6 +335,8 @@ def procesar_lote_certificados(
         "resultados": resultados,
         "bolsa": bolsa,
     }
+    preview["sin_match_detalle"] = resumen_sin_match(preview)
+    return preview
 
 
 def _generar_uno(
@@ -294,7 +351,7 @@ def _generar_uno(
     copropiedad_nombre: str = "",
     ciudad: str = "",
 ) -> tuple[BytesIO, str, dict[str, Any]]:
-    """Genera un certificado para el titular principal de un resultado preview."""
+    """Genera un certificado por unidad (principal + lista completa en contexto)."""
     neon = item.get("datos_neon")
     inmueble_id = item.get("inmueble_id")
     sel = item.get("titular_seleccionado") or {}
@@ -355,7 +412,8 @@ def generar_certificados_desde_preview(
 
     - 1 certificado → docx suelto
     - varios → zip `Certificados_deuda.zip`
-    Regla: un Word por cuenta/unidad al **titular principal**.
+    Regla: un Word por cuenta/unidad (todos los propietarios relacionados
+    en contexto; destinatario plantilla = principal).
     """
     resultados = list(preview.get("resultados") or [])
     if indices is not None:

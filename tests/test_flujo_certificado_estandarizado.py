@@ -148,7 +148,7 @@ class FlujoProcesarCertificadoTests(unittest.TestCase):
         self.assertEqual(item["titular_seleccionado"]["nombre"], "MOSQUERA MOSQUERA LUZ ELVIRA")
         self.assertTrue(item["titular_seleccionado"]["es_principal"])
         self.assertEqual(len(item["deudores"]), 2)
-        self.assertEqual(preview["regla_multi_deudor"], "titular_principal")
+        self.assertEqual(preview["regla_multi_deudor"], "unidad_todos_propietarios")
 
     def test_preview_sin_match(self):
         with patch(
@@ -159,6 +159,13 @@ class FlujoProcesarCertificadoTests(unittest.TestCase):
         self.assertEqual(preview["sin_match"], 1)
         self.assertEqual(preview["emitibles"], 0)
         self.assertEqual(preview["resultados"][0]["estado"], "sin_match")
+        self.assertEqual(preview["resultados"][0]["motivo"], "sin_inmueble_neon")
+        self.assertEqual(len(preview["sin_match_detalle"]), 1)
+        self.assertEqual(preview["sin_match_detalle"][0]["archivo"], "a.pdf")
+        self.assertIn("02", preview["sin_match_detalle"][0]["bloque"] or "02")
+        # sin_match ≠ co-propietarios
+        self.assertEqual(preview["resultados"][0]["deudores"], [])
+        self.assertNotEqual(preview["resultados"][0]["estado"], "varios_propietarios")
 
     def test_preview_fallback_pdf(self):
         with patch(
@@ -511,6 +518,165 @@ class TitularPrincipalHelperTests(unittest.TestCase):
     def test_fallback_primero(self):
         props = [{"nombre": "A", "es_principal": False}]
         self.assertEqual(repo.titular_principal_de_propietarios(props)["nombre"], "A")
+
+    def test_diagnostico_sin_principal_y_varios(self):
+        sin = [
+            {"nombre": "A", "cedula": "1", "es_principal": False},
+            {"nombre": "B", "cedula": "2", "es_principal": False},
+        ]
+        d = repo.diagnosticar_propietarios(sin)
+        self.assertTrue(d["sin_principal_marcado"])
+        self.assertEqual(d["principal"]["nombre"], "A")
+
+        varios = [
+            {"nombre": "A", "cedula": "1", "es_principal": True},
+            {"nombre": "B", "cedula": "2", "es_principal": True},
+        ]
+        d2 = repo.diagnosticar_propietarios(varios)
+        self.assertTrue(d2["varios_principales"])
+        self.assertEqual(d2["principal"]["nombre"], "A")
+
+    def test_diagnostico_cedula_secundario_y_pdf_distinto(self):
+        props = [
+            {"nombre": "PRINCIPAL", "cedula": "1", "es_principal": True},
+            {"nombre": "SECUNDARIO", "cedula": None, "es_principal": False},
+        ]
+        d = repo.diagnosticar_propietarios(props, titular_pdf="OTRO TITULAR PDF")
+        self.assertTrue(d["titular_pdf_distinto_de_principal"])
+        self.assertTrue(any("Cédula faltante" in a for a in d["advertencias"]))
+
+    def test_resumen_sin_match_helper(self):
+        preview = {
+            "resultados": [
+                {"estado": "ok", "archivo": "x.pdf"},
+                {
+                    "estado": "sin_match",
+                    "archivo": "fail.pdf",
+                    "titular_pdf": "T",
+                    "bloque": "9",
+                    "apartamento": "401",
+                    "clave_canonica": "9-401",
+                    "conjunto": "X",
+                    "motivo": "sin_inmueble_neon",
+                    "motivo_detalle": "No hallado",
+                    "criterios": "conjunto='X'",
+                },
+            ]
+        }
+        det = flujo.resumen_sin_match(preview)
+        self.assertEqual(len(det), 1)
+        self.assertEqual(det[0]["archivo"], "fail.pdf")
+        self.assertEqual(det[0]["clave_canonica"], "9-401")
+
+
+class MultiPropietariosContextoYMontosTests(unittest.TestCase):
+    """Regresión: lista completa, sin prorrateo, cédula secundaria opcional."""
+
+    def test_contexto_incluye_todos_sin_cambiar_total(self):
+        capital = [
+            {
+                "fecha": "2024.02.01",
+                "concepto": "CUOTA ADMINISTRACION",
+                "valor_a_demandar": 30000,
+            },
+            {
+                "fecha": "2024.03.01",
+                "concepto": "CUOTA ADMINISTRACION",
+                "valor_a_demandar": 30000,
+            },
+        ]
+        filas = svc.agrupar_capital_limpio(capital)
+        datos_uno = {
+            "copropiedad_nombre": "PH",
+            "copropiedad_nit": "900",
+            "ciudad": "Pereira",
+            "torre_apto": "2-42",
+            "conjunto_nombre": "MIRADOR",
+            "titular_nombre": "A",
+            "titular_cedula": "1",
+            "propietarios": [
+                {"nombre": "A", "cedula": "1", "es_principal": True},
+            ],
+        }
+        datos_varios = {
+            **datos_uno,
+            "propietarios": [
+                {"nombre": "A", "cedula": "1", "es_principal": True},
+                {"nombre": "B", "cedula": None, "es_principal": False},
+                {"nombre": "C", "cedula": "3", "es_principal": False},
+            ],
+        }
+        ctx1 = svc.construir_contexto_plantilla(datos_neon=datos_uno, filas=filas)
+        ctxN = svc.construir_contexto_plantilla(datos_neon=datos_varios, filas=filas)
+        self.assertEqual(ctx1["total_saldo"], ctxN["total_saldo"])
+        self.assertEqual(ctx1["total_saldo"], "$ 60.000")
+        self.assertFalse(ctx1["hay_varios_propietarios"])
+        self.assertTrue(ctxN["hay_varios_propietarios"])
+        self.assertEqual(len(ctxN["propietarios"]), 3)
+        self.assertIn("principal", ctxN["propietarios_texto"])
+        self.assertEqual(ctxN["titular_nombre"], "A")
+        self.assertEqual(ctxN["titular_cedula"], "1")
+        # Secundario sin cédula no bloquea contexto
+        self.assertEqual(ctxN["propietarios"][1]["cedula"], "")
+
+    def test_preview_sin_principal_usa_primero(self):
+        neon = {
+            "inmueble_id": 42,
+            "torre_apto": "2-42",
+            "conjunto_nombre": "MIRADOR",
+            "copropiedad_nombre": "MIRADOR PH",
+            "copropiedad_nit": "900",
+            "ciudad": "Pereira",
+            "titular_nombre": "A",
+            "titular_cedula": "1",
+            "deudores": [
+                {"contacto_id": 1, "nombre": "A", "cedula": "1", "es_principal": False},
+                {"contacto_id": 2, "nombre": "B", "cedula": "2", "es_principal": False},
+            ],
+            "propietarios": None,
+            "titular_principal": {
+                "contacto_id": 1,
+                "nombre": "A",
+                "cedula": "1",
+                "es_principal": False,
+            },
+            "advertencias": [
+                "Ningún propietario marcado es_principal; se usa el primero de la lista."
+            ],
+            "clave_canonica": "2-42",
+        }
+        neon["propietarios"] = neon["deudores"]
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            return_value=neon,
+        ):
+            preview = flujo.procesar_lote_certificados(
+                [
+                    {
+                        "archivo": "a.pdf",
+                        "titular": "A",
+                        "bloque": "02",
+                        "apartamento": "042",
+                        "codigo_cuenta": "1",
+                        "conjunto": "MIRADOR",
+                        "movimientos_extraidos": 1,
+                        "error": None,
+                        "rows": [
+                            {
+                                "Concepto": "CUOTA ADMINISTRACION",
+                                "Fecha": "2024.02.01",
+                                "Valor": 30000,
+                                "Abono": 0,
+                                "Saldo": 30000,
+                            }
+                        ],
+                    }
+                ]
+            )
+        item = preview["resultados"][0]
+        self.assertEqual(item["estado"], "varios_propietarios")
+        self.assertEqual(item["titular_seleccionado"]["nombre"], "A")
+        self.assertEqual(len(item["deudores"]), 2)
 
 
 if __name__ == "__main__":

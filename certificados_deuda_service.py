@@ -42,6 +42,14 @@ PLANTILLA_PLACEHOLDERS: tuple[str, ...] = (
     "total_saldo",
 )
 
+# Contexto extra compatible (plantilla actual no los usa; no rompe docxtpl).
+PLANTILLA_PLACEHOLDERS_MULTI: tuple[str, ...] = (
+    "propietarios",
+    "propietarios_texto",
+    "propietarios_nombres",
+    "hay_varios_propietarios",
+)
+
 _MESES_ES = (
     "",
     "ENERO",
@@ -377,6 +385,57 @@ def nombre_archivo_certificado(titular_nombre: str) -> str:
     return f"Certificado_{_safe_filename(titular_nombre)}.docx"
 
 
+def _formatear_propietarios_contexto(
+    datos_neon: dict[str, Any],
+) -> dict[str, Any]:
+    """Lista completa de propietarios para docxtpl (compatible / opcional)."""
+    raw = list(
+        datos_neon.get("propietarios")
+        or datos_neon.get("deudores")
+        or []
+    )
+    if not raw and (datos_neon.get("titular_nombre") or datos_neon.get("titular_cedula")):
+        raw = [
+            {
+                "nombre": datos_neon.get("titular_nombre"),
+                "cedula": datos_neon.get("titular_cedula"),
+                "es_principal": True,
+                "rol": "principal",
+            }
+        ]
+    propietarios: list[dict[str, Any]] = []
+    for p in raw:
+        es_prin = bool(p.get("es_principal"))
+        propietarios.append(
+            {
+                "nombre": (p.get("nombre") or "").strip(),
+                "cedula": (p.get("cedula") or "").strip(),
+                "es_principal": es_prin,
+                "rol": (p.get("rol") or ("principal" if es_prin else "co_propietario")),
+            }
+        )
+    partes_texto: list[str] = []
+    nombres: list[str] = []
+    for p in propietarios:
+        nom = p["nombre"] or "—"
+        nombres.append(nom)
+        ced = p["cedula"] or "s/d"
+        tag = " (principal)" if p["es_principal"] else ""
+        partes_texto.append(f"{nom} (CC {ced}){tag}")
+    if len(nombres) <= 1:
+        nombres_join = nombres[0] if nombres else ""
+    elif len(nombres) == 2:
+        nombres_join = f"{nombres[0]} y {nombres[1]}"
+    else:
+        nombres_join = ", ".join(nombres[:-1]) + f" y {nombres[-1]}"
+    return {
+        "propietarios": propietarios,
+        "propietarios_texto": "; ".join(partes_texto),
+        "propietarios_nombres": nombres_join,
+        "hay_varios_propietarios": len(propietarios) > 1,
+    }
+
+
 def construir_contexto_plantilla(
     *,
     datos_neon: dict[str, Any],
@@ -396,6 +455,7 @@ def construir_contexto_plantilla(
     )
     copropiedad = (datos_neon.get("copropiedad_nombre") or "").strip()
     conjunto = (datos_neon.get("conjunto_nombre") or copropiedad).strip()
+    multi = _formatear_propietarios_contexto(datos_neon)
     return {
         "copropiedad_nombre": copropiedad,
         "copropiedad_nit": (datos_neon.get("copropiedad_nit") or "").strip(),
@@ -403,6 +463,7 @@ def construir_contexto_plantilla(
         "ciudad_mayus": ciudad_final.upper(),
         "torre_apto": (datos_neon.get("torre_apto") or "").strip(),
         "conjunto_nombre": conjunto,
+        # Destinatario plantilla oficial = principal (o único).
         "titular_nombre": (datos_neon.get("titular_nombre") or "").strip(),
         "titular_cedula": (datos_neon.get("titular_cedula") or "").strip(),
         "dia_emision": str(emision.day),
@@ -422,6 +483,7 @@ def construir_contexto_plantilla(
             for f in filas
         ],
         "total_saldo": _fmt_cop(total),
+        **multi,
     }
 
 
@@ -480,6 +542,7 @@ def generar_certificado_deuda(
         apartamento=apartamento,
         titular=titular,
         conn=conn,
+        incluir_propietarios=True,
     )
     if not datos:
         criterios = describir_busqueda(
@@ -504,6 +567,15 @@ def generar_certificado_deuda(
                 copropiedad_nit=copropiedad_nit,
                 ciudad=ciudad,
             )
+            datos["propietarios"] = [
+                {
+                    "nombre": datos.get("titular_nombre"),
+                    "cedula": datos.get("titular_cedula"),
+                    "es_principal": True,
+                    "rol": "principal",
+                }
+            ]
+            datos["deudores"] = list(datos["propietarios"])
         else:
             raise CertificadoNoEncontradoError(
                 "No se encontró inmueble/titular en Neon. "
@@ -516,6 +588,20 @@ def generar_certificado_deuda(
                 "(requiere NIT y cédula explícitos; no se inventan).",
                 criterios=criterios,
             )
+    # Overrides explícitos del body (fallback / corrección manual) sin inventar.
+    if (titular or "").strip():
+        # No reemplaza principal Neon salvo fallback PDF (sin inmueble_id).
+        if datos.get("fuente") == "pdf" or not datos.get("titular_nombre"):
+            datos["titular_nombre"] = titular.strip()
+    if (titular_cedula or "").strip() and (
+        datos.get("fuente") == "pdf" or not (datos.get("titular_cedula") or "").strip()
+    ):
+        datos["titular_cedula"] = titular_cedula.strip()
+    if (copropiedad_nombre or "").strip() and not (datos.get("copropiedad_nombre") or "").strip():
+        datos["copropiedad_nombre"] = copropiedad_nombre.strip()
+    if (copropiedad_nit or "").strip() and not (datos.get("copropiedad_nit") or "").strip():
+        datos["copropiedad_nit"] = copropiedad_nit.strip()
+
     validar_datos_criticos(datos)
 
     filas = agrupar_capital_limpio(
@@ -536,7 +622,11 @@ def generar_certificado_deuda(
         "titular_nombre": datos.get("titular_nombre"),
         "torre_apto": datos.get("torre_apto"),
         "filas": len(filas),
-        "placeholders": list(PLANTILLA_PLACEHOLDERS),
+        "total_saldo": contexto.get("total_saldo"),
+        "n_propietarios": len(contexto.get("propietarios") or []),
+        "hay_varios_propietarios": bool(contexto.get("hay_varios_propietarios")),
+        "placeholders": list(PLANTILLA_PLACEHOLDERS)
+        + list(PLANTILLA_PLACEHOLDERS_MULTI),
         "plantilla": str(PLANTILLA_PATH.name),
         "fuente": datos.get("fuente") or "neon",
     }
