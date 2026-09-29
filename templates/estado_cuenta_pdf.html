@@ -25,7 +25,9 @@
             no altera la descarga de transcripción.
             Los certificados se unifican en <strong>un solo ZIP plano</strong> con todos
             los grupos de análisis seleccionados (no solo el último grupo).
-            Solo PDF nativos COLON (no escaneos).
+            Preferir PDF nativos COLON (texto seleccionable). Si el PDF es solo imagen
+            (Print to PDF / escaneo) y hay <code>ANTHROPIC_API_KEY</code>, se usa
+            fallback IA solo para estructurar movimientos; Bolsa Global sigue en código.
         </p>
     </div>
 
@@ -1132,9 +1134,21 @@
             visibles += 1;
             const tr = document.createElement('tr');
             const ok = !c.error && c.movimientos_extraidos > 0 && !c.alerta_calidad;
-            const estado = c.error
-                ? `<span class="text-red-700 font-semibold">${esc(c.error)}</span>`
-                : (ok ? '<span class="text-emerald-700 font-semibold">OK</span>' : '<span class="text-amber-700 font-semibold">Revisar</span>');
+            const ia = (c.fuente_parseo || '') === 'ia_vision';
+            const adv = (c.advertencias || []).filter(Boolean);
+            let estado;
+            if (c.error) {
+                estado = `<span class="text-red-700 font-semibold">${esc(c.error)}</span>`;
+            } else if (ia) {
+                estado = `<span class="text-amber-800 font-semibold">PDF sin texto → procesado con IA</span>`
+                    + (adv.length
+                        ? `<p class="text-xs text-amber-700 mt-1">${esc(adv[0])}</p>`
+                        : `<p class="text-xs text-amber-700 mt-1">Revise cabecera y montos antes de Bolsa/certificado.</p>`);
+            } else if (ok) {
+                estado = '<span class="text-emerald-700 font-semibold">OK</span>';
+            } else {
+                estado = '<span class="text-amber-700 font-semibold">Revisar</span>';
+            }
             tr.innerHTML = `
                 <td class="px-3 py-2 font-medium text-slate-700">${esc(c.archivo || '')}</td>
                 <td class="px-3 py-2 text-slate-600">${esc(c.conjunto || '—')}</td>

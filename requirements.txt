@@ -11,6 +11,7 @@ bcrypt
 requests
 reportlab
 pypdf
+anthropic>=0.40.0
 python-docx
 docxtpl
 pytest
