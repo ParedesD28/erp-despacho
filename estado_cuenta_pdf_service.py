@@ -19,6 +19,12 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from pypdf import PdfReader
 
+from estado_cuenta_ia_vision import (
+    EstadoCuentaIaError,
+    extraer_estado_cuenta_via_ia,
+    ia_fallback_habilitado,
+)
+
 Source = Union[str, Path, bytes, bytearray, BinaryIO]
 
 MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB por archivo
@@ -289,6 +295,89 @@ def _auditar_continuidad_saldo(rows: list[dict]) -> int:
     return inconsistencias
 
 
+def _pdf_bytes_desde_source(source: Source) -> bytes:
+    """Obtiene bytes del PDF sin consumir un stream no seekable más de una vez."""
+    if isinstance(source, (str, Path)):
+        return Path(source).read_bytes()
+    if isinstance(source, (bytes, bytearray)):
+        return bytes(source)
+    stream = _as_pdf_stream(source)
+    return stream.getvalue()
+
+
+def _resultado_analisis(
+    *,
+    rows: list[dict],
+    cabecera: dict,
+    fechas_detectadas: int,
+    omitidos_detalle: list[dict],
+    paginas_leidas: int,
+    fuente_parseo: str,
+    advertencias: list[str] | None = None,
+) -> dict:
+    inconsistencias_saldo = _auditar_continuidad_saldo(rows)
+    bloques_omitidos = len(omitidos_detalle)
+    adv = list(advertencias or [])
+    if fuente_parseo == "ia_vision":
+        adv.append(
+            "PDF sin texto → procesado con IA. Revise cabecera y montos antes de Bolsa/certificado."
+        )
+    if inconsistencias_saldo > 0:
+        adv.append(
+            f"Continuidad de saldo: {inconsistencias_saldo} inconsistencia(s) detectada(s)."
+        )
+    alerta = (
+        bloques_omitidos > 0
+        or inconsistencias_saldo > 0
+        or fuente_parseo == "ia_vision"
+    )
+    return {
+        "rows": rows,
+        "cabecera": cabecera,
+        "titular": cabecera.get("titular"),
+        "bloque": cabecera.get("bloque"),
+        "apartamento": cabecera.get("apartamento"),
+        "codigo_cuenta": cabecera.get("codigo_cuenta"),
+        "conjunto": cabecera.get("conjunto"),
+        "fechas_detectadas": fechas_detectadas,
+        "movimientos_extraidos": len(rows),
+        "bloques_omitidos": bloques_omitidos,
+        "omitidos_detalle": omitidos_detalle[:20],
+        "inconsistencias_saldo": inconsistencias_saldo,
+        "advertencia_encoding": bool(cabecera.get("advertencia_encoding")),
+        "saldo_final": rows[-1]["Saldo"] if rows else None,
+        "muestra_inicio": rows[:3],
+        "muestra_fin": rows[-3:] if rows else [],
+        "paginas_leidas": paginas_leidas,
+        "alerta_calidad": alerta,
+        "fuente_parseo": fuente_parseo,
+        "advertencias": adv,
+    }
+
+
+def _analizar_via_ia_vision(pdf_bytes: bytes, paginas: int) -> dict:
+    """Fallback Claude → misma estructura interna que el parser COLON texto."""
+    try:
+        parcial = extraer_estado_cuenta_via_ia(pdf_bytes)
+    except EstadoCuentaIaError as exc:
+        raise EstadoCuentaPdfError(str(exc)) from exc
+    except Exception as exc:
+        raise EstadoCuentaPdfError(
+            f"Fallback IA falló: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    cabecera = dict(parcial["cabecera"])
+    rows = list(parcial["rows"])
+    return _resultado_analisis(
+        rows=rows,
+        cabecera=cabecera,
+        fechas_detectadas=int(parcial.get("fechas_detectadas") or len(rows)),
+        omitidos_detalle=list(parcial.get("omitidos_detalle") or []),
+        paginas_leidas=max(0, paginas - 1),
+        fuente_parseo="ia_vision",
+    )
+
+
 def analizar_estado_cuenta_pdf(source: Source) -> dict:
     """
     Extrae cabecera (hoja 1), movimientos y métricas de calidad.
@@ -297,8 +386,10 @@ def analizar_estado_cuenta_pdf(source: Source) -> dict:
       1) Validación estructural de cada bloque (anti-mala transcripción)
       2) Buffer continuo entre páginas + omisiones auditables
       3) Reparación de encoding + detección de PDF sin texto / �
+      4) Fallback IA (Claude) solo si no hay texto nativo y el flag lo permite
     """
-    reader = PdfReader(_as_pdf_stream(source))
+    pdf_bytes = _pdf_bytes_desde_source(source)
+    reader = PdfReader(io.BytesIO(pdf_bytes))
     if len(reader.pages) < 2:
         raise EstadoCuentaPdfError("El PDF debe tener al menos 2 páginas (se omite la portada).")
 
@@ -314,10 +405,15 @@ def analizar_estado_cuenta_pdf(source: Source) -> dict:
         lineas.extend(_limpiar_lineas(texto))
 
     chars_portada = sum(len(x) for x in lineas_portada)
-    if chars_portada + chars_movimiento < _MIN_CHARS_TEXTO or not lineas:
+    sin_texto = chars_portada + chars_movimiento < _MIN_CHARS_TEXTO or not lineas
+    if sin_texto:
+        if ia_fallback_habilitado():
+            return _analizar_via_ia_vision(pdf_bytes, len(reader.pages))
         raise EstadoCuentaPdfError(
             "El PDF no tiene texto seleccionable suficiente. "
-            "Parece un escaneo o PDF solo imagen; exporte nuevamente desde COLON (no imprimir a PDF)."
+            "Parece un escaneo o PDF solo imagen; exporte nuevamente desde COLON "
+            "(no imprimir a PDF), o configure ANTHROPIC_API_KEY y "
+            "ESTADO_CUENTA_IA_FALLBACK=1 para el fallback con IA."
         )
 
     rows: list[dict] = []
@@ -372,29 +468,14 @@ def analizar_estado_cuenta_pdf(source: Source) -> dict:
             "Verifique que sea un estado de cuenta COLON con texto seleccionable."
         )
 
-    inconsistencias_saldo = _auditar_continuidad_saldo(rows)
-    bloques_omitidos = len(omitidos_detalle)
-
-    return {
-        "rows": rows,
-        "cabecera": cabecera,
-        "titular": cabecera.get("titular"),
-        "bloque": cabecera.get("bloque"),
-        "apartamento": cabecera.get("apartamento"),
-        "codigo_cuenta": cabecera.get("codigo_cuenta"),
-        "conjunto": cabecera.get("conjunto"),
-        "fechas_detectadas": fechas_detectadas,
-        "movimientos_extraidos": len(rows),
-        "bloques_omitidos": bloques_omitidos,
-        "omitidos_detalle": omitidos_detalle[:20],
-        "inconsistencias_saldo": inconsistencias_saldo,
-        "advertencia_encoding": bool(cabecera.get("advertencia_encoding")),
-        "saldo_final": rows[-1]["Saldo"] if rows else None,
-        "muestra_inicio": rows[:3],
-        "muestra_fin": rows[-3:] if rows else [],
-        "paginas_leidas": max(0, len(reader.pages) - 1),
-        "alerta_calidad": bloques_omitidos > 0 or inconsistencias_saldo > 0,
-    }
+    return _resultado_analisis(
+        rows=rows,
+        cabecera=cabecera,
+        fechas_detectadas=fechas_detectadas,
+        omitidos_detalle=omitidos_detalle,
+        paginas_leidas=max(0, len(reader.pages) - 1),
+        fuente_parseo="colon_texto",
+    )
 
 
 def extraer_movimientos_estado_cuenta(source: Source) -> list[dict]:
@@ -693,6 +774,8 @@ def _cuenta_error(filename: str, mensaje: str) -> dict:
         "advertencia_encoding": False,
         "saldo_final": None,
         "alerta_calidad": True,
+        "fuente_parseo": None,
+        "advertencias": [],
         "rows": [],
         "error": mensaje,
     }
@@ -722,6 +805,8 @@ def _procesar_un_pdf_en_lote(filename: str, contenido: bytes) -> dict:
             "advertencia_encoding": uno.get("advertencia_encoding", False),
             "saldo_final": uno.get("saldo_final"),
             "alerta_calidad": bool(uno.get("alerta_calidad")),
+            "fuente_parseo": uno.get("fuente_parseo") or "colon_texto",
+            "advertencias": list(uno.get("advertencias") or []),
             "rows": uno["rows"],
             "error": None,
         }
