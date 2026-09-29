@@ -32,6 +32,57 @@ REGLA_MULTI_DEUDOR_DOC = (
     "en preview pero no reciben Word aparte."
 )
 
+# Estados con match Neon usable (sin fallback PDF).
+ESTADOS_MATCH_NEON = frozenset({"ok", "varios_propietarios"})
+ESTADOS_EMITIBLES = frozenset({"ok", "varios_propietarios", "fallback_pdf"})
+
+
+def indices_filtrados_preview(
+    preview: dict[str, Any],
+    *,
+    conjunto: str = "",
+    busqueda: str = "",
+    solo_match_neon: bool = False,
+    solo_emitibles: bool = False,
+) -> list[int]:
+    """
+    Índices de `preview['resultados']` que pasan filtros de lote multi-conjunto.
+
+    Pensado para `modo=generar` + `indices=[…]` sin re-mezclar deudores.
+    """
+    resultados = list(preview.get("resultados") or [])
+    conj = (conjunto or "").strip().casefold()
+    q = (busqueda or "").strip().casefold()
+    out: list[int] = []
+    for i, r in enumerate(resultados):
+        estado = str(r.get("estado") or "")
+        if solo_match_neon and estado not in ESTADOS_MATCH_NEON:
+            continue
+        if solo_emitibles and estado not in ESTADOS_EMITIBLES:
+            continue
+        if conj:
+            nombre = str(r.get("conjunto") or r.get("conjunto_nombre") or "").casefold()
+            if conj not in nombre and nombre != conj:
+                continue
+        if q:
+            haystack = " ".join(
+                str(r.get(k) or "")
+                for k in (
+                    "titular_pdf",
+                    "titular",
+                    "archivo",
+                    "bloque",
+                    "apartamento",
+                    "clave_canonica",
+                    "codigo_cuenta",
+                    "conjunto",
+                )
+            ).casefold()
+            if q not in haystack:
+                continue
+        out.append(i)
+    return out
+
 
 def _meta_cuenta_bolsa(resultado: dict[str, Any]) -> dict[str, Any]:
     bloque = str(resultado.get("bloque") or "").strip()
@@ -393,6 +444,9 @@ def procesar_y_generar_certificados(
     dia_vencimiento: int = 5,
     ciudad: str = "",
     indices: Optional[list[int]] = None,
+    filtro_conjunto: str = "",
+    filtro_busqueda: str = "",
+    solo_match_neon: bool = False,
 ) -> dict[str, Any] | tuple[BytesIO, str, dict[str, Any]]:
     """
     Punto único: preview (dict) o generar (buffer, filename, meta).
@@ -400,6 +454,9 @@ def procesar_y_generar_certificados(
     `modo`:
       - `preview` → JSON con deudores / estados
       - `generar` → docx o zip
+
+    Filtros (`filtro_*` / `solo_match_neon`) aplican al emitir; si además
+    hay `indices`, se intersectan (no se mezclan deudores entre cuentas).
     """
     preview = procesar_lote_certificados(
         cuentas,
@@ -410,6 +467,22 @@ def procesar_y_generar_certificados(
     )
     if (modo or "preview").strip().lower() != "generar":
         return preview
+
+    idxs = indices
+    if filtro_conjunto or filtro_busqueda or solo_match_neon:
+        filtrados = indices_filtrados_preview(
+            preview,
+            conjunto=filtro_conjunto,
+            busqueda=filtro_busqueda,
+            solo_match_neon=solo_match_neon,
+            solo_emitibles=True,
+        )
+        if idxs is None:
+            idxs = filtrados
+        else:
+            allow = set(filtrados)
+            idxs = [i for i in idxs if i in allow]
+
     return generar_certificados_desde_preview(
         preview,
         representante_nombre=representante_nombre,
@@ -420,5 +493,5 @@ def procesar_y_generar_certificados(
         copropiedad_nit=copropiedad_nit,
         copropiedad_nombre=copropiedad_nombre,
         ciudad=ciudad,
-        indices=indices,
+        indices=idxs,
     )

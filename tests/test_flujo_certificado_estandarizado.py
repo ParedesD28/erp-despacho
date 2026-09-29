@@ -306,6 +306,147 @@ class FlujoProcesarCertificadoTests(unittest.TestCase):
             self.assertEqual(len(zf.namelist()), 2)
 
 
+class FiltrosLoteCertificadoTests(unittest.TestCase):
+    def _preview(self):
+        return {
+            "sin_match": 1,
+            "resultados": [
+                {
+                    "estado": "ok",
+                    "conjunto": "MIRADOR DE LLANO GRANDE",
+                    "titular_pdf": "ANA",
+                    "archivo": "a.pdf",
+                    "bloque": "1",
+                    "apartamento": "101",
+                    "clave_canonica": "1-101",
+                    "codigo_cuenta": "1",
+                    "capital_limpio_a_demandar": [{"valor_a_demandar": 1}],
+                },
+                {
+                    "estado": "sin_match",
+                    "conjunto": "SANTA CLARA",
+                    "titular_pdf": "BOB",
+                    "archivo": "b.pdf",
+                    "bloque": "2",
+                    "apartamento": "202",
+                    "clave_canonica": "2-202",
+                    "codigo_cuenta": "2",
+                },
+                {
+                    "estado": "fallback_pdf",
+                    "conjunto": "MIRADOR DE LLANO GRANDE",
+                    "titular_pdf": "CARLA",
+                    "archivo": "c.pdf",
+                    "bloque": "3",
+                    "apartamento": "303",
+                    "clave_canonica": "3-303",
+                    "codigo_cuenta": "3",
+                    "capital_limpio_a_demandar": [{"valor_a_demandar": 1}],
+                },
+            ],
+        }
+
+    def test_solo_match_neon(self):
+        idxs = flujo.indices_filtrados_preview(self._preview(), solo_match_neon=True)
+        self.assertEqual(idxs, [0])
+
+    def test_filtro_conjunto_y_busqueda(self):
+        idxs = flujo.indices_filtrados_preview(
+            self._preview(), conjunto="MIRADOR", busqueda="carla"
+        )
+        self.assertEqual(idxs, [2])
+
+    def test_generar_con_solo_match_neon_omite_fallback(self):
+        def _neon(nombre):
+            return {
+                "inmueble_id": 1,
+                "torre_apto": "1-1",
+                "conjunto_nombre": "MIRADOR",
+                "copropiedad_nombre": "MIRADOR PH",
+                "copropiedad_nit": "900",
+                "ciudad": "Pereira",
+                "titular_nombre": nombre,
+                "titular_cedula": "1",
+                "deudores": [
+                    {
+                        "contacto_id": 1,
+                        "nombre": nombre,
+                        "cedula": "1",
+                        "es_principal": True,
+                    }
+                ],
+                "propietarios": [
+                    {
+                        "contacto_id": 1,
+                        "nombre": nombre,
+                        "cedula": "1",
+                        "es_principal": True,
+                    }
+                ],
+                "titular_principal": {
+                    "contacto_id": 1,
+                    "nombre": nombre,
+                    "cedula": "1",
+                    "es_principal": True,
+                },
+            }
+
+        cuenta_ok = {
+            "archivo": "a.pdf",
+            "titular": "ANA",
+            "bloque": "1",
+            "apartamento": "1",
+            "codigo_cuenta": "1",
+            "conjunto": "MIRADOR",
+            "movimientos_extraidos": 1,
+            "error": None,
+            "rows": [
+                {
+                    "Concepto": "CUOTA ADMINISTRACION",
+                    "Fecha": "2024.02.01",
+                    "Valor": 30000,
+                    "Abono": 0,
+                    "Saldo": 30000,
+                }
+            ],
+        }
+        cuenta_sin = dict(cuenta_ok, archivo="b.pdf", titular="BOB", bloque="9", apartamento="9")
+
+        def fake_resolver(**kwargs):
+            if "ANA" in (kwargs.get("titular") or ""):
+                return _neon("ANA")
+            return None
+
+        gen_calls = []
+
+        def fake_gen(**kwargs):
+            gen_calls.append(kwargs.get("titular"))
+            return (
+                BytesIO(b"PK\x03\x04x"),
+                f"Certificado_{kwargs.get('titular')}.docx",
+                {},
+            )
+
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            side_effect=fake_resolver,
+        ), patch(
+            "certificados_deuda_flujo_service.generar_certificado_deuda",
+            side_effect=fake_gen,
+        ):
+            buf, nombre, meta = flujo.procesar_y_generar_certificados(
+                [cuenta_ok, cuenta_sin],
+                modo="generar",
+                permitir_datos_pdf=True,
+                titular_cedula="1",
+                copropiedad_nit="900",
+                solo_match_neon=True,
+            )
+        self.assertEqual(meta["generados"], 1)
+        self.assertEqual(gen_calls, ["ANA"])
+        self.assertEqual(nombre, "Certificado_ANA.docx")
+
+
 class ExcelTranscripcionNoRotaTests(unittest.TestCase):
     """Regresión PR #20: Excel de lote sigue siendo solo transcripción."""
 
