@@ -24,6 +24,7 @@ from certificados_deuda_service import (
     CertificadoDatosFaltantesError,
     CertificadoNoEncontradoError,
     generar_certificado_deuda,
+    validar_antefirma_representante,
 )
 
 
@@ -414,7 +415,15 @@ def generar_certificados_desde_preview(
     - varios → zip `Certificados_deuda.zip`
     Regla: un Word por cuenta/unidad (todos los propietarios relacionados
     en contexto; destinatario plantilla = principal).
+
+    Antefirma (`representante_*`) es obligatoria y se aplica a **todos**
+    los Word del lote; si falta, no se genera ningún archivo.
     """
+    # Early-return: no zip/docx parciales sin antefirma del RL.
+    rl_nombre, rl_cedula = validar_antefirma_representante(
+        representante_nombre, representante_cedula
+    )
+
     resultados = list(preview.get("resultados") or [])
     if indices is not None:
         elegidos = [resultados[i] for i in indices if 0 <= i < len(resultados)]
@@ -441,8 +450,8 @@ def generar_certificados_desde_preview(
         try:
             buf, nombre, meta = _generar_uno(
                 item,
-                representante_nombre=representante_nombre,
-                representante_cedula=representante_cedula,
+                representante_nombre=rl_nombre,
+                representante_cedula=rl_cedula,
                 dia_vencimiento=dia_vencimiento,
                 permitir_datos_pdf=permitir_datos_pdf,
                 titular_cedula=titular_cedula,
@@ -467,6 +476,8 @@ def generar_certificados_desde_preview(
         "errores": errores,
         "regla_multi_deudor": REGLA_MULTI_DEUDOR,
         "metas": meta_lista,
+        "representante_nombre": rl_nombre,
+        "representante_cedula": rl_cedula,
     }
 
     if len(generados) == 1:

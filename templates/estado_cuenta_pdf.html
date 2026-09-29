@@ -84,6 +84,31 @@
                     </div>
                 </div>
             </div>
+            <div class="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-950 space-y-2">
+                <p class="font-semibold flex items-center gap-2">
+                    <i data-lucide="pen-line" class="w-4 h-4"></i>
+                    Antefirma del representante legal
+                </p>
+                <p class="text-xs text-indigo-800">
+                    Obligatoria antes de generar/descargar. Se aplica a <strong>todos</strong> los certificados del lote
+                    (<code>representante_nombre</code> / <code>representante_cedula</code> en la plantilla Word).
+                </p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                    <div>
+                        <label class="block text-xs font-bold uppercase text-indigo-800 mb-1" for="rl-nombre">Nombre completo</label>
+                        <input type="text" id="rl-nombre" autocomplete="name"
+                               class="w-full rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-slate-800"
+                               placeholder="GLADYS DEL CARMEN …" required>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold uppercase text-indigo-800 mb-1" for="rl-cedula">Cédula</label>
+                        <input type="text" id="rl-cedula" autocomplete="off"
+                               class="w-full rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-slate-800"
+                               placeholder="35.319.382" required>
+                    </div>
+                </div>
+                <p id="rl-antefirma-preview" class="text-xs text-indigo-700 font-medium">Antefirma: (indique nombre y cédula)</p>
+            </div>
             <p id="status" class="text-sm text-slate-500"></p>
             <div id="progress-wrap" class="hidden space-y-1">
                 <div class="flex justify-between text-xs text-slate-500">
@@ -208,6 +233,7 @@
                         Lista <em>todos</em> los propietarios Neon; el Word nombra al principal.
                         <span class="text-slate-400">«Sin match» ≠ co-propietarios: es fallo de cruce Neon.</span>
                     </p>
+                    <p id="cert-antefirma-linea" class="text-sm text-indigo-800 font-medium mt-2">Antefirma: (indique nombre y cédula)</p>
                 </div>
                 <button type="button" id="btn-descargar-certs" disabled
                         class="inline-flex items-center gap-2 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-40 text-white font-semibold py-2 px-4 rounded-lg text-sm">
@@ -289,6 +315,35 @@
     </div>
 </div>
 
+<div id="modal-antefirma-rl" class="hidden fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 space-y-4" role="dialog" aria-modal="true" aria-labelledby="modal-antefirma-titulo">
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <h3 id="modal-antefirma-titulo" class="text-lg font-bold text-slate-800">Antefirma del representante legal</h3>
+                <p class="text-sm text-slate-500 mt-1">
+                    Obligatoria para generar/descargar. Misma antefirma en todos los Word del lote.
+                </p>
+            </div>
+            <button type="button" id="btn-cerrar-antefirma" class="text-slate-400 hover:text-slate-700 text-xl leading-none" aria-label="Cerrar">×</button>
+        </div>
+        <div class="space-y-3">
+            <div>
+                <label class="block text-xs font-bold uppercase text-slate-500 mb-1" for="modal-rl-nombre">Nombre completo</label>
+                <input type="text" id="modal-rl-nombre" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-slate-800" placeholder="Nombre del representante legal">
+            </div>
+            <div>
+                <label class="block text-xs font-bold uppercase text-slate-500 mb-1" for="modal-rl-cedula">Cédula</label>
+                <input type="text" id="modal-rl-cedula" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-slate-800" placeholder="Cédula (texto)">
+            </div>
+            <p id="modal-antefirma-error" class="hidden text-sm text-red-600 font-semibold"></p>
+        </div>
+        <div class="flex flex-wrap justify-end gap-2 pt-1">
+            <button type="button" id="btn-cancelar-antefirma" class="px-4 py-2 rounded-lg border border-slate-200 font-semibold text-slate-700 hover:bg-slate-50">Cancelar</button>
+            <button type="button" id="btn-confirmar-antefirma" class="px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-800 text-white font-semibold">Continuar</button>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script>
 (function () {
@@ -314,12 +369,109 @@
     const tabla = document.getElementById('tabla-cuentas');
     const chkPermitirPdf = document.getElementById('chk-permitir-datos-pdf');
     const pdfFallbackFields = document.getElementById('pdf-fallback-fields');
+    const rlNombreInput = document.getElementById('rl-nombre');
+    const rlCedulaInput = document.getElementById('rl-cedula');
+    const rlAntefirmaPreview = document.getElementById('rl-antefirma-preview');
+    const modalAntefirma = document.getElementById('modal-antefirma-rl');
+    const modalRlNombre = document.getElementById('modal-rl-nombre');
+    const modalRlCedula = document.getElementById('modal-rl-cedula');
+    const modalAntefirmaError = document.getElementById('modal-antefirma-error');
+    const btnCerrarAntefirma = document.getElementById('btn-cerrar-antefirma');
+    const btnCancelarAntefirma = document.getElementById('btn-cancelar-antefirma');
+    const btnConfirmarAntefirma = document.getElementById('btn-confirmar-antefirma');
 
     if (chkPermitirPdf && pdfFallbackFields) {
         chkPermitirPdf.addEventListener('change', () => {
             pdfFallbackFields.classList.toggle('hidden', !chkPermitirPdf.checked);
         });
     }
+
+    function representanteOpts() {
+        return {
+            nombre: ((rlNombreInput && rlNombreInput.value) || '').trim(),
+            cedula: ((rlCedulaInput && rlCedulaInput.value) || '').trim(),
+        };
+    }
+
+    function actualizarAntefirmaPreview() {
+        const { nombre, cedula } = representanteOpts();
+        const texto = (nombre && cedula)
+            ? `Antefirma en todos los Word: ${nombre} · C.C. ${cedula}`
+            : 'Antefirma: (indique nombre y cédula — obligatoria para descargar)';
+        if (rlAntefirmaPreview) rlAntefirmaPreview.textContent = texto;
+        const previewLine = document.getElementById('cert-antefirma-linea');
+        if (previewLine) previewLine.textContent = texto;
+    }
+
+    function antefirmaCompleta() {
+        const { nombre, cedula } = representanteOpts();
+        return !!(nombre && cedula);
+    }
+
+    function cerrarModalAntefirma() {
+        if (modalAntefirma) modalAntefirma.classList.add('hidden');
+        if (modalAntefirmaError) {
+            modalAntefirmaError.classList.add('hidden');
+            modalAntefirmaError.textContent = '';
+        }
+        document.body.classList.remove('overflow-hidden');
+    }
+
+    function pedirAntefirmaSiFalta() {
+        return new Promise((resolve) => {
+            if (antefirmaCompleta()) {
+                resolve(true);
+                return;
+            }
+            if (!modalAntefirma) {
+                setStatus('Indique nombre y cédula del representante legal antes de descargar.', true);
+                resolve(false);
+                return;
+            }
+            const actual = representanteOpts();
+            if (modalRlNombre) modalRlNombre.value = actual.nombre;
+            if (modalRlCedula) modalRlCedula.value = actual.cedula;
+            if (modalAntefirmaError) {
+                modalAntefirmaError.classList.add('hidden');
+                modalAntefirmaError.textContent = '';
+            }
+            modalAntefirma.classList.remove('hidden');
+            document.body.classList.add('overflow-hidden');
+            if (modalRlNombre) modalRlNombre.focus();
+
+            const finish = (ok) => {
+                if (btnConfirmarAntefirma) btnConfirmarAntefirma.onclick = null;
+                if (btnCancelarAntefirma) btnCancelarAntefirma.onclick = null;
+                if (btnCerrarAntefirma) btnCerrarAntefirma.onclick = null;
+                cerrarModalAntefirma();
+                resolve(ok);
+            };
+
+            if (btnCancelarAntefirma) btnCancelarAntefirma.onclick = () => finish(false);
+            if (btnCerrarAntefirma) btnCerrarAntefirma.onclick = () => finish(false);
+            if (btnConfirmarAntefirma) {
+                btnConfirmarAntefirma.onclick = () => {
+                    const nombre = ((modalRlNombre && modalRlNombre.value) || '').trim();
+                    const cedula = ((modalRlCedula && modalRlCedula.value) || '').trim();
+                    if (!nombre || !cedula) {
+                        if (modalAntefirmaError) {
+                            modalAntefirmaError.textContent = 'Nombre y cédula son obligatorios (no vacíos).';
+                            modalAntefirmaError.classList.remove('hidden');
+                        }
+                        return;
+                    }
+                    if (rlNombreInput) rlNombreInput.value = nombre;
+                    if (rlCedulaInput) rlCedulaInput.value = cedula;
+                    actualizarAntefirmaPreview();
+                    finish(true);
+                };
+            }
+        });
+    }
+
+    if (rlNombreInput) rlNombreInput.addEventListener('input', actualizarAntefirmaPreview);
+    if (rlCedulaInput) rlCedulaInput.addEventListener('input', actualizarAntefirmaPreview);
+    actualizarAntefirmaPreview();
 
     // Cache en memoria: el <input type="file"> a veces se vacía tras el análisis
     // (navegador/sesión) y sin esto "Descargar Excel" pide volver a cargar.
@@ -522,6 +674,11 @@
         if (conj && modo === 'generar') fd.append('filtro_conjunto', conj);
         const q = (filtroBusquedaCert && filtroBusquedaCert.value) || '';
         if (q && modo === 'generar') fd.append('filtro_busqueda', q);
+        if (modo === 'generar') {
+            const rl = representanteOpts();
+            if (rl.nombre) fd.append('representante_nombre', rl.nombre);
+            if (rl.cedula) fd.append('representante_cedula', rl.cedula);
+        }
         return fetch('/herramientas/estado-cuenta/procesar-certificado', {
             method: 'POST',
             body: fd,
@@ -757,6 +914,7 @@
                     }));
             }
             renderCertPreview(merged);
+            actualizarAntefirmaPreview();
             if (merged.sin_match && !merged.emitibles) {
                 setStatus(
                     'Sin match Neon (PDF OK, sin cruce de maestros). Active «Permitir datos del PDF», indique NIT y cédula, y reintente. Ver panel rojo.',
@@ -797,6 +955,11 @@
         const totalSel = porJob.reduce((n, arr) => n + arr.length, 0);
         if (!totalSel) {
             setStatus('Seleccione al menos una cuenta visible (checkbox) para descargar.', true);
+            return;
+        }
+        const okAntefirma = await pedirAntefirmaSiFalta();
+        if (!okAntefirma || !antefirmaCompleta()) {
+            setStatus('Indique nombre y cédula del representante legal antes de descargar.', true);
             return;
         }
         if (btnDescargarCerts) btnDescargarCerts.disabled = true;
@@ -1020,6 +1183,12 @@
             setStatus('Sin ítems de capital limpio para generar el certificado.', true);
             return;
         }
+        const okAntefirma = await pedirAntefirmaSiFalta();
+        if (!okAntefirma || !antefirmaCompleta()) {
+            setStatus('Indique nombre y cédula del representante legal antes de descargar.', true);
+            return;
+        }
+        const rl = representanteOpts();
         const torre = (r.bloque && r.apartamento)
             ? `TORRE ${r.bloque} APTO ${r.apartamento}`
             : (r.apartamento || '');
@@ -1042,6 +1211,8 @@
                     permitir_datos_pdf: permitirPdf,
                     copropiedad_nit: nitPdf,
                     titular_cedula: cedulaPdf,
+                    representante_nombre: rl.nombre,
+                    representante_cedula: rl.cedula,
                 }),
             });
             if (!res.ok) {
