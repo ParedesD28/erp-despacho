@@ -16,7 +16,9 @@
         </p>
         <p class="mt-1 text-amber-800">
             Hasta <strong>{{ max_archivos }}</strong> PDF (máx. {{ max_mb }} MB c/u).
-            El navegador los envía en grupos de 10 para evitar timeout en Render.
+            El navegador los envía en grupos de <strong>{{ ui_batch_size|default(15) }}</strong>
+            (backpressure vs timeout Render); el servidor parsea hasta
+            <strong>{{ parse_workers|default(4) }}</strong> PDF en paralelo por grupo.
             El Excel copia los movimientos del PDF (sin recalcular saldos),
             suma abonos y calcula la diferencia, y abre una hoja por cada deudor.
             <strong>Bolsa Global</strong> (mora / capital limpio) es un cálculo aparte:
@@ -82,6 +84,15 @@
                 </div>
             </div>
             <p id="status" class="text-sm text-slate-500"></p>
+            <div id="progress-wrap" class="hidden space-y-1">
+                <div class="flex justify-between text-xs text-slate-500">
+                    <span id="progress-label">Progreso</span>
+                    <span id="progress-pct">0%</span>
+                </div>
+                <div class="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+                    <div id="progress-bar" class="h-full bg-sky-600 transition-all duration-300" style="width:0%"></div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -213,9 +224,13 @@
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script>
 (function () {
-    const BATCH_SIZE = 10;
+    const BATCH_SIZE = {{ ui_batch_size|default(15) }};
     const fileInput = document.getElementById('pdf-file');
     const statusEl = document.getElementById('status');
+    const progressWrap = document.getElementById('progress-wrap');
+    const progressBar = document.getElementById('progress-bar');
+    const progressPct = document.getElementById('progress-pct');
+    const progressLabel = document.getElementById('progress-label');
     const btnAnalizar = document.getElementById('btn-analizar');
     const btnProcesarCert = document.getElementById('btn-procesar-cert');
     const btnDescargarCerts = document.getElementById('btn-descargar-certs');
@@ -258,9 +273,27 @@
             .replace(/"/g, '&quot;');
     }
 
+    function setProgress(done, total, label) {
+        if (!progressWrap) return;
+        if (!total || total <= 0) {
+            progressWrap.classList.add('hidden');
+            return;
+        }
+        const pct = Math.max(0, Math.min(100, Math.round((done / total) * 100)));
+        progressWrap.classList.remove('hidden');
+        if (progressBar) progressBar.style.width = pct + '%';
+        if (progressPct) progressPct.textContent = pct + '%';
+        if (progressLabel) progressLabel.textContent = label || (`Grupo ${done} de ${total}`);
+    }
+
+    function hideProgress() {
+        if (progressWrap) progressWrap.classList.add('hidden');
+        if (progressBar) progressBar.style.width = '0%';
+    }
+
     function detailMsg(data, res) {
         if (res && (res.status === 502 || res.status === 504 || res.status === 524)) {
-            return 'El servidor cortó el lote (timeout). Ya se envía en grupos de 10; reintente o baje a 10–15 PDF.';
+            return `El servidor cortó el lote (timeout). Ya se envía en grupos de ${BATCH_SIZE}; reintente o baje el tamaño del lote.`;
         }
         if (!data) return res ? `Error HTTP ${res.status}` : 'Error al procesar';
         if (typeof data.detail === 'string') return data.detail;
@@ -744,16 +777,19 @@
         let cuentas = [];
         let ok = 0, fail = 0, movs = 0;
         try {
+            // Backpressure: un grupo a la vez (no saturar Render con N requests paralelos).
             for (let i = 0; i < groups.length; i++) {
                 const g = groups[i];
                 const from = i * BATCH_SIZE + 1;
                 const to = i * BATCH_SIZE + g.length;
-                setStatus(`Analizando ${from}–${to} de ${files.length}…`);
+                setProgress(i, groups.length, `Analizando ${from}–${to} de ${files.length}`);
+                setStatus(`Analizando ${from}–${to} de ${files.length} (grupo ${i + 1}/${groups.length})…`);
                 const res = await postChunk('/herramientas/estado-cuenta/analizar', g);
                 let data = {};
                 try { data = await res.json(); } catch (_) { data = {}; }
                 if (!res.ok) {
                     setStatus(detailMsg(data, res), true);
+                    hideProgress();
                     resultado.classList.add('hidden');
                     return;
                 }
@@ -762,6 +798,7 @@
                 ok += data.archivos_ok || 0;
                 fail += data.archivos_fallidos || 0;
                 movs += data.movimientos_totales || 0;
+                setProgress(i + 1, groups.length, `Completado ${to} de ${files.length}`);
             }
             document.getElementById('m-archivos').textContent = files.length;
             document.getElementById('m-ok').textContent = ok;
@@ -777,9 +814,11 @@
                     ? `Listo: ${ok} OK, ${fail} fallido(s). Genere certificado(s), Excel o mora.`
                     : `Listo: ${ok} cuenta(s), ${movs} movimientos. Use «Generar certificado(s)» o Excel / Bolsa.`
             );
+            hideProgress();
             if (window.lucide) lucide.createIcons();
         } catch (e) {
-            setStatus('Fallo de red al analizar (posible timeout). Pruebe de a 10 PDF.', true);
+            hideProgress();
+            setStatus(`Fallo de red al analizar (posible timeout). Pruebe de a ${BATCH_SIZE} PDF.`, true);
         }
     });
 
@@ -822,7 +861,7 @@
             }
 
             if (!window.JSZip) {
-                setStatus('No se pudo cargar JSZip. Descargue en grupos de 10.', true);
+                setStatus(`No se pudo cargar JSZip. Descargue en grupos de ${BATCH_SIZE}.`, true);
                 btnExcel.disabled = false;
                 return;
             }
@@ -831,6 +870,7 @@
                 const job = jobs[i];
                 const from = i * BATCH_SIZE + 1;
                 const to = from + (job.files.length || BATCH_SIZE) - 1;
+                setProgress(i, jobs.length, `Excel grupo ${i + 1} de ${jobs.length}`);
                 setStatus(job.id
                     ? `Excel del análisis ${i + 1} de ${jobs.length}…`
                     : `Excel grupo ${from}–${to}…`);
@@ -839,11 +879,13 @@
                     let data = {};
                     try { data = await res.json(); } catch (_) {}
                     setStatus(detailMsg(data, res), true);
+                    hideProgress();
                     btnExcel.disabled = false;
                     return;
                 }
                 const buf = await res.arrayBuffer();
                 zip.file(`estados_cuenta_${i + 1}.xlsx`, buf);
+                setProgress(i + 1, jobs.length, `Excel ${i + 1} de ${jobs.length}`);
             }
             setStatus('Empaquetando ZIP…');
             const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -856,9 +898,11 @@
             a.remove();
             URL.revokeObjectURL(url);
             setStatus(`ZIP descargado (${jobs.length} Excel).`);
+            hideProgress();
             btnExcel.disabled = false;
         } catch (e) {
-            setStatus('Fallo de red al descargar (posible timeout). Pruebe de a 10 PDF.', true);
+            hideProgress();
+            setStatus(`Fallo de red al descargar (posible timeout). Pruebe de a ${BATCH_SIZE} PDF.`, true);
             btnExcel.disabled = false;
         }
     });

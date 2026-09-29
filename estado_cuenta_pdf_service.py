@@ -5,9 +5,11 @@ desde PDF sin tablas nativas hacia filas estructuradas y Excel.
 from __future__ import annotations
 
 import io
+import os
 import re
 import secrets
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Lock
 from typing import BinaryIO, Union
@@ -22,6 +24,11 @@ Source = Union[str, Path, bytes, bytearray, BinaryIO]
 MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB por archivo
 MAX_ARCHIVOS_LOTE = 40
 MAX_LOTE_BYTES = 200 * 1024 * 1024  # 200 MB total por lote
+# Paralelismo acotado: pypdf libera el GIL en I/O; 4 hilos ≈ tope seguro en Render
+# (RAM ~512MB–1GB). Override: ESTADO_CUENTA_PARSE_WORKERS=1..8
+PARSE_WORKERS = max(1, min(int(os.environ.get("ESTADO_CUENTA_PARSE_WORKERS", "4")), 8))
+# Tamaño de grupo que envía la UI (backpressure vs timeout ~100s Render).
+UI_BATCH_SIZE = max(1, min(int(os.environ.get("ESTADO_CUENTA_UI_BATCH_SIZE", "15")), 25))
 _MIN_CHARS_TEXTO = 80
 _DATE_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}$")
 _MONEY_RE = re.compile(r"^-?\d{1,3}(,\d{3})*(\.\d+)?$|^-?\d+(\.\d+)?$")
@@ -664,9 +671,105 @@ def procesar_estado_cuenta_pdf_seguro(
 
 
 _CACHE_TTL_S = 900
-_CACHE_MAX = 8
+# Soporta más grupos UI (p.ej. 40 PDF / BATCH_SIZE 15 ≈ 3 ids; margen para sesiones).
+_CACHE_MAX = 12
 _lote_cache: dict[str, tuple[float, dict]] = {}
 _cache_lock = Lock()
+
+
+def _cuenta_error(filename: str, mensaje: str) -> dict:
+    """Estructura uniforme de cuenta fallida (sin rows)."""
+    return {
+        "archivo": filename,
+        "titular": None,
+        "bloque": None,
+        "apartamento": None,
+        "codigo_cuenta": None,
+        "conjunto": None,
+        "fechas_detectadas": 0,
+        "movimientos_extraidos": 0,
+        "bloques_omitidos": 0,
+        "inconsistencias_saldo": 0,
+        "advertencia_encoding": False,
+        "saldo_final": None,
+        "alerta_calidad": True,
+        "rows": [],
+        "error": mensaje,
+    }
+
+
+def _procesar_un_pdf_en_lote(filename: str, contenido: bytes) -> dict:
+    """
+    Parsea un PDF en aislamiento. Pensado para ThreadPoolExecutor:
+    sin estado compartido mutable salvo el propio retorno.
+    """
+    try:
+        # generar_excel=False: crítico en lotes (evita OOM/timeout en Render).
+        uno = procesar_estado_cuenta_pdf_seguro(
+            contenido, filename, generar_excel=False
+        )
+        return {
+            "archivo": filename,
+            "titular": uno.get("titular"),
+            "bloque": uno.get("bloque"),
+            "apartamento": uno.get("apartamento"),
+            "codigo_cuenta": uno.get("codigo_cuenta"),
+            "conjunto": uno.get("conjunto"),
+            "fechas_detectadas": uno["fechas_detectadas"],
+            "movimientos_extraidos": uno["movimientos_extraidos"],
+            "bloques_omitidos": uno["bloques_omitidos"],
+            "inconsistencias_saldo": uno.get("inconsistencias_saldo", 0),
+            "advertencia_encoding": uno.get("advertencia_encoding", False),
+            "saldo_final": uno.get("saldo_final"),
+            "alerta_calidad": bool(uno.get("alerta_calidad")),
+            "rows": uno["rows"],
+            "error": None,
+        }
+    except EstadoCuentaPdfError as exc:
+        return _cuenta_error(filename, str(exc))
+    except Exception as exc:
+        return _cuenta_error(filename, f"Error interno: {type(exc).__name__}")
+
+
+def _parsear_lote_acotado(
+    archivos: list[tuple[str, bytes]],
+    *,
+    max_workers: int | None = None,
+) -> list[dict]:
+    """
+    Parsea N PDFs con paralelismo acotado; preserva el orden de entrada.
+    Libera bytes del PDF en cuanto termina cada ítem (anti-OOM).
+    """
+    n = len(archivos)
+    if n == 0:
+        return []
+    workers = max_workers if max_workers is not None else PARSE_WORKERS
+    workers = max(1, min(int(workers), n, 8))
+
+    cuentas: list[dict | None] = [None] * n
+
+    def _trabajo(idx: int, filename: str, contenido: bytes) -> tuple[int, dict]:
+        try:
+            return idx, _procesar_un_pdf_en_lote(filename, contenido)
+        finally:
+            # Liberar bytes del PDF ya procesado (anti-OOM en lotes de 30+).
+            archivos[idx] = (filename, b"")
+
+    if workers == 1 or n == 1:
+        for idx, (filename, contenido) in enumerate(list(archivos)):
+            i, cuenta = _trabajo(idx, filename, contenido)
+            cuentas[i] = cuenta
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futuros = [
+                pool.submit(_trabajo, idx, filename, contenido)
+                for idx, (filename, contenido) in enumerate(list(archivos))
+            ]
+            for fut in as_completed(futuros):
+                i, cuenta = fut.result()
+                cuentas[i] = cuenta
+
+    return [c for c in cuentas if c is not None]
 
 
 def _guardar_lote(cuentas: list[dict], depuracion: dict | None) -> str:
@@ -767,6 +870,7 @@ def procesar_lote_estados_cuenta(
     Procesa N PDFs en aislamiento estricto (sin cruces cuenta↔cuenta).
 
     - Cada PDF se parsea en su propia llamada (buffer/cabecera propios).
+    - Paralelismo acotado vía ThreadPoolExecutor (PARSE_WORKERS, máx. 8).
     - Cada fila se sella con el nombre de SU archivo y su titular/bloque/apto.
     - Un error en un PDF no contamina los demás: queda en Resumen con error.
     - No genera Excel por archivo (ahorra RAM/CPU); arma un solo Excel al final.
@@ -781,75 +885,8 @@ def procesar_lote_estados_cuenta(
         mb = MAX_LOTE_BYTES / (1024 * 1024)
         raise EstadoCuentaPdfError(f"El lote supera el límite total de {mb:.0f} MB.")
 
-    cuentas: list[dict] = []
-    for idx, (filename, contenido) in enumerate(archivos):
-        try:
-            # generar_excel=False: crítico en lotes grandes (evita OOM/timeout en Render).
-            uno = procesar_estado_cuenta_pdf_seguro(
-                contenido, filename, generar_excel=False
-            )
-            cuentas.append(
-                {
-                    "archivo": filename,
-                    "titular": uno.get("titular"),
-                    "bloque": uno.get("bloque"),
-                    "apartamento": uno.get("apartamento"),
-                    "codigo_cuenta": uno.get("codigo_cuenta"),
-                    "conjunto": uno.get("conjunto"),
-                    "fechas_detectadas": uno["fechas_detectadas"],
-                    "movimientos_extraidos": uno["movimientos_extraidos"],
-                    "bloques_omitidos": uno["bloques_omitidos"],
-                    "inconsistencias_saldo": uno.get("inconsistencias_saldo", 0),
-                    "advertencia_encoding": uno.get("advertencia_encoding", False),
-                    "saldo_final": uno.get("saldo_final"),
-                    "alerta_calidad": bool(uno.get("alerta_calidad")),
-                    "rows": uno["rows"],
-                    "error": None,
-                }
-            )
-        except EstadoCuentaPdfError as exc:
-            cuentas.append(
-                {
-                    "archivo": filename,
-                    "titular": None,
-                    "bloque": None,
-                    "apartamento": None,
-                    "codigo_cuenta": None,
-                    "conjunto": None,
-                    "fechas_detectadas": 0,
-                    "movimientos_extraidos": 0,
-                    "bloques_omitidos": 0,
-                    "inconsistencias_saldo": 0,
-                    "advertencia_encoding": False,
-                    "saldo_final": None,
-                    "alerta_calidad": True,
-                    "rows": [],
-                    "error": str(exc),
-                }
-            )
-        except Exception as exc:
-            cuentas.append(
-                {
-                    "archivo": filename,
-                    "titular": None,
-                    "bloque": None,
-                    "apartamento": None,
-                    "codigo_cuenta": None,
-                    "conjunto": None,
-                    "fechas_detectadas": 0,
-                    "movimientos_extraidos": 0,
-                    "bloques_omitidos": 0,
-                    "inconsistencias_saldo": 0,
-                    "advertencia_encoding": False,
-                    "saldo_final": None,
-                    "alerta_calidad": True,
-                    "rows": [],
-                    "error": f"Error interno: {type(exc).__name__}",
-                }
-            )
-        finally:
-            # Liberar bytes del PDF ya procesado (anti-OOM en lotes de 30+).
-            archivos[idx] = (filename, b"")
+    # Paralelismo acotado (ThreadPoolExecutor); orden de entrada preservado.
+    cuentas = _parsear_lote_acotado(archivos)
 
     ok = sum(1 for c in cuentas if not c.get("error") and c.get("movimientos_extraidos", 0) > 0)
     fallidos = sum(1 for c in cuentas if c.get("error"))
