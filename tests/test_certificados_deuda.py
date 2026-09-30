@@ -467,6 +467,106 @@ class GeneracionWordTests(unittest.TestCase):
         self.assertIn("MIRADOR DE LLANO GRANDE PH", bold_poder)
         self.assertIn("900938646", bold_poder)
 
+    def test_plantillas_layout_enters_y_firmas_keep_with(self):
+        """Single spacing + enters entre bloques; keepNext en antefirmas; 1 page break."""
+        from docx import Document
+        from docx.oxml.ns import qn
+
+        def _has(p, tag: str) -> bool:
+            pPr = p._p.find(qn("w:pPr"))
+            return pPr is not None and pPr.find(qn(f"w:{tag}")) is not None
+
+        def _chain_from(paragraphs, start_text: str, n: int):
+            for i, p in enumerate(paragraphs):
+                if p.text.strip() == start_text:
+                    return paragraphs[i : i + n]
+            self.fail(f"No se encontró párrafo {start_text!r}")
+
+        neon = {
+            "copropiedad_nombre": "MIRADOR DE LLANO GRANDE PH",
+            "copropiedad_nit": "900938646",
+            "torre_apto": "4-34",
+            "conjunto_nombre": "MIRADOR DE LLANO GRANDE",
+            "titular_nombre": "ALBA DOLLY CARDONA AMARILES",
+            "titular_cedula": "21423830",
+            "ciudad": "Pereira",
+        }
+        ctx = svc.construir_contexto_plantilla(
+            datos_neon=neon,
+            filas=svc.agrupar_capital_limpio(
+                [
+                    {
+                        "fecha": "2026.02.01",
+                        "concepto": "CUOTA ADMINISTRACION",
+                        "valor_a_demandar": 30000,
+                    }
+                ]
+            ),
+            representante_nombre="GLADYS DEMO",
+            representante_cedula="35.319.382",
+        )
+        doc = Document(svc.renderizar_docx(ctx))
+        # Enters entre bloques del certificado (vacíos semánticos).
+        self.assertEqual(doc.paragraphs[3].text.strip(), "")  # header↔juzgado
+        self.assertEqual(doc.paragraphs[7].text.strip(), "")  # juzgado↔cuerpo
+        self.assertEqual(doc.paragraphs[9].text.strip(), "")  # cuerpo↔tabla
+        # Cadena antefirma CERT: Atentamente → 4 vacíos → nombre → C.C. keepNext; R.L sin.
+        cert_chain = _chain_from(doc.paragraphs, "Atentamente,", 8)
+        self.assertEqual(cert_chain[0].text.strip(), "Atentamente,")
+        for p in cert_chain[1:5]:
+            self.assertEqual(p.text.strip(), "")
+        self.assertIn("GLADYS DEMO", cert_chain[5].text)
+        self.assertIn("35.319.382", cert_chain[6].text)
+        self.assertTrue(cert_chain[7].text.strip().startswith("R.L"))
+        for p in cert_chain[:7]:
+            self.assertTrue(_has(p, "keepNext"), p.text[:40])
+            self.assertTrue(_has(p, "keepLines"), p.text[:40])
+            self.assertTrue(_has(p, "widowControl"), p.text[:40])
+        self.assertFalse(_has(cert_chain[7], "keepNext"))
+        sp = doc.paragraphs[8]._p.find(qn("w:pPr")).find(qn("w:spacing"))
+        self.assertEqual(sp.get(qn("w:line")), "240")
+        self.assertEqual(sp.get(qn("w:after")), "0")
+
+        ctx_poder = svc.construir_contexto_poder(
+            datos_neon=neon,
+            capital_limpio_a_demandar=[
+                {"fecha": "2026.02.01", "valor_a_demandar": 30000},
+            ],
+            representante_nombre="GLADYS DEMO",
+            representante_cedula="35.319.382",
+            fmi="290-204208",
+        )
+        buf_poder = svc.renderizar_poder(ctx_poder)
+        docp = Document(buf_poder)
+        texts = [p.text.strip() for p in docp.paragraphs]
+        mandato_i = next(i for i, t in enumerate(texts) if "CONFIERO PODER" in t)
+        facultades_i = next(i for i, t in enumerate(texts) if "facultades expresas" in t)
+        sirvase_i = next(i for i, t in enumerate(texts) if t.startswith("Sírvase"))
+        self.assertEqual(texts[mandato_i + 1], "")
+        self.assertEqual(facultades_i, mandato_i + 2)
+        self.assertEqual(texts[facultades_i + 1], "")
+        self.assertEqual(sirvase_i, facultades_i + 2)
+
+        rl_chain = _chain_from(docp.paragraphs, "Atentamente,", 5)
+        for p in rl_chain[:4]:
+            self.assertTrue(_has(p, "keepNext"))
+        self.assertFalse(_has(rl_chain[4], "keepNext"))
+        self.assertIn("35.319.382", rl_chain[4].text)
+
+        ab_chain = _chain_from(docp.paragraphs, "Acepto,", 7)
+        for p in ab_chain[:6]:
+            self.assertTrue(_has(p, "keepNext"))
+        self.assertFalse(_has(ab_chain[6], "keepNext"))
+        self.assertIn("L.T.", ab_chain[6].text)
+
+        composed = svc.componer_certificado_con_poder(
+            svc.renderizar_docx(ctx), buf_poder
+        )
+        with zipfile.ZipFile(composed) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+        self.assertEqual(xml.count('w:type="page"'), 1)
+        self.assertNotIn("pageBreakBefore", xml)
+
     def test_nombre_archivo_dinamico(self):
         self.assertEqual(
             svc.nombre_archivo_certificado("ANA PÉREZ GOMEZ"),
