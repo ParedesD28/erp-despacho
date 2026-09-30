@@ -163,6 +163,37 @@ def _tokens(concepto_norm: str) -> list[str]:
     return concepto_norm.split() if concepto_norm else []
 
 
+def _es_cuota_ordinaria(concepto: str) -> bool:
+    """
+    Misma heurística que el Word: CUOTA/COUTA + ADMIN*/ADMON → ordinaria.
+    Resto del capital demandable (extras, pintura, gastos, no reconocido) → no ordinaria.
+    """
+    normal = _normalizar_texto(concepto)
+    if not normal or "INTERES" in normal:
+        return False
+    tokens = normal.split()
+    tiene_cuota = any(tok.startswith("CUOT") or tok.startswith("COUT") for tok in tokens)
+    tiene_admin = any(
+        tok.startswith("ADMIN")
+        or tok.startswith("ADMON")
+        or tok in {"ADMINISTRATIVA", "ADMINISTRATIVO"}
+        for tok in tokens
+    )
+    return bool(tiene_cuota and tiene_admin)
+
+
+def _capitales_prelacion_b_remanente(capitales: Sequence[_ItemMes]) -> list[_ItemMes]:
+    """
+    Orden de imputación del sobrante en B-Remanente (tras intereses):
+    1) extraordinarias / gastos / no reconocidos / capital no-ordinaria
+    2) cuota ordinaria (administración) al final
+    Dentro de cada tramo se preserva el orden de aparición (índice de fila).
+    """
+    no_ordinarias = [i for i in capitales if not _es_cuota_ordinaria(i.concepto)]
+    ordinarias = [i for i in capitales if _es_cuota_ordinaria(i.concepto)]
+    return no_ordinarias + ordinarias
+
+
 def _a_float_seguro(valor: Any) -> float | None:
     """
     Parsea montos COP/latam. None = ilegible (no confundir con 0.0 legítimo).
@@ -315,8 +346,10 @@ def determinar_mora_y_capital_limpio(
     4. Consumir mes a mes: intereses primero, luego capital.
     5. Mes Limpio: bolsa no cubre todos los intereses → residual intereses
        perdonado; capital del mes 100% intacto; ese mes = fecha_inicio_mora.
-    6. Con bolsa = 0: solo capital futuro; intereses posteriores descartados.
-    7. No crash; errores por fila; corruptos → 0.0.
+    6. B-Remanente (cubre I_m, no todo C_m): el sobrante B−I_m amortiza
+       primero extras/gastos/no reconocidos; la cuota ordinaria al final.
+    7. Con bolsa = 0: solo capital futuro; intereses posteriores descartados.
+    8. No crash; errores por fila; corruptos → 0.0.
 
     Retorna dict (vía ResultadoMoraCapitalLimpio.as_dict) para consumo fácil
     desde JSON/API sin acoplar el Excel de descarga PDF→Excel.
@@ -482,11 +515,12 @@ def determinar_mora_y_capital_limpio(
                             )
                         )
             else:
-                # Cubre intereses; remanente reduce capital
+                # Cubre intereses; remanente reduce capital con prelación:
+                # extras/gastos/no reconocidos primero; cuota ordinaria al final.
                 sobrante = _redondear_cop(bolsa - total_intereses)
                 bolsa = 0.0
                 capitales_restantes = 0.0
-                for item in grupo.capitales:
+                for item in _capitales_prelacion_b_remanente(grupo.capitales):
                     valor_restante = item.valor
                     if sobrante > _EPS:
                         if sobrante + _EPS >= valor_restante:
@@ -502,7 +536,10 @@ def determinar_mora_y_capital_limpio(
                                 fecha=item.fecha,
                                 concepto=item.concepto,
                                 valor_a_demandar=_redondear_cop(valor_restante),
-                                nota="Capital reducido por remanente de abono.",
+                                nota=(
+                                    "Capital reducido por remanente de abono "
+                                    "(prelación: extras/gastos antes que ordinaria)."
+                                ),
                                 mes_corte=mes,
                                 clase_concepto=item.clase,
                                 indice_fila=item.indice,
