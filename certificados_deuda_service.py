@@ -643,17 +643,15 @@ def construir_contexto_poder(
     ciudad: str = "",
     representante_nombre: str = "",
     representante_cedula: str = "",
-    representante_cedula_expedida_en: str = "",
     fmi: str = "",
-    resolucion_numero: str = "",
-    resolucion_fecha: str = "",
-    resolucion_autoridad: str = "",
-    resolucion2_numero: str = "",
-    resolucion2_fecha: str = "",
-    resolucion2_autoridad: str = "",
     departamento: str = "",
 ) -> dict[str, Any]:
-    """Arma el dict docxtpl del poder (reutiliza datos del certificado; no inventa IDs)."""
+    """Arma el dict docxtpl del poder (reutiliza datos del certificado; no inventa IDs).
+
+    No mapea dirección/tel/email PH, resoluciones de nombramiento ni lugar de
+    expedición de cédula RL (retirados de la plantilla). `fmi` vacío se omite
+    en el Word (`{% if fmi %}`); no se inventa ni se bloquea la emisión.
+    """
     ciudad_final = (
         (ciudad or "").strip()
         or (datos_neon.get("ciudad") or "").strip()
@@ -683,22 +681,6 @@ def construir_contexto_poder(
         "representante_nombre": rl_nombre,
         "representante_cedula": (representante_cedula or "").strip(),
         "representante_genero": _genero_sufijo_nombre(rl_nombre),
-        "representante_cedula_expedida_en": (
-            representante_cedula_expedida_en or ""
-        ).strip(),
-        "copropiedad_direccion": (
-            datos_neon.get("copropiedad_direccion") or ""
-        ).strip(),
-        "copropiedad_telefono": (
-            datos_neon.get("copropiedad_telefono") or ""
-        ).strip(),
-        "copropiedad_email": (datos_neon.get("copropiedad_email") or "").strip(),
-        "resolucion_numero": (resolucion_numero or "").strip(),
-        "resolucion_fecha": (resolucion_fecha or "").strip(),
-        "resolucion_autoridad": (resolucion_autoridad or "").strip(),
-        "resolucion2_numero": (resolucion2_numero or "").strip(),
-        "resolucion2_fecha": (resolucion2_fecha or "").strip(),
-        "resolucion2_autoridad": (resolucion2_autoridad or "").strip(),
         "periodo_desde": periodo_desde,
         "periodo_hasta": periodo_hasta,
         "apoderado_nombre": APODERADO_NOMBRE,
@@ -773,13 +755,6 @@ def generar_certificado_deuda(
     permitir_datos_pdf: bool = False,
     incluir_poder: bool = True,
     fmi: str = "",
-    representante_cedula_expedida_en: str = "",
-    resolucion_numero: str = "",
-    resolucion_fecha: str = "",
-    resolucion_autoridad: str = "",
-    resolucion2_numero: str = "",
-    resolucion2_fecha: str = "",
-    resolucion2_autoridad: str = "",
     conn=None,
 ) -> tuple[BytesIO, str, dict[str, Any]]:
     """
@@ -790,7 +765,8 @@ def generar_certificado_deuda(
     (no se inventan).
 
     Si `incluir_poder` (default True), append del poder en el mismo .docx
-    (salto de página; plantilla CERTIFICADO intacta).
+    (salto de página; plantilla CERTIFICADO intacta). `fmi` opcional por
+    cuenta: vacío = se omite en el poder; no se inventa.
 
     Returns:
         (buffer_docx, nombre_archivo, meta)
@@ -889,14 +865,7 @@ def generar_certificado_deuda(
             ciudad=ciudad or str(contexto.get("ciudad") or ""),
             representante_nombre=rl_nombre,
             representante_cedula=rl_cedula,
-            representante_cedula_expedida_en=representante_cedula_expedida_en,
             fmi=fmi,
-            resolucion_numero=resolucion_numero,
-            resolucion_fecha=resolucion_fecha,
-            resolucion_autoridad=resolucion_autoridad,
-            resolucion2_numero=resolucion2_numero,
-            resolucion2_fecha=resolucion2_fecha,
-            resolucion2_autoridad=resolucion2_autoridad,
         )
         poder_buf = renderizar_poder(ctx_poder)
         buffer = componer_certificado_con_poder(buffer, poder_buf)

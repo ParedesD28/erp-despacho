@@ -116,7 +116,7 @@
                     <input type="checkbox" id="chk-incluir-poder" class="mt-0.5 rounded border-indigo-300 text-indigo-700" checked>
                     <span>
                         <span class="font-semibold">Incluir poder (mismo Word)</span>
-                        <span class="block text-xs text-indigo-800">Append tras salto de página; no inventa FMI ni resolución.</span>
+                        <span class="block text-xs text-indigo-800">Append tras salto de página. FMI se digita por cuenta en el preview (vacío = se omite).</span>
                     </span>
                 </label>
             </div>
@@ -491,6 +491,7 @@
     let lastBolsaPayload = null;
     let lastCertPreview = null;
     let lastCuentasAnalizadas = [];
+    let certFmiByGlobalIdx = {}; // { [globalIdx]: "290-…" } persiste entre filtros
     let certJobMap = []; // [{ jobIndex, localIndex }] alineado a resultados merged
 
     const filtroConjuntoAnalizar = document.getElementById('filtro-conjunto-analizar');
@@ -666,7 +667,7 @@
         };
     }
 
-    async function postProcesarCert(modo, cacheId, files, indices) {
+    async function postProcesarCert(modo, cacheId, files, indices, fmiPorIndice) {
         const fd = new FormData();
         if (cacheId) fd.append('cache_id', cacheId);
         (files || []).forEach(f => fd.append('archivos', f));
@@ -691,11 +692,36 @@
             if (rl.cedula) fd.append('representante_cedula', rl.cedula);
             const incluirPoder = !!(document.getElementById('chk-incluir-poder') || {}).checked;
             fd.append('incluir_poder', incluirPoder ? 'true' : 'false');
+            if (fmiPorIndice && Object.keys(fmiPorIndice).length) {
+                fd.append('fmi_por_indice', JSON.stringify(fmiPorIndice));
+            }
         }
         return fetch('/herramientas/estado-cuenta/procesar-certificado', {
             method: 'POST',
             body: fd,
         });
+    }
+
+    function capturarFmiDelDom() {
+        certBloques.querySelectorAll('.cert-fmi').forEach(inp => {
+            const g = Number(inp.dataset.globalIdx);
+            if (Number.isFinite(g)) {
+                certFmiByGlobalIdx[g] = (inp.value || '').trim();
+            }
+        });
+    }
+
+    function fmiLocalPorJob(jobIndex, localIndices) {
+        const out = {};
+        (localIndices || []).forEach(localIdx => {
+            const g = certJobMap.findIndex(
+                m => m && m.jobIndex === jobIndex && m.localIndex === localIdx
+            );
+            if (g < 0) return;
+            const val = (certFmiByGlobalIdx[g] || '').trim();
+            if (val) out[String(localIdx)] = val;
+        });
+        return out;
     }
 
     function estadoBadge(estado) {
@@ -766,6 +792,7 @@
     function applyFiltrosCert() {
         const payload = lastCertPreview;
         if (!payload) return;
+        capturarFmiDelDom();
         certBloques.innerHTML = '';
         let visibles = 0;
         let seleccionables = 0;
@@ -811,6 +838,15 @@
                 ? `<p class="mt-1 text-sm font-semibold text-red-800">${esc(r.motivo_detalle || r.error || 'Sin match Neon')}</p>
                    ${r.criterios ? `<p class="mt-1 text-xs text-red-700/80">Buscado: ${esc(r.criterios)}</p>` : ''}`
                 : (r.error ? `<p class="mt-1 text-sm text-red-700 font-semibold">${esc(r.error)}</p>` : '');
+            const fmiVal = esc(certFmiByGlobalIdx[globalIdx] || '');
+            const fmiHtml = emitible
+                ? `<div class="flex flex-wrap items-center gap-2 pt-1">
+                     <label class="text-xs font-bold uppercase text-slate-500" for="cert-fmi-${globalIdx}">FMI</label>
+                     <input type="text" id="cert-fmi-${globalIdx}" class="cert-fmi rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-800 w-40"
+                            data-global-idx="${globalIdx}" placeholder="ej. 290-219335" value="${fmiVal}" autocomplete="off">
+                     <span class="text-xs text-slate-400">Opcional · vacío = se omite en el poder</span>
+                   </div>`
+                : '';
             block.innerHTML = `
                 <div class="flex flex-wrap items-start justify-between gap-2">
                     <div>
@@ -829,6 +865,7 @@
                     ${estadoBadge(r.estado)}
                 </div>
                 ${chk}
+                ${fmiHtml}
                 <div class="text-sm">
                     <p class="text-xs uppercase text-slate-500 font-bold mb-1">Propietarios relacionados (Neon)</p>
                     ${deudaHtml}
@@ -931,6 +968,7 @@
             resultados: [],
         };
         certJobMap = [];
+        certFmiByGlobalIdx = {};
         try {
             for (let i = 0; i < jobs.length; i++) {
                 const job = jobs[i];
@@ -1014,11 +1052,29 @@
             setStatus('No hay lote en memoria para generar certificados.', true);
             return;
         }
+        capturarFmiDelDom();
         const porJob = indicesSeleccionadosPorJob();
         const totalSel = porJob.reduce((n, arr) => n + arr.length, 0);
         if (!totalSel) {
             setStatus('Seleccione al menos una cuenta visible (checkbox) para descargar.', true);
             return;
+        }
+        const incluirPoder = !!(document.getElementById('chk-incluir-poder') || {}).checked;
+        if (incluirPoder) {
+            let sinFmi = 0;
+            porJob.forEach((indices, jobIndex) => {
+                (indices || []).forEach(localIdx => {
+                    const g = certJobMap.findIndex(
+                        m => m && m.jobIndex === jobIndex && m.localIndex === localIdx
+                    );
+                    if (g >= 0 && !(certFmiByGlobalIdx[g] || '').trim()) sinFmi += 1;
+                });
+            });
+            if (sinFmi > 0) {
+                setStatus(
+                    `Aviso: ${sinFmi} cuenta(s) sin FMI — el poder se emite omitiendo el folio (no se inventa).`
+                );
+            }
         }
         const okAntefirma = await pedirAntefirmaSiFalta();
         if (!okAntefirma || !antefirmaCompleta()) {
@@ -1032,15 +1088,16 @@
                 .filter(x => x.indices.length);
             const partes = [];
             for (let k = 0; k < jobsConSel.length; k++) {
-                const { job, indices } = jobsConSel[k];
+                const { job, indices, i: jobIndex } = jobsConSel[k];
                 setStatus(
                     jobsConSel.length > 1
                         ? `Generando certificados grupo ${k + 1} de ${jobsConSel.length} (${indices.length} de ${totalSel} seleccionados)…`
                         : `Generando ${indices.length} certificado(s) Word…`
                 );
-                let res = await postProcesarCert('generar', job.id, [], indices);
+                const fmiMap = fmiLocalPorJob(jobIndex, indices);
+                let res = await postProcesarCert('generar', job.id, [], indices, fmiMap);
                 if (!res.ok && job.files.length) {
-                    res = await postProcesarCert('generar', '', job.files, indices);
+                    res = await postProcesarCert('generar', '', job.files, indices, fmiMap);
                 }
                 if (!res.ok) {
                     let data = {};

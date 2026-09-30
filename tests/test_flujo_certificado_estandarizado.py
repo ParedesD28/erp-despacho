@@ -805,5 +805,53 @@ class MultiPropietariosContextoYMontosTests(unittest.TestCase):
         self.assertEqual(len(item["deudores"]), 2)
 
 
+class FmiPorCuentaFlujoTests(unittest.TestCase):
+    def test_generar_desde_preview_pasa_fmi_por_indice(self):
+        preview = {
+            "sin_match": 0,
+            "resultados": [
+                {
+                    "estado": "ok",
+                    "archivo": "a.pdf",
+                    "titular_pdf": "JUAN",
+                    "inmueble_id": 7,
+                    "conjunto": "Demo",
+                    "clave_canonica": "2-202",
+                    "titular_seleccionado": {"nombre": "JUAN", "cedula": "555"},
+                    "datos_neon": {
+                        "inmueble_id": 7,
+                        "copropiedad_nombre": "PH Demo",
+                        "copropiedad_nit": "900",
+                        "titular_nombre": "JUAN",
+                        "titular_cedula": "555",
+                        "torre_apto": "2-202",
+                        "conjunto_nombre": "Demo",
+                        "ciudad": "Pereira",
+                    },
+                    "capital_limpio_a_demandar": [
+                        {
+                            "fecha": "2024.06.01",
+                            "concepto": "CUOTA ADMINISTRACION",
+                            "valor_a_demandar": 40,
+                        }
+                    ],
+                }
+            ],
+        }
+        with patch(
+            "certificados_deuda_flujo_service.generar_certificado_deuda",
+            return_value=(BytesIO(b"PK"), "Certificado_JUAN.docx", {"fmi": "290-1"}),
+        ) as mock_gen:
+            _buf, _nombre, meta = flujo.generar_certificados_desde_preview(
+                preview,
+                representante_nombre="RL",
+                representante_cedula="99",
+                indices=[0],
+                fmi_por_indice={0: "290-1"},
+            )
+        self.assertEqual(mock_gen.call_args.kwargs.get("fmi"), "290-1")
+        self.assertEqual(meta["generados"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
