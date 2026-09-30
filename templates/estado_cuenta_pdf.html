@@ -369,12 +369,14 @@
                                accept=".xlsx,.csv,.tsv,.txt,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain,text/tab-separated-values,application/vnd.ms-excel"
                                class="block w-full text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-700 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-indigo-800">
                         <p class="text-xs text-indigo-800">
+                            Al elegir el archivo se aplica solo (no hace falta otro clic).
                             Acepta <code>.xlsx</code> y <code>.csv</code> (p.ej. maestro <code>CC</code> + <code>FMI</code>).
                             Si Windows no muestra el Excel en Descargas, en el diálogo elija
                             <strong>Todos los archivos</strong> y seleccione el <code>.xlsx</code>.
                             Mínimo para cédula: <code>cedula</code>/<code>cc</code>/<code>documento</code> + <code>fmi</code>.
                             También pegar desde Excel abajo (TSV). Separador <code>,</code> / <code>;</code> / tab.
                         </p>
+                        <p id="fmi-archivo-nombre" class="hidden text-xs font-medium text-slate-700"></p>
                         <label class="block text-xs font-bold uppercase text-indigo-900" for="fmi-cedula-textarea">Pegar cédula + FMI</label>
                         <textarea id="fmi-cedula-textarea" rows="4"
                                   class="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-800 font-mono"
@@ -382,17 +384,26 @@
                         <div class="flex flex-wrap gap-2">
                             <button type="button" id="btn-fmi-aplicar-csv"
                                     class="text-xs font-semibold border border-indigo-300 bg-white text-indigo-900 rounded-lg px-3 py-1.5 hover:bg-indigo-100">
-                                Aplicar archivo al lote
+                                Reaplicar archivo
                             </button>
                             <button type="button" id="btn-fmi-aplicar-cedula"
                                     class="text-xs font-semibold bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg px-3 py-1.5">
-                                Aplicar por cédula
+                                Aplicar pegado por cédula
                             </button>
                         </div>
                     </div>
                 </div>
-                <p id="fmi-masivo-status" class="text-xs text-indigo-900"></p>
-                <div id="fmi-masivo-detalle" class="hidden text-xs space-y-1"></div>
+                <div id="fmi-masivo-banner"
+                     class="hidden rounded-lg border px-3 py-2.5 text-sm font-medium"
+                     role="status" aria-live="polite">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span id="fmi-masivo-spinner"
+                              class="hidden inline-block h-4 w-4 shrink-0 rounded-full border-2 border-indigo-300 border-t-indigo-700 animate-spin"
+                              aria-hidden="true"></span>
+                        <p id="fmi-masivo-status" class="m-0"></p>
+                    </div>
+                    <div id="fmi-masivo-detalle" class="hidden mt-2 text-xs space-y-1 font-normal"></div>
+                </div>
             </div>
             <div id="cert-bloques" class="space-y-3"></div>
         </div>
@@ -797,29 +808,80 @@
         return out;
     }
 
-    function setFmiMasivoStatus(msg, isError) {
-        const el = document.getElementById('fmi-masivo-status');
+    function setFmiArchivoNombre(file) {
+        const el = document.getElementById('fmi-archivo-nombre');
         if (!el) return;
-        el.textContent = msg || '';
-        el.className = isError
-            ? 'text-xs text-red-700 font-semibold'
-            : 'text-xs text-indigo-900';
+        if (!file) {
+            el.classList.add('hidden');
+            el.textContent = '';
+            return;
+        }
+        const kb = file.size ? ` · ${(file.size / 1024).toFixed(1)} KB` : '';
+        el.textContent = `Archivo: ${file.name}${kb}`;
+        el.classList.remove('hidden');
     }
 
-    function setFmiMasivoDetalle(sinMatch, conflictos) {
+    function setFmiMasivoBusy(busy) {
+        const spinner = document.getElementById('fmi-masivo-spinner');
+        const btnCsv = document.getElementById('btn-fmi-aplicar-csv');
+        const btnCed = document.getElementById('btn-fmi-aplicar-cedula');
+        const btnLista = document.getElementById('btn-fmi-aplicar-lista');
+        const input = document.getElementById('fmi-csv-file');
+        if (spinner) spinner.classList.toggle('hidden', !busy);
+        [btnCsv, btnCed, btnLista, input].forEach(el => {
+            if (el) el.disabled = !!busy;
+        });
+    }
+
+    function setFmiMasivoStatus(msg, isError, opts) {
+        const banner = document.getElementById('fmi-masivo-banner');
+        const el = document.getElementById('fmi-masivo-status');
+        if (!el || !banner) return;
+        const o = opts || {};
+        const busy = !!o.busy;
+        const warn = !!o.warn;
+        el.textContent = msg || '';
+        if (!msg) {
+            banner.classList.add('hidden');
+            setFmiMasivoBusy(false);
+            return;
+        }
+        banner.classList.remove('hidden');
+        if (busy) {
+            banner.className = 'rounded-lg border px-3 py-2.5 text-sm font-medium border-indigo-300 bg-indigo-50 text-indigo-950';
+        } else if (isError) {
+            banner.className = 'rounded-lg border px-3 py-2.5 text-sm font-medium border-red-300 bg-red-50 text-red-800';
+        } else if (warn) {
+            banner.className = 'rounded-lg border px-3 py-2.5 text-sm font-medium border-amber-300 bg-amber-50 text-amber-950';
+        } else {
+            banner.className = 'rounded-lg border px-3 py-2.5 text-sm font-medium border-emerald-300 bg-emerald-50 text-emerald-950';
+        }
+        setFmiMasivoBusy(busy);
+    }
+
+    function setFmiMasivoDetalle(sinMatch, conflictos, errores) {
         const el = document.getElementById('fmi-masivo-detalle');
         if (!el) return;
         const sm = sinMatch || [];
         const cf = conflictos || [];
-        if (!sm.length && !cf.length) {
+        const er = errores || [];
+        if (!sm.length && !cf.length && !er.length) {
             el.classList.add('hidden');
             el.innerHTML = '';
             return;
         }
         const parts = [];
+        if (er.length) {
+            parts.push(
+                `<p class="font-semibold text-red-800">Errores (${er.length}): `
+                + er.slice(0, 5).map(x => esc(String(x))).join('; ')
+                + (er.length > 5 ? '…' : '')
+                + '</p>'
+            );
+        }
         if (sm.length) {
             parts.push(
-                `<p class="font-semibold text-amber-800">Sin match (${sm.length}): `
+                `<p class="font-semibold text-amber-900">Sin match (${sm.length}): `
                 + sm.slice(0, 8).map(x => esc(x.cedula || '')).join(', ')
                 + (sm.length > 8 ? '…' : '')
                 + '</p>'
@@ -923,7 +985,8 @@
         let msg = `Aplicados ${aplicadas} FMI a ${dest.length} fila(s) (${modo}).`;
         if (sobrantes) msg += ` ${sobrantes} línea(s) sobrante(s) ignorada(s).`;
         if (faltantes) msg += ` ${faltantes} fila(s) sin línea de FMI.`;
-        setFmiMasivoStatus(msg, false);
+        setFmiMasivoStatus(msg, false, { warn: !!(sobrantes || faltantes) });
+        setFmiMasivoDetalle([], [], []);
         setStatus(msg);
     }
 
@@ -1073,94 +1136,174 @@
     }
 
     function resumenFmiAplicacion(aplicadas, filasN, errores, sinMatch, conflictos) {
-        let msg = `Aplicados ${aplicadas} FMI de ${filasN} fila(s).`;
-        if (sinMatch.length) msg += ` Sin match: ${sinMatch.length}.`;
-        if (conflictos.length) msg += ` Conflictos: ${conflictos.length} (omitidos).`;
-        if (errores.length) {
-            msg += ` ${errores.length} error(es): ${errores.slice(0, 3).join('; ')}`
-                + (errores.length > 3 ? '…' : '');
+        const msg = `${aplicadas} aplicados, ${sinMatch.length} sin match, ${conflictos.length} conflictos`
+            + (errores.length ? `, ${errores.length} error(es)` : '')
+            + ` (de ${filasN} fila(s) del archivo).`;
+        const isError = aplicadas === 0 && (errores.length > 0 || sinMatch.length > 0 || conflictos.length > 0 || filasN === 0);
+        const warn = !isError && (sinMatch.length > 0 || conflictos.length > 0 || errores.length > 0);
+        return { msg, isError, warn };
+    }
+
+    function esArchivoExcelFmi(file, headU8) {
+        const name = String((file && file.name) || '').toLowerCase().trim();
+        const type = String((file && file.type) || '').toLowerCase();
+        if (/\.xlsx$/i.test(name) || /\.xls$/i.test(name)) return true;
+        if (
+            type.includes('spreadsheet')
+            || type.includes('excel')
+            || type === 'application/vnd.ms-excel'
+            || type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        ) {
+            return true;
         }
-        const isError = aplicadas === 0 && (errores.length > 0 || sinMatch.length > 0 || conflictos.length > 0);
-        return { msg, isError };
+        if (headU8 && headU8.length >= 4) {
+            // OOXML (.xlsx) = ZIP "PK"; OLE (.xls) = D0 CF 11 E0
+            if (headU8[0] === 0x50 && headU8[1] === 0x4B) return true;
+            if (headU8[0] === 0xD0 && headU8[1] === 0xCF && headU8[2] === 0x11 && headU8[3] === 0xE0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function textoPareceExcelBinario(texto) {
+        const t = String(texto || '');
+        return t.startsWith('PK') || t.includes('[Content_Types].xml') || t.includes('xl/workbook');
+    }
+
+    async function parsearExcelFmiEnServidor(file) {
+        const fd = new FormData();
+        fd.append('archivo', file, file.name || 'fmi.xlsx');
+        const res = await fetch('/herramientas/estado-cuenta/fmi-parse-tabla', {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            const detail = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
+            throw new Error(
+                `No se pudo leer el Excel (use columnas CC|FMI o cedula+fmi): ${detail}`
+            );
+        }
+        return data.filas || [];
     }
 
     async function leerFilasFmiDesdeArchivo(file) {
-        const name = (file.name || '').toLowerCase();
-        if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
-            const fd = new FormData();
-            fd.append('archivo', file);
-            const res = await fetch('/herramientas/estado-cuenta/fmi-parse-tabla', {
-                method: 'POST',
-                body: fd,
-                credentials: 'same-origin',
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                throw new Error((data && (data.detail || data.message)) || `HTTP ${res.status}`);
-            }
-            return data.filas || [];
+        // Nunca parsear .xlsx/.xls como CSV en el cliente: file.text() sobre OOXML
+        // produce "CSV debe incluir columna fmi" aunque el Excel sí tenga FMI.
+        const headBuf = await file.slice(0, 8).arrayBuffer();
+        const headU8 = new Uint8Array(headBuf);
+        if (esArchivoExcelFmi(file, headU8)) {
+            return parsearExcelFmiEnServidor(file);
         }
         const texto = await file.text();
-        return parseFmiCsvTexto(texto);
+        if (!String(texto || '').trim()) {
+            throw new Error('El archivo está vacío. Use un CSV/Excel con encabezado CC|FMI (o cedula,fmi).');
+        }
+        if (textoPareceExcelBinario(texto)) {
+            // Nombre/MIME engañosos: reintentar por servidor, no validar como CSV.
+            return parsearExcelFmiEnServidor(file);
+        }
+        try {
+            return parseFmiCsvTexto(texto);
+        } catch (e) {
+            const msg = (e && e.message) || String(e);
+            if (/columna fmi/i.test(msg)) {
+                throw new Error(
+                    `${msg}. Si subió un .xlsx, debe parsearse como Excel (no como CSV). `
+                    + 'Verifique que el archivo sea Libro2.xlsx con columnas CC|FMI, o use CSV de texto.'
+                );
+            }
+            throw e;
+        }
     }
 
-    async function aplicarFmiCsvAlLote() {
+    async function aplicarFmiCsvAlLote(opts) {
+        const o = opts || {};
         if (!lastCertPreview) {
-            setFmiMasivoStatus('Primero genere el preview de certificados.', true);
+            setFmiMasivoStatus(
+                'Primero genere el preview de certificados (Analizar → Generar certificado) y luego elija el Excel FMI.',
+                true
+            );
+            setFmiMasivoDetalle([], [], []);
             return;
         }
         const input = document.getElementById('fmi-csv-file');
         const file = input && input.files && input.files[0];
         if (!file) {
-            setFmiMasivoStatus('Seleccione un archivo CSV o Excel.', true);
+            if (!o.fromChange) {
+                setFmiMasivoStatus('Seleccione un archivo CSV o Excel (.xlsx / .csv).', true);
+                setFmiMasivoDetalle([], [], []);
+            }
             return;
         }
+        setFmiArchivoNombre(file);
+        setFmiMasivoDetalle([], [], []);
+        setFmiMasivoStatus(`Aplicando… ${file.name}`, false, { busy: true });
+        setStatus(`Aplicando FMI desde ${file.name}…`);
         try {
             const filas = await leerFilasFmiDesdeArchivo(file);
+            if (!filas.length) {
+                throw new Error(
+                    'El archivo no tiene filas de datos. Verifique encabezados CC|FMI (o cedula + fmi) y al menos una fila.'
+                );
+            }
             capturarFmiDelDom();
             const { aplicadas, errores, sinMatch, conflictos } = mapearFmiCsvAlPreview(filas);
             syncFmiInputsFromMap();
-            const { msg, isError } = resumenFmiAplicacion(
+            const { msg, isError, warn } = resumenFmiAplicacion(
                 aplicadas, filas.length, errores, sinMatch, conflictos
             );
-            setFmiMasivoStatus(msg, isError);
-            setFmiMasivoDetalle(sinMatch, conflictos);
+            setFmiMasivoStatus(msg, isError, { warn });
+            setFmiMasivoDetalle(sinMatch, conflictos, errores);
             setStatus(msg, isError);
         } catch (e) {
-            setFmiMasivoStatus(e.message || 'No se pudo leer el archivo.', true);
-            setFmiMasivoDetalle([], []);
+            const errMsg = e.message || 'No se pudo leer el archivo FMI.';
+            setFmiMasivoStatus(errMsg, true);
+            setFmiMasivoDetalle([], [], [errMsg]);
+            setStatus(errMsg, true);
         }
     }
 
     function aplicarFmiCedulaAlLote() {
         if (!lastCertPreview) {
             setFmiMasivoStatus('Primero genere el preview de certificados.', true);
+            setFmiMasivoDetalle([], [], []);
             return;
         }
         const ta = document.getElementById('fmi-cedula-textarea');
         const raw = (ta && ta.value) || '';
         if (!raw.trim()) {
             setFmiMasivoStatus('Pegue filas con encabezado cedula,fmi (o copie desde Excel).', true);
+            setFmiMasivoDetalle([], [], []);
             return;
         }
+        setFmiMasivoStatus('Aplicando… pegado por cédula', false, { busy: true });
         try {
             const filas = parseFmiCsvTexto(raw);
+            if (!filas.length) {
+                throw new Error('El pegado no tiene filas de datos.');
+            }
             if (!filas.some(f => (f.cedula || '').trim())) {
                 setFmiMasivoStatus('El pegado debe incluir columna cedula (o documento/cc).', true);
+                setFmiMasivoDetalle([], [], []);
                 return;
             }
             capturarFmiDelDom();
             const { aplicadas, errores, sinMatch, conflictos } = mapearFmiCsvAlPreview(filas);
             syncFmiInputsFromMap();
-            const { msg, isError } = resumenFmiAplicacion(
+            const { msg, isError, warn } = resumenFmiAplicacion(
                 aplicadas, filas.length, errores, sinMatch, conflictos
             );
-            setFmiMasivoStatus(msg, isError);
-            setFmiMasivoDetalle(sinMatch, conflictos);
+            setFmiMasivoStatus(msg, isError, { warn });
+            setFmiMasivoDetalle(sinMatch, conflictos, errores);
             setStatus(msg, isError);
         } catch (e) {
-            setFmiMasivoStatus(e.message || 'No se pudo interpretar el pegado.', true);
-            setFmiMasivoDetalle([], []);
+            const errMsg = e.message || 'No se pudo interpretar el pegado.';
+            setFmiMasivoStatus(errMsg, true);
+            setFmiMasivoDetalle([], [], [errMsg]);
+            setStatus(errMsg, true);
         }
     }
 
@@ -2228,6 +2371,7 @@
     const btnFmiAplicarCedula = document.getElementById('btn-fmi-aplicar-cedula');
     const btnFmiPlantilla = document.getElementById('btn-fmi-plantilla');
     const btnFmiPlantillaCedula = document.getElementById('btn-fmi-plantilla-cedula');
+    const fmiCsvFileInput = document.getElementById('fmi-csv-file');
     if (btnFmiAplicarLista) {
         btnFmiAplicarLista.addEventListener('click', () => aplicarFmiListaAlLote());
     }
@@ -2236,6 +2380,18 @@
     }
     if (btnFmiAplicarCedula) {
         btnFmiAplicarCedula.addEventListener('click', () => aplicarFmiCedulaAlLote());
+    }
+    if (fmiCsvFileInput) {
+        fmiCsvFileInput.addEventListener('change', () => {
+            const file = fmiCsvFileInput.files && fmiCsvFileInput.files[0];
+            setFmiArchivoNombre(file || null);
+            if (!file) {
+                setFmiMasivoStatus('Selección de archivo cancelada. Elija un .xlsx/.csv para aplicar FMI.', true);
+                setFmiMasivoDetalle([], [], []);
+                return;
+            }
+            aplicarFmiCsvAlLote({ fromChange: true });
+        });
     }
     if (btnFmiPlantilla) {
         btnFmiPlantilla.addEventListener('click', () => descargarPlantillaFmiCsv());

@@ -371,16 +371,21 @@ async def fmi_parse_tabla(
     archivo: UploadFile = File(..., description="CSV o Excel con cedula/fmi u otras claves"),
 ):
     """Parsea CSV/Excel a filas FMI para aplicar en el preview (cliente)."""
-    from certificados_fmi_masivo import filas_desde_excel, parse_fmi_csv
+    from certificados_fmi_masivo import (
+        _parece_excel_fmi,
+        filas_desde_excel,
+        parse_fmi_csv,
+    )
 
     nombre = (archivo.filename or "").strip()
     raw = await archivo.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Archivo vacío")
-    name_l = nombre.lower()
     try:
-        if name_l.endswith((".xlsx", ".xls")):
-            filas = filas_desde_excel(raw, nombre=nombre)
+        if _parece_excel_fmi(nombre, raw):
+            # Nunca decode OOXML como UTF-8/CSV — eso pierde CC|FMI y falla
+            # con "CSV debe incluir columna fmi".
+            filas = filas_desde_excel(raw, nombre=nombre or "fmi.xlsx")
         else:
             texto = raw.decode("utf-8-sig")
             filas = parse_fmi_csv(texto)
@@ -389,6 +394,6 @@ async def fmi_parse_tabla(
     except UnicodeDecodeError as exc:
         raise HTTPException(
             status_code=400,
-            detail="No se pudo leer el archivo como texto UTF-8; use CSV o Excel.",
+            detail="No se pudo leer el archivo como texto UTF-8; use CSV o Excel (.xlsx).",
         ) from exc
     return {"filas": filas, "archivo": nombre, "n": len(filas)}
