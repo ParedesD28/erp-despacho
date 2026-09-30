@@ -635,6 +635,9 @@ class PoderConCertificadoTests(unittest.TestCase):
                 "titular_nombre": "JUAN LOPEZ",
                 "titular_cedula": "555",
                 "ciudad": "Pereira",
+                "copropiedad_direccion": "Carrera 1",
+                "copropiedad_telefono": "300",
+                "copropiedad_email": "a@b.com",
             },
             capital_limpio_a_demandar=[
                 {"fecha": "2024.06.01", "valor_a_demandar": 40},
@@ -643,6 +646,9 @@ class PoderConCertificadoTests(unittest.TestCase):
             representante_cedula="35.319.382",
         )
         self.assertEqual(ctx["fmi"], "")
+        self.assertNotIn("copropiedad_direccion", ctx)
+        self.assertNotIn("resolucion_numero", ctx)
+        self.assertNotIn("representante_cedula_expedida_en", ctx)
         self.assertEqual(ctx["ejecutante_nit"], "900")
         self.assertIn("JUAN LOPEZ", ctx["ejecutados_texto"])
         self.assertEqual(ctx["apoderado_nombre"], svc.APODERADO_NOMBRE)
@@ -654,6 +660,34 @@ class PoderConCertificadoTests(unittest.TestCase):
             self.assertIn("JUAN LOPEZ", xml)
             self.assertIn(svc.APODERADO_NOMBRE, xml)
             self.assertNotIn("290-219335", xml)
+            self.assertNotIn("Carrera 1", xml)
+            self.assertNotIn("Resolución número ________", xml)
+            self.assertNotIn("expedida en la ciudad", xml)
+
+    def test_contexto_poder_incluye_fmi_si_se_pasa(self):
+        ctx = svc.construir_contexto_poder(
+            datos_neon={
+                "copropiedad_nombre": "PH Demo",
+                "copropiedad_nit": "900",
+                "torre_apto": "2-202",
+                "conjunto_nombre": "Demo",
+                "titular_nombre": "JUAN LOPEZ",
+                "titular_cedula": "555",
+                "ciudad": "Pereira",
+            },
+            capital_limpio_a_demandar=[
+                {"fecha": "2024.06.01", "valor_a_demandar": 40},
+            ],
+            representante_nombre="GLADYS DEMO",
+            representante_cedula="35.319.382",
+            fmi="290-219335",
+        )
+        self.assertEqual(ctx["fmi"], "290-219335")
+        buf = svc.renderizar_poder(ctx)
+        with zipfile.ZipFile(BytesIO(buf.getvalue())) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+            self.assertIn("290-219335", xml)
+            self.assertIn("identificado con el FMI", xml)
 
     def test_generar_incluye_poder_por_default(self):
         with patch(
@@ -727,6 +761,38 @@ class PoderConCertificadoTests(unittest.TestCase):
             self.assertNotIn(svc.APODERADO_NOMBRE, xml)
             self.assertNotIn("Acepto", xml)
 
+    def test_generar_poder_con_fmi_en_meta(self):
+        with patch(
+            "certificados_deuda_service.resolver_datos_certificado",
+            return_value={
+                "inmueble_id": 7,
+                "copropiedad_nombre": "PH Demo",
+                "copropiedad_nit": "900",
+                "titular_nombre": "JUAN LOPEZ",
+                "titular_cedula": "555",
+                "torre_apto": "2-202",
+                "conjunto_nombre": "Demo",
+                "ciudad": "Pereira",
+            },
+        ):
+            buf, _nombre, meta = svc.generar_certificado_deuda(
+                capital_limpio_a_demandar=[
+                    {
+                        "fecha": "2024.06.01",
+                        "concepto": "CUOTA ADMINISTRACION",
+                        "valor_a_demandar": 40,
+                    }
+                ],
+                inmueble_id=7,
+                representante_nombre="RL",
+                representante_cedula="99",
+                fmi="290-999",
+            )
+        self.assertEqual(meta.get("fmi"), "290-999")
+        with zipfile.ZipFile(BytesIO(buf.getvalue())) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+            self.assertIn("290-999", xml)
+
 
 class RbacCertificadoTests(unittest.TestCase):
     def test_post_exige_accion_editar(self):
@@ -735,6 +801,21 @@ class RbacCertificadoTests(unittest.TestCase):
         path = "/herramientas/estado-cuenta/certificado-deuda"
         self.assertTrue(permisos.denegar_acceso(consulta, "POST", path))
         self.assertFalse(permisos.denegar_acceso(abogado, "POST", path))
+
+
+class FmiPorIndiceParseTests(unittest.TestCase):
+    def test_parse_objeto(self):
+        from certificados_deuda_router import _parse_fmi_por_indice
+
+        self.assertEqual(
+            _parse_fmi_por_indice('{"0":"290-1","2":" 290-2 "}'),
+            {0: "290-1", 2: "290-2"},
+        )
+        self.assertIsNone(_parse_fmi_por_indice(""))
+        self.assertEqual(
+            _parse_fmi_por_indice('[[1,"A"],{"indice":3,"fmi":"B"}]'),
+            {1: "A", 3: "B"},
+        )
 
 
 if __name__ == "__main__":

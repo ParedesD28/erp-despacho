@@ -90,12 +90,15 @@ class CertificadoDeudaRequest(BaseModel):
         default=True,
         description=(
             "Si true, append del poder en el mismo .docx tras un salto de página. "
-            "No inventa FMI/resolución; usa antefirma RL y datos del certificado."
+            "FMI opcional por cuenta; vacío = se omite en el poder."
         ),
     )
     fmi: str = Field(
         default="",
-        description="Folio de matrícula (opcional). Vacío = se omite; no se inventa.",
+        description=(
+            "Folio de matrícula inmobiliaria (opcional). Vacío = se omite en el "
+            "poder; no se inventa ni bloquea la emisión."
+        ),
     )
 
 
@@ -189,6 +192,34 @@ def _parse_indices(raw: str) -> Optional[list[int]]:
     raise ValueError("indices debe ser JSON array o lista separada por comas")
 
 
+def _parse_fmi_por_indice(raw: str) -> Optional[dict[int, str]]:
+    """Parsea mapa índice→FMI (`{"0":"290-1"}` o `[[0,"290-1"]]`)."""
+    texto = (raw or "").strip()
+    if not texto:
+        return None
+    try:
+        data = json.loads(texto)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "fmi_por_indice debe ser JSON objeto o lista de pares"
+        ) from exc
+    if isinstance(data, dict):
+        return {int(k): str(v or "").strip() for k, v in data.items()}
+    if isinstance(data, list):
+        out: dict[int, str] = {}
+        for item in data:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                out[int(item[0])] = str(item[1] or "").strip()
+            elif isinstance(item, dict) and "indice" in item:
+                out[int(item["indice"])] = str(item.get("fmi") or "").strip()
+            else:
+                raise ValueError(
+                    "cada entrada de fmi_por_indice requiere indice y fmi"
+                )
+        return out
+    raise ValueError("fmi_por_indice debe ser JSON objeto o lista")
+
+
 @router.post("/herramientas/estado-cuenta/procesar-certificado")
 async def procesar_certificado_unificado(
     cache_id: str = Form(""),
@@ -227,6 +258,13 @@ async def procesar_certificado_unificado(
             "Si true, cada Word incluye el poder (misma sección tras page break)."
         ),
     ),
+    fmi_por_indice: str = Form(
+        "",
+        description=(
+            "Opcional (modo generar): JSON mapa índice→FMI, p.ej. "
+            '{"0":"290-219335","2":"290-1"}. Vacío por cuenta = se omite.'
+        ),
+    ),
 ):
     """
     Flujo unificado: Bolsa Global → lookup Neon (clave canónica) → certificado(s).
@@ -240,7 +278,8 @@ async def procesar_certificado_unificado(
       en plantilla; lista completa en contexto). No prorratea Bolsa.
       Acepta `indices` y/o filtros (`filtro_conjunto`, `filtro_busqueda`,
       `solo_match_neon`). Con `incluir_poder` (default true) append del poder
-      en el mismo archivo.
+      en el mismo archivo. `fmi_por_indice` alimenta el placeholder FMI del
+      poder por cuenta (vacío permitido; no se inventa).
 
     Acepta `cache_id` (tras Analizar) y/o `archivos` PDF.
     `sin_match` = fallo de cruce Neon (no confundir con co-propietarios).
@@ -250,6 +289,11 @@ async def procesar_certificado_unificado(
 
     try:
         idxs = _parse_indices(indices)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        fmi_map = _parse_fmi_por_indice(fmi_por_indice)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -273,6 +317,7 @@ async def procesar_certificado_unificado(
             filtro_busqueda=filtro_busqueda,
             solo_match_neon=solo_match_neon,
             incluir_poder=incluir_poder,
+            fmi_por_indice=fmi_map,
         )
     except CertificadoNoEncontradoError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

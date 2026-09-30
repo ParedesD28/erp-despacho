@@ -352,6 +352,7 @@ def _generar_uno(
     copropiedad_nombre: str = "",
     ciudad: str = "",
     incluir_poder: bool = True,
+    fmi: str = "",
 ) -> tuple[BytesIO, str, dict[str, Any]]:
     """Genera un certificado por unidad (principal + lista completa en contexto)."""
     neon = item.get("datos_neon")
@@ -359,6 +360,7 @@ def _generar_uno(
     sel = item.get("titular_seleccionado") or {}
     titular_nombre = (sel.get("nombre") or item.get("titular_pdf") or "").strip()
     cedula = (sel.get("cedula") or titular_cedula or "").strip()
+    fmi_final = (fmi or item.get("fmi") or "").strip()
 
     return generar_certificado_deuda(
         capital_limpio_a_demandar=item.get("capital_limpio_a_demandar") or [],
@@ -394,6 +396,7 @@ def _generar_uno(
         permitir_datos_pdf=permitir_datos_pdf
         or item.get("estado") == "fallback_pdf",
         incluir_poder=incluir_poder,
+        fmi=fmi_final,
     )
 
 
@@ -410,6 +413,7 @@ def generar_certificados_desde_preview(
     ciudad: str = "",
     indices: Optional[list[int]] = None,
     incluir_poder: bool = True,
+    fmi_por_indice: Optional[dict[int, str]] = None,
 ) -> tuple[BytesIO, str, dict[str, Any]]:
     """
     Emite Word(s) para resultados emitibles del preview.
@@ -423,6 +427,8 @@ def generar_certificados_desde_preview(
     los Word del lote; si falta, no se genera ningún archivo.
 
     `incluir_poder`: append del poder en el mismo .docx (default True).
+    `fmi_por_indice`: mapa índice del preview → FMI (texto). Vacío permitido;
+    la plantilla omite el fragmento FMI si no hay valor.
     """
     # Early-return: no zip/docx parciales sin antefirma del RL.
     rl_nombre, rl_cedula = validar_antefirma_representante(
@@ -430,12 +436,20 @@ def generar_certificados_desde_preview(
     )
 
     resultados = list(preview.get("resultados") or [])
+    fmi_map = {
+        int(k): str(v or "").strip()
+        for k, v in (fmi_por_indice or {}).items()
+    }
     if indices is not None:
-        elegidos = [resultados[i] for i in indices if 0 <= i < len(resultados)]
+        elegidos = [
+            (i, resultados[i])
+            for i in indices
+            if 0 <= i < len(resultados)
+        ]
     else:
         elegidos = [
-            r
-            for r in resultados
+            (i, r)
+            for i, r in enumerate(resultados)
             if r.get("estado") in {"ok", "varios_propietarios", "fallback_pdf"}
             and r.get("capital_limpio_a_demandar")
         ]
@@ -451,7 +465,7 @@ def generar_certificados_desde_preview(
     meta_lista: list[dict[str, Any]] = []
     errores: list[str] = []
 
-    for item in elegidos:
+    for idx, item in elegidos:
         try:
             buf, nombre, meta = _generar_uno(
                 item,
@@ -464,6 +478,7 @@ def generar_certificados_desde_preview(
                 copropiedad_nombre=copropiedad_nombre,
                 ciudad=ciudad,
                 incluir_poder=incluir_poder,
+                fmi=fmi_map.get(idx, ""),
             )
             generados.append((nombre, buf.getvalue()))
             meta_lista.append(meta)
@@ -524,6 +539,7 @@ def procesar_y_generar_certificados(
     filtro_busqueda: str = "",
     solo_match_neon: bool = False,
     incluir_poder: bool = True,
+    fmi_por_indice: Optional[dict[int, str]] = None,
 ) -> dict[str, Any] | tuple[BytesIO, str, dict[str, Any]]:
     """
     Punto único: preview (dict) o generar (buffer, filename, meta).
@@ -534,6 +550,7 @@ def procesar_y_generar_certificados(
 
     Filtros (`filtro_*` / `solo_match_neon`) aplican al emitir; si además
     hay `indices`, se intersectan (no se mezclan deudores entre cuentas).
+    `fmi_por_indice` aplica solo en `generar` (índice del preview → FMI).
     """
     preview = procesar_lote_certificados(
         cuentas,
@@ -572,4 +589,5 @@ def procesar_y_generar_certificados(
         ciudad=ciudad,
         indices=idxs,
         incluir_poder=incluir_poder,
+        fmi_por_indice=fmi_por_indice,
     )
