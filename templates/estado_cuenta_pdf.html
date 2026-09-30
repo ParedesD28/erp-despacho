@@ -326,15 +326,24 @@
                     <div>
                         <p class="text-sm font-bold text-indigo-950">Carga masiva de FMI</p>
                         <p class="text-xs text-indigo-800 mt-0.5">
-                            No se inventa folio: pegue una lista (mismo orden) o suba CSV con
-                            <code>indice</code> / <code>archivo</code> / <code>torre_apto</code> / <code>codigo_cuenta</code> + <code>fmi</code>.
-                            Vacío = se omite en el poder.
+                            No se inventa folio. Tres formas:
+                            (1) pegar lista en orden;
+                            (2) CSV por <code>indice</code> / <code>archivo</code> / <code>torre_apto</code> / <code>codigo_cuenta</code>;
+                            (3) CSV/Excel por <code>cedula</code> + <code>fmi</code>
+                            (matchea titular y co-propietarios/codeudores del preview).
+                            Vacío = se omite en el poder. Cédula ambigua → conflicto (no asigna).
                         </p>
                     </div>
-                    <button type="button" id="btn-fmi-plantilla"
-                            class="text-xs font-semibold border border-indigo-300 bg-white text-indigo-900 rounded-lg px-3 py-1.5 hover:bg-indigo-100">
-                        Descargar plantilla CSV
-                    </button>
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" id="btn-fmi-plantilla"
+                                class="text-xs font-semibold border border-indigo-300 bg-white text-indigo-900 rounded-lg px-3 py-1.5 hover:bg-indigo-100">
+                            Plantilla por unidad
+                        </button>
+                        <button type="button" id="btn-fmi-plantilla-cedula"
+                                class="text-xs font-semibold border border-indigo-300 bg-white text-indigo-900 rounded-lg px-3 py-1.5 hover:bg-indigo-100">
+                            Plantilla por cédula
+                        </button>
+                    </div>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div class="space-y-2">
@@ -355,20 +364,32 @@
                         </div>
                     </div>
                     <div class="space-y-2">
-                        <label class="block text-xs font-bold uppercase text-indigo-900" for="fmi-csv-file">CSV / Excel simple</label>
-                        <input type="file" id="fmi-csv-file" accept=".csv,.tsv,.txt,text/csv,text/plain"
+                        <label class="block text-xs font-bold uppercase text-indigo-900" for="fmi-csv-file">CSV / Excel (unidad o cédula)</label>
+                        <input type="file" id="fmi-csv-file" accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                                class="block w-full text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-700 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-indigo-800">
                         <p class="text-xs text-indigo-800">
-                            Encabezado obligatorio. Separador <code>,</code> o <code>;</code>.
-                            Exporte la plantilla, rellene <code>fmi</code> offline y vuelva a subir.
+                            Mínimo para cédula: columnas <code>cedula</code> (o <code>documento</code>/<code>cc</code>) + <code>fmi</code>.
+                            También acepta pegar desde Excel en el recuadro de abajo (TSV).
+                            Separador <code>,</code> / <code>;</code> / tab.
                         </p>
-                        <button type="button" id="btn-fmi-aplicar-csv"
-                                class="text-xs font-semibold border border-indigo-300 bg-white text-indigo-900 rounded-lg px-3 py-1.5 hover:bg-indigo-100">
-                            Aplicar CSV al lote
-                        </button>
+                        <label class="block text-xs font-bold uppercase text-indigo-900" for="fmi-cedula-textarea">Pegar cédula + FMI</label>
+                        <textarea id="fmi-cedula-textarea" rows="4"
+                                  class="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-800 font-mono"
+                                  placeholder="cedula,fmi&#10;52.000.000,290-219335&#10;1.001.7480,290-219340"></textarea>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" id="btn-fmi-aplicar-csv"
+                                    class="text-xs font-semibold border border-indigo-300 bg-white text-indigo-900 rounded-lg px-3 py-1.5 hover:bg-indigo-100">
+                                Aplicar archivo al lote
+                            </button>
+                            <button type="button" id="btn-fmi-aplicar-cedula"
+                                    class="text-xs font-semibold bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg px-3 py-1.5">
+                                Aplicar por cédula
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <p id="fmi-masivo-status" class="text-xs text-indigo-900"></p>
+                <div id="fmi-masivo-detalle" class="hidden text-xs space-y-1"></div>
             </div>
             <div id="cert-bloques" class="space-y-3"></div>
         </div>
@@ -782,6 +803,57 @@
             : 'text-xs text-indigo-900';
     }
 
+    function setFmiMasivoDetalle(sinMatch, conflictos) {
+        const el = document.getElementById('fmi-masivo-detalle');
+        if (!el) return;
+        const sm = sinMatch || [];
+        const cf = conflictos || [];
+        if (!sm.length && !cf.length) {
+            el.classList.add('hidden');
+            el.innerHTML = '';
+            return;
+        }
+        const parts = [];
+        if (sm.length) {
+            parts.push(
+                `<p class="font-semibold text-amber-800">Sin match (${sm.length}): `
+                + sm.slice(0, 8).map(x => esc(x.cedula || '')).join(', ')
+                + (sm.length > 8 ? '…' : '')
+                + '</p>'
+            );
+        }
+        if (cf.length) {
+            parts.push(
+                `<p class="font-semibold text-red-800">Conflictos — cédula en varias cuentas (${cf.length}); no asignados: `
+                + cf.slice(0, 8).map(x => {
+                    const idxs = (x.indices || []).join('/');
+                    return `${esc(x.cedula || '')}→[${esc(idxs)}]`;
+                }).join('; ')
+                + (cf.length > 8 ? '…' : '')
+                + '</p>'
+            );
+        }
+        el.innerHTML = parts.join('');
+        el.classList.remove('hidden');
+    }
+
+    function normalizarCedulaJs(valor) {
+        return String(valor == null ? '' : valor).replace(/\D+/g, '');
+    }
+
+    function cedulasDeResultadoJs(r) {
+        const out = new Set();
+        const add = (raw) => {
+            const n = normalizarCedulaJs(raw);
+            if (n) out.add(n);
+        };
+        add(r.titular_cedula);
+        if (r.titular_seleccionado) add(r.titular_seleccionado.cedula);
+        (r.deudores || []).forEach(d => add(d && d.cedula));
+        (r.propietarios || []).forEach(d => add(d && d.cedula));
+        return out;
+    }
+
     function indicesDestinoFmiLista(modo) {
         const payload = lastCertPreview;
         if (!payload) return [];
@@ -877,6 +949,8 @@
         if (lines.length < 2) throw new Error('CSV sin filas de datos');
         const headers = lines[0].split(delim).map(h => h.trim().replace(/^"|"$/g, ''));
         const col = {};
+        const cedulaKeys = ['cedula', 'documento', 'cc', 'nro_documento', 'numero_documento',
+            'num_documento', 'identificacion', 'doc'];
         headers.forEach((name, i) => {
             const key = _normFmiKey(name);
             if (['indice', 'index', 'idx', '#'].includes(key)) col.indice = i;
@@ -884,11 +958,13 @@
             else if (['archivo', 'file', 'pdf', 'nombre_archivo'].includes(key)) col.archivo = i;
             else if (['torre_apto', 'torre-apto', 'clave_canonica', 'clave', 'bloque_apto', 'unidad'].includes(key)) col.torre_apto = i;
             else if (['codigo_cuenta', 'cuenta', 'cod_cuenta', 'codigo'].includes(key)) col.codigo_cuenta = i;
+            else if (cedulaKeys.includes(key)) col.cedula = i;
         });
         if (col.fmi === undefined) throw new Error('CSV debe incluir columna fmi');
         if (col.indice === undefined && col.archivo === undefined
-            && col.torre_apto === undefined && col.codigo_cuenta === undefined) {
-            throw new Error('CSV debe incluir indice, archivo, torre_apto o codigo_cuenta');
+            && col.torre_apto === undefined && col.codigo_cuenta === undefined
+            && col.cedula === undefined) {
+            throw new Error('CSV debe incluir indice, cedula, archivo, torre_apto o codigo_cuenta');
         }
         const filas = [];
         for (let li = 1; li < lines.length; li++) {
@@ -898,6 +974,7 @@
             if (col.archivo !== undefined) item.archivo = parts[col.archivo] || '';
             if (col.torre_apto !== undefined) item.torre_apto = parts[col.torre_apto] || '';
             if (col.codigo_cuenta !== undefined) item.codigo_cuenta = parts[col.codigo_cuenta] || '';
+            if (col.cedula !== undefined) item.cedula = parts[col.cedula] || '';
             if (!Object.values(item).some(Boolean)) continue;
             filas.push(item);
         }
@@ -909,6 +986,7 @@
         const byArchivo = {};
         const byTorre = {};
         const byCuenta = {};
+        const byCedula = {};
         resultados.forEach((r, i) => {
             const a = _normFmiMatch(r.archivo || '');
             if (a) (byArchivo[a] = byArchivo[a] || []).push(i);
@@ -916,9 +994,15 @@
             if (t) (byTorre[t] = byTorre[t] || []).push(i);
             const c = _normFmiMatch(r.codigo_cuenta || '');
             if (c) (byCuenta[c] = byCuenta[c] || []).push(i);
+            cedulasDeResultadoJs(r).forEach(ced => {
+                if (!byCedula[ced]) byCedula[ced] = [];
+                if (!byCedula[ced].includes(i)) byCedula[ced].push(i);
+            });
         });
         let aplicadas = 0;
         const errores = [];
+        const sinMatch = [];
+        const conflictos = [];
         filas.forEach((fila, n0) => {
             const n = n0 + 2;
             const fmi = (fila.fmi || '').trim();
@@ -936,6 +1020,24 @@
                     return;
                 }
                 via = 'indice';
+            } else if ((fila.cedula || '').trim() !== '') {
+                const rawCed = String(fila.cedula).trim();
+                const ced = normalizarCedulaJs(rawCed);
+                if (!ced) {
+                    errores.push(`fila ${n}: cédula inválida '${rawCed}'`);
+                    return;
+                }
+                const cands = byCedula[ced] || [];
+                if (!cands.length) {
+                    sinMatch.push({ fila: n, cedula: rawCed, fmi });
+                    return;
+                }
+                if (cands.length > 1) {
+                    conflictos.push({ fila: n, cedula: rawCed, fmi, indices: cands.slice() });
+                    return;
+                }
+                idx = cands[0];
+                via = 'cedula';
             } else {
                 let cands = [];
                 if ((fila.archivo || '').trim()) {
@@ -964,7 +1066,39 @@
             certFmiByGlobalIdx[idx] = fmi;
             aplicadas += 1;
         });
-        return { aplicadas, errores };
+        return { aplicadas, errores, sinMatch, conflictos };
+    }
+
+    function resumenFmiAplicacion(aplicadas, filasN, errores, sinMatch, conflictos) {
+        let msg = `Aplicados ${aplicadas} FMI de ${filasN} fila(s).`;
+        if (sinMatch.length) msg += ` Sin match: ${sinMatch.length}.`;
+        if (conflictos.length) msg += ` Conflictos: ${conflictos.length} (omitidos).`;
+        if (errores.length) {
+            msg += ` ${errores.length} error(es): ${errores.slice(0, 3).join('; ')}`
+                + (errores.length > 3 ? '…' : '');
+        }
+        const isError = aplicadas === 0 && (errores.length > 0 || sinMatch.length > 0 || conflictos.length > 0);
+        return { msg, isError };
+    }
+
+    async function leerFilasFmiDesdeArchivo(file) {
+        const name = (file.name || '').toLowerCase();
+        if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+            const fd = new FormData();
+            fd.append('archivo', file);
+            const res = await fetch('/herramientas/estado-cuenta/fmi-parse-tabla', {
+                method: 'POST',
+                body: fd,
+                credentials: 'same-origin',
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error((data && (data.detail || data.message)) || `HTTP ${res.status}`);
+            }
+            return data.filas || [];
+        }
+        const texto = await file.text();
+        return parseFmiCsvTexto(texto);
     }
 
     async function aplicarFmiCsvAlLote() {
@@ -975,24 +1109,55 @@
         const input = document.getElementById('fmi-csv-file');
         const file = input && input.files && input.files[0];
         if (!file) {
-            setFmiMasivoStatus('Seleccione un archivo CSV.', true);
+            setFmiMasivoStatus('Seleccione un archivo CSV o Excel.', true);
             return;
         }
         try {
-            const texto = await file.text();
-            const filas = parseFmiCsvTexto(texto);
+            const filas = await leerFilasFmiDesdeArchivo(file);
             capturarFmiDelDom();
-            const { aplicadas, errores } = mapearFmiCsvAlPreview(filas);
+            const { aplicadas, errores, sinMatch, conflictos } = mapearFmiCsvAlPreview(filas);
             syncFmiInputsFromMap();
-            let msg = `CSV: ${aplicadas} FMI aplicado(s) de ${filas.length} fila(s).`;
-            if (errores.length) {
-                msg += ` ${errores.length} error(es): ${errores.slice(0, 3).join('; ')}`
-                    + (errores.length > 3 ? '…' : '');
-            }
-            setFmiMasivoStatus(msg, errores.length > 0 && aplicadas === 0);
-            setStatus(msg, errores.length > 0 && aplicadas === 0);
+            const { msg, isError } = resumenFmiAplicacion(
+                aplicadas, filas.length, errores, sinMatch, conflictos
+            );
+            setFmiMasivoStatus(msg, isError);
+            setFmiMasivoDetalle(sinMatch, conflictos);
+            setStatus(msg, isError);
         } catch (e) {
-            setFmiMasivoStatus(e.message || 'No se pudo leer el CSV.', true);
+            setFmiMasivoStatus(e.message || 'No se pudo leer el archivo.', true);
+            setFmiMasivoDetalle([], []);
+        }
+    }
+
+    function aplicarFmiCedulaAlLote() {
+        if (!lastCertPreview) {
+            setFmiMasivoStatus('Primero genere el preview de certificados.', true);
+            return;
+        }
+        const ta = document.getElementById('fmi-cedula-textarea');
+        const raw = (ta && ta.value) || '';
+        if (!raw.trim()) {
+            setFmiMasivoStatus('Pegue filas con encabezado cedula,fmi (o copie desde Excel).', true);
+            return;
+        }
+        try {
+            const filas = parseFmiCsvTexto(raw);
+            if (!filas.some(f => (f.cedula || '').trim())) {
+                setFmiMasivoStatus('El pegado debe incluir columna cedula (o documento/cc).', true);
+                return;
+            }
+            capturarFmiDelDom();
+            const { aplicadas, errores, sinMatch, conflictos } = mapearFmiCsvAlPreview(filas);
+            syncFmiInputsFromMap();
+            const { msg, isError } = resumenFmiAplicacion(
+                aplicadas, filas.length, errores, sinMatch, conflictos
+            );
+            setFmiMasivoStatus(msg, isError);
+            setFmiMasivoDetalle(sinMatch, conflictos);
+            setStatus(msg, isError);
+        } catch (e) {
+            setFmiMasivoStatus(e.message || 'No se pudo interpretar el pegado.', true);
+            setFmiMasivoDetalle([], []);
         }
     }
 
@@ -1006,7 +1171,7 @@
         const rows = [['indice', 'archivo', 'torre_apto', 'codigo_cuenta', 'fmi']];
         (lastCertPreview.resultados || []).forEach((r, i) => {
             if (!emitibles.has(r.estado)) return;
-            const esc = (v) => {
+            const escCell = (v) => {
                 const s = String(v == null ? '' : v);
                 return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
             };
@@ -1016,7 +1181,7 @@
                 _torreDeResultado(r),
                 r.codigo_cuenta || '',
                 certFmiByGlobalIdx[i] || '',
-            ].map(esc));
+            ].map(escCell));
         });
         const csv = rows.map(r => r.join(',')).join('\n') + '\n';
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -1029,6 +1194,54 @@
         a.remove();
         URL.revokeObjectURL(url);
         setFmiMasivoStatus(`Plantilla CSV descargada (${rows.length - 1} fila(s) emitibles).`);
+        setFmiMasivoDetalle([], []);
+    }
+
+    function descargarPlantillaFmiCedulas() {
+        if (!lastCertPreview) {
+            setFmiMasivoStatus('Primero genere el preview de certificados.', true);
+            return;
+        }
+        capturarFmiDelDom();
+        const emitibles = new Set(['ok', 'varios_propietarios', 'fallback_pdf']);
+        const escCell = (v) => {
+            const s = String(v == null ? '' : v);
+            return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        };
+        const rows = [['cedula', 'nombre', 'torre_apto', 'codigo_cuenta', 'indice', 'fmi']];
+        (lastCertPreview.resultados || []).forEach((r, i) => {
+            if (!emitibles.has(r.estado)) return;
+            let props = (r.deudores && r.deudores.length)
+                ? r.deudores
+                : (r.propietarios || []);
+            if (!props.length && r.titular_seleccionado) props = [r.titular_seleccionado];
+            if (!props.length) {
+                rows.push(['', r.titular_pdf || '', _torreDeResultado(r), r.codigo_cuenta || '', i, certFmiByGlobalIdx[i] || ''].map(escCell));
+                return;
+            }
+            props.forEach(p => {
+                rows.push([
+                    (p && p.cedula) || '',
+                    (p && p.nombre) || '',
+                    _torreDeResultado(r),
+                    r.codigo_cuenta || '',
+                    i,
+                    certFmiByGlobalIdx[i] || '',
+                ].map(escCell));
+            });
+        });
+        const csv = rows.map(r => r.join(',')).join('\n') + '\n';
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'plantilla_fmi_cedulas.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setFmiMasivoStatus(`Plantilla por cédula descargada (${rows.length - 1} fila(s)).`);
+        setFmiMasivoDetalle([], []);
     }
 
     function estadoBadge(estado) {
@@ -2009,15 +2222,23 @@
     }
     const btnFmiAplicarLista = document.getElementById('btn-fmi-aplicar-lista');
     const btnFmiAplicarCsv = document.getElementById('btn-fmi-aplicar-csv');
+    const btnFmiAplicarCedula = document.getElementById('btn-fmi-aplicar-cedula');
     const btnFmiPlantilla = document.getElementById('btn-fmi-plantilla');
+    const btnFmiPlantillaCedula = document.getElementById('btn-fmi-plantilla-cedula');
     if (btnFmiAplicarLista) {
         btnFmiAplicarLista.addEventListener('click', () => aplicarFmiListaAlLote());
     }
     if (btnFmiAplicarCsv) {
         btnFmiAplicarCsv.addEventListener('click', () => { aplicarFmiCsvAlLote(); });
     }
+    if (btnFmiAplicarCedula) {
+        btnFmiAplicarCedula.addEventListener('click', () => aplicarFmiCedulaAlLote());
+    }
     if (btnFmiPlantilla) {
         btnFmiPlantilla.addEventListener('click', () => descargarPlantillaFmiCsv());
+    }
+    if (btnFmiPlantillaCedula) {
+        btnFmiPlantillaCedula.addEventListener('click', () => descargarPlantillaFmiCedulas());
     }
 })();
 </script>
