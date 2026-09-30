@@ -577,6 +577,23 @@
     let lastCuentasAnalizadas = [];
     let certFmiByGlobalIdx = {}; // { [globalIdx]: "290-…" } persiste entre filtros
     let certJobMap = []; // [{ jobIndex, localIndex }] alineado a resultados merged
+    // Evita descarga doble: doble clic / reentrada mientras antefirma o fetch.
+    let certDescargaLoteEnCurso = false;
+    let certDescargaUnoEnCurso = false;
+    let fmiPlantillaEnCurso = false;
+
+    function triggerBlobDownload(blobOrUrl, filename) {
+        const url = typeof blobOrUrl === 'string'
+            ? blobOrUrl
+            : URL.createObjectURL(blobOrUrl);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'download';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        if (typeof blobOrUrl !== 'string') URL.revokeObjectURL(url);
+    }
 
     const filtroConjuntoAnalizar = document.getElementById('filtro-conjunto-analizar');
     const filtroBusquedaAnalizar = document.getElementById('filtro-busqueda-analizar');
@@ -1308,86 +1325,84 @@
     }
 
     function descargarPlantillaFmiCsv() {
+        if (fmiPlantillaEnCurso) return;
         if (!lastCertPreview) {
             setFmiMasivoStatus('Primero genere el preview de certificados.', true);
             return;
         }
-        capturarFmiDelDom();
-        const emitibles = new Set(['ok', 'varios_propietarios', 'fallback_pdf']);
-        const rows = [['indice', 'archivo', 'torre_apto', 'codigo_cuenta', 'fmi']];
-        (lastCertPreview.resultados || []).forEach((r, i) => {
-            if (!emitibles.has(r.estado)) return;
+        fmiPlantillaEnCurso = true;
+        try {
+            capturarFmiDelDom();
+            const emitibles = new Set(['ok', 'varios_propietarios', 'fallback_pdf']);
+            const rows = [['indice', 'archivo', 'torre_apto', 'codigo_cuenta', 'fmi']];
+            (lastCertPreview.resultados || []).forEach((r, i) => {
+                if (!emitibles.has(r.estado)) return;
+                const escCell = (v) => {
+                    const s = String(v == null ? '' : v);
+                    return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+                };
+                rows.push([
+                    i,
+                    r.archivo || '',
+                    _torreDeResultado(r),
+                    r.codigo_cuenta || '',
+                    certFmiByGlobalIdx[i] || '',
+                ].map(escCell));
+            });
+            const csv = rows.map(r => r.join(',')).join('\n') + '\n';
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            triggerBlobDownload(blob, 'plantilla_fmi_lote.csv');
+            setFmiMasivoStatus(`Plantilla CSV descargada (${rows.length - 1} fila(s) emitibles).`);
+            setFmiMasivoDetalle([], []);
+        } finally {
+            fmiPlantillaEnCurso = false;
+        }
+    }
+
+    function descargarPlantillaFmiCedulas() {
+        if (fmiPlantillaEnCurso) return;
+        if (!lastCertPreview) {
+            setFmiMasivoStatus('Primero genere el preview de certificados.', true);
+            return;
+        }
+        fmiPlantillaEnCurso = true;
+        try {
+            capturarFmiDelDom();
+            const emitibles = new Set(['ok', 'varios_propietarios', 'fallback_pdf']);
             const escCell = (v) => {
                 const s = String(v == null ? '' : v);
                 return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
             };
-            rows.push([
-                i,
-                r.archivo || '',
-                _torreDeResultado(r),
-                r.codigo_cuenta || '',
-                certFmiByGlobalIdx[i] || '',
-            ].map(escCell));
-        });
-        const csv = rows.map(r => r.join(',')).join('\n') + '\n';
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'plantilla_fmi_lote.csv';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        setFmiMasivoStatus(`Plantilla CSV descargada (${rows.length - 1} fila(s) emitibles).`);
-        setFmiMasivoDetalle([], []);
-    }
-
-    function descargarPlantillaFmiCedulas() {
-        if (!lastCertPreview) {
-            setFmiMasivoStatus('Primero genere el preview de certificados.', true);
-            return;
-        }
-        capturarFmiDelDom();
-        const emitibles = new Set(['ok', 'varios_propietarios', 'fallback_pdf']);
-        const escCell = (v) => {
-            const s = String(v == null ? '' : v);
-            return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-        };
-        const rows = [['cedula', 'nombre', 'torre_apto', 'codigo_cuenta', 'indice', 'fmi']];
-        (lastCertPreview.resultados || []).forEach((r, i) => {
-            if (!emitibles.has(r.estado)) return;
-            let props = (r.deudores && r.deudores.length)
-                ? r.deudores
-                : (r.propietarios || []);
-            if (!props.length && r.titular_seleccionado) props = [r.titular_seleccionado];
-            if (!props.length) {
-                rows.push(['', r.titular_pdf || '', _torreDeResultado(r), r.codigo_cuenta || '', i, certFmiByGlobalIdx[i] || ''].map(escCell));
-                return;
-            }
-            props.forEach(p => {
-                rows.push([
-                    (p && p.cedula) || '',
-                    (p && p.nombre) || '',
-                    _torreDeResultado(r),
-                    r.codigo_cuenta || '',
-                    i,
-                    certFmiByGlobalIdx[i] || '',
-                ].map(escCell));
+            const rows = [['cedula', 'nombre', 'torre_apto', 'codigo_cuenta', 'indice', 'fmi']];
+            (lastCertPreview.resultados || []).forEach((r, i) => {
+                if (!emitibles.has(r.estado)) return;
+                let props = (r.deudores && r.deudores.length)
+                    ? r.deudores
+                    : (r.propietarios || []);
+                if (!props.length && r.titular_seleccionado) props = [r.titular_seleccionado];
+                if (!props.length) {
+                    rows.push(['', r.titular_pdf || '', _torreDeResultado(r), r.codigo_cuenta || '', i, certFmiByGlobalIdx[i] || ''].map(escCell));
+                    return;
+                }
+                props.forEach(p => {
+                    rows.push([
+                        (p && p.cedula) || '',
+                        (p && p.nombre) || '',
+                        _torreDeResultado(r),
+                        r.codigo_cuenta || '',
+                        i,
+                        certFmiByGlobalIdx[i] || '',
+                    ].map(escCell));
+                });
             });
-        });
-        const csv = rows.map(r => r.join(',')).join('\n') + '\n';
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'plantilla_fmi_cedulas.csv';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        setFmiMasivoStatus(`Plantilla por cédula descargada (${rows.length - 1} fila(s)).`);
-        setFmiMasivoDetalle([], []);
+            const csv = rows.map(r => r.join(',')).join('\n') + '\n';
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            triggerBlobDownload(blob, 'plantilla_fmi_cedulas.csv');
+            setFmiMasivoStatus(`Plantilla por cédula descargada (${rows.length - 1} fila(s)).`);
+            setFmiMasivoDetalle([], []);
+        } finally {
+            fmiPlantillaEnCurso = false;
+        }
     }
 
     function estadoBadge(estado) {
@@ -1550,13 +1565,19 @@
     function indicesSeleccionadosPorJob() {
         const jobs = bolsaJobs();
         const porJob = jobs.map(() => []);
+        const vistos = jobs.map(() => new Set());
         certBloques.querySelectorAll('.cert-sel:checked').forEach(chk => {
             const g = Number(chk.dataset.globalIdx);
             const map = certJobMap[g];
             if (!map) return;
             const block = chk.closest('[data-global-idx]');
             if (block && block.classList.contains('hidden')) return;
-            if (porJob[map.jobIndex]) porJob[map.jobIndex].push(map.localIndex);
+            const ji = map.jobIndex;
+            if (!porJob[ji] || !vistos[ji]) return;
+            // Dedup: mismo localIndex dos veces ⇒ Word duplicado en el ZIP.
+            if (vistos[ji].has(map.localIndex)) return;
+            vistos[ji].add(map.localIndex);
+            porJob[ji].push(map.localIndex);
         });
         return porJob;
     }
@@ -1623,7 +1644,20 @@
             setStatus('Analice el lote antes de generar certificados, o vuelva a cargar los PDF.', true);
             return null;
         }
-        if (btnProcesarCert) btnProcesarCert.disabled = true;
+        if (btnProcesarCert && btnProcesarCert.dataset.busy === '1') {
+            setStatus('Preview de certificados ya en curso…');
+            return null;
+        }
+        const liberarPreview = () => {
+            if (btnProcesarCert) {
+                btnProcesarCert.dataset.busy = '0';
+                btnProcesarCert.disabled = false;
+            }
+        };
+        if (btnProcesarCert) {
+            btnProcesarCert.disabled = true;
+            btnProcesarCert.dataset.busy = '1';
+        }
         let merged = {
             cuentas_evaluadas: 0,
             cuentas_con_capital: 0,
@@ -1647,7 +1681,7 @@
                 try { data = await res.json(); } catch (_) { data = {}; }
                 if (!res.ok) {
                     setStatus(detailMsg(data, res), true);
-                    if (btnProcesarCert) btnProcesarCert.disabled = false;
+                    liberarPreview();
                     return null;
                 }
                 merged.cuentas_evaluadas += data.cuentas_evaluadas || 0;
@@ -1703,16 +1737,22 @@
             if (autoDownload && merged.emitibles > 0) {
                 await descargarCertificadosUnificados();
             }
-            if (btnProcesarCert) btnProcesarCert.disabled = false;
+            liberarPreview();
             return merged;
         } catch (e) {
             setStatus('Fallo de red al procesar certificados.', true);
-            if (btnProcesarCert) btnProcesarCert.disabled = false;
+            liberarPreview();
             return null;
         }
     }
 
     async function descargarCertificadosUnificados() {
+        // Candado sincrónico ANTES de antefirma/await: sin esto, doble clic
+        // (antefirma ya completa) dispara dos fetch + dos a.click() del mismo lote.
+        if (certDescargaLoteEnCurso) {
+            setStatus('Descarga de certificados ya en curso…');
+            return;
+        }
         const jobs = bolsaJobs();
         if (!jobs.length) {
             setStatus('No hay lote en memoria para generar certificados.', true);
@@ -1725,30 +1765,36 @@
             setStatus('Seleccione al menos una cuenta visible (checkbox) para descargar.', true);
             return;
         }
-        const incluirPoder = !!(document.getElementById('chk-incluir-poder') || {}).checked;
-        if (incluirPoder) {
-            let sinFmi = 0;
-            porJob.forEach((indices, jobIndex) => {
-                (indices || []).forEach(localIdx => {
-                    const g = certJobMap.findIndex(
-                        m => m && m.jobIndex === jobIndex && m.localIndex === localIdx
-                    );
-                    if (g >= 0 && !(certFmiByGlobalIdx[g] || '').trim()) sinFmi += 1;
-                });
-            });
-            if (sinFmi > 0) {
-                setStatus(
-                    `Aviso: ${sinFmi} cuenta(s) sin FMI — el poder se emite omitiendo el folio (no se inventa).`
-                );
-            }
-        }
-        const okAntefirma = await pedirAntefirmaSiFalta();
-        if (!okAntefirma || !antefirmaCompleta()) {
-            setStatus('Indique nombre y cédula del representante legal antes de descargar.', true);
-            return;
-        }
+        certDescargaLoteEnCurso = true;
         if (btnDescargarCerts) btnDescargarCerts.disabled = true;
+        const liberarDescargaLote = () => {
+            certDescargaLoteEnCurso = false;
+            syncDescargarEnabled();
+        };
         try {
+            const incluirPoder = !!(document.getElementById('chk-incluir-poder') || {}).checked;
+            if (incluirPoder) {
+                let sinFmi = 0;
+                porJob.forEach((indices, jobIndex) => {
+                    (indices || []).forEach(localIdx => {
+                        const g = certJobMap.findIndex(
+                            m => m && m.jobIndex === jobIndex && m.localIndex === localIdx
+                        );
+                        if (g >= 0 && !(certFmiByGlobalIdx[g] || '').trim()) sinFmi += 1;
+                    });
+                });
+                if (sinFmi > 0) {
+                    setStatus(
+                        `Aviso: ${sinFmi} cuenta(s) sin FMI — el poder se emite omitiendo el folio (no se inventa).`
+                    );
+                }
+            }
+            const okAntefirma = await pedirAntefirmaSiFalta();
+            if (!okAntefirma || !antefirmaCompleta()) {
+                setStatus('Indique nombre y cédula del representante legal antes de descargar.', true);
+                liberarDescargaLote();
+                return;
+            }
             const jobsConSel = jobs
                 .map((job, i) => ({ job, indices: porJob[i] || [], i }))
                 .filter(x => x.indices.length);
@@ -1769,7 +1815,7 @@
                     let data = {};
                     try { data = await res.json(); } catch (_) {}
                     setStatus(detailMsg(data, res), true);
-                    if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+                    liberarDescargaLote();
                     return;
                 }
                 const cd = res.headers.get('Content-Disposition') || '';
@@ -1786,22 +1832,15 @@
                 const blob = new Blob([partes[0].buffer], {
                     type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                 });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = partes[0].filename || 'Certificado_deuda.docx';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                URL.revokeObjectURL(url);
+                triggerBlobDownload(blob, partes[0].filename || 'Certificado_deuda.docx');
                 setStatus(`Descargado: ${partes[0].filename || 'Certificado_deuda.docx'} (${totalSel} cuenta(s)).`);
-                if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+                liberarDescargaLote();
                 return;
             }
 
             if (!window.JSZip) {
                 setStatus('No se pudo cargar JSZip para empaquetar certificados.', true);
-                if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+                liberarDescargaLote();
                 return;
             }
             setStatus(
@@ -1811,23 +1850,17 @@
             );
             const { zip, total } = await empaquetarCertificadosPlanos(partes);
             const zipBlob = await zip.generateAsync({ type: 'blob' });
-            const zipUrl = URL.createObjectURL(zipBlob);
-            const a = document.createElement('a');
-            a.href = zipUrl;
-            a.download = 'Certificados_deuda_lote.zip';
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(zipUrl);
+            // Una sola descarga por acción (ni ZIP + docx suelto, ni doble a.click).
+            triggerBlobDownload(zipBlob, 'Certificados_deuda_lote.zip');
             setStatus(
                 `ZIP plano descargado: ${total} certificado(s)`
                 + (jobsConSel.length > 1 ? ` en ${jobsConSel.length} grupos de análisis` : '')
                 + '.'
             );
-            if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+            liberarDescargaLote();
         } catch (e) {
             setStatus('Fallo de red al descargar certificados.', true);
-            if (btnDescargarCerts) btnDescargarCerts.disabled = false;
+            liberarDescargaLote();
         }
     }
 
@@ -1977,6 +2010,10 @@
     }
 
     async function descargarCertificado(idx) {
+        if (certDescargaUnoEnCurso) {
+            setStatus('Descarga de certificado ya en curso…');
+            return;
+        }
         const r = (lastBolsaPayload && lastBolsaPayload.resultados || [])[idx];
         if (!r || r.omitido) {
             setStatus('No hay capital limpio para ese deudor.', true);
@@ -1987,20 +2024,24 @@
             setStatus('Sin ítems de capital limpio para generar el certificado.', true);
             return;
         }
-        const okAntefirma = await pedirAntefirmaSiFalta();
-        if (!okAntefirma || !antefirmaCompleta()) {
-            setStatus('Indique nombre y cédula del representante legal antes de descargar.', true);
-            return;
-        }
-        const rl = representanteOpts();
-        const torre = (r.bloque && r.apartamento)
-            ? `TORRE ${r.bloque} APTO ${r.apartamento}`
-            : (r.apartamento || '');
-        setStatus(`Generando certificado de deuda (${r.titular || 'titular'})…`);
-        const permitirPdf = !!(document.getElementById('chk-permitir-datos-pdf') || {}).checked;
-        const nitPdf = ((document.getElementById('pdf-copropiedad-nit') || {}).value || '').trim();
-        const cedulaPdf = ((document.getElementById('pdf-titular-cedula') || {}).value || '').trim();
+        certDescargaUnoEnCurso = true;
+        const btnUno = bolsaBloques
+            && bolsaBloques.querySelector(`.btn-certificado[data-idx="${idx}"]`);
+        if (btnUno) btnUno.disabled = true;
         try {
+            const okAntefirma = await pedirAntefirmaSiFalta();
+            if (!okAntefirma || !antefirmaCompleta()) {
+                setStatus('Indique nombre y cédula del representante legal antes de descargar.', true);
+                return;
+            }
+            const rl = representanteOpts();
+            const torre = (r.bloque && r.apartamento)
+                ? `TORRE ${r.bloque} APTO ${r.apartamento}`
+                : (r.apartamento || '');
+            setStatus(`Generando certificado de deuda (${r.titular || 'titular'})…`);
+            const permitirPdf = !!(document.getElementById('chk-permitir-datos-pdf') || {}).checked;
+            const nitPdf = ((document.getElementById('pdf-copropiedad-nit') || {}).value || '').trim();
+            const cedulaPdf = ((document.getElementById('pdf-titular-cedula') || {}).value || '').trim();
             const res = await fetch('/herramientas/estado-cuenta/certificado-deuda', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -2030,17 +2071,16 @@
             const cd = res.headers.get('Content-Disposition') || '';
             const m = /filename=\"([^\"]+)\"/.exec(cd);
             const filename = (m && m[1]) || 'Certificado_deuda.docx';
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
+            triggerBlobDownload(blob, filename);
             setStatus(`Certificado descargado: ${filename}`);
         } catch (e) {
             setStatus('Fallo de red al generar el certificado de deuda.', true);
+        } finally {
+            certDescargaUnoEnCurso = false;
+            if (btnUno) {
+                const stillOk = r && !r.omitido && (r.capital_limpio_a_demandar || []).length;
+                btnUno.disabled = !stillOk;
+            }
         }
     }
 
@@ -2244,7 +2284,11 @@
         btnProcesarCert.addEventListener('click', () => { runProcesarCertificado(false); });
     }
     if (btnDescargarCerts) {
-        btnDescargarCerts.addEventListener('click', () => { descargarCertificadosUnificados(); });
+        btnDescargarCerts.addEventListener('click', (ev) => {
+            if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+            if (certDescargaLoteEnCurso) return;
+            descargarCertificadosUnificados();
+        });
     }
 
     async function downloadBolsa(kind) {
