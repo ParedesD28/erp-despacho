@@ -197,6 +197,19 @@ def _map_header_columns(fieldnames: Iterable[str]) -> dict[str, str]:
 _CLAVES_FILA = ("indice", "archivo", "torre_apto", "codigo_cuenta", "cedula")
 
 
+def _parece_excel_fmi(nombre: str, raw: bytes) -> bool:
+    """Detecta Excel por extensión o firma binaria (no confiar solo en el nombre)."""
+    name_l = (nombre or "").lower().strip()
+    if name_l.endswith((".xlsx", ".xls")):
+        return True
+    if len(raw) >= 4:
+        if raw[:2] == b"PK":  # OOXML / zip (.xlsx)
+            return True
+        if raw[:4] == b"\xd0\xcf\x11\xe0":  # OLE Compound (.xls)
+            return True
+    return False
+
+
 def parse_fmi_csv(texto: str) -> list[dict[str, str]]:
     """
     Parsea CSV/TSV con encabezado.
@@ -204,6 +217,8 @@ def parse_fmi_csv(texto: str) -> list[dict[str, str]]:
     Requiere columna `fmi` (o alias) y al menos una clave de fila:
     `indice`, `archivo`, `torre_apto`/`clave_canonica`, `codigo_cuenta` o `cedula`
     (alias: documento, cc, nro_documento, identificacion).
+
+    No usar con bytes de .xlsx: el OOXML binario falla (p.ej. sin columna fmi).
     """
     raw = (texto or "").strip()
     if not raw:
@@ -211,13 +226,24 @@ def parse_fmi_csv(texto: str) -> list[dict[str, str]]:
     # Quitar BOM
     if raw.startswith("\ufeff"):
         raw = raw.lstrip("\ufeff")
+    # Guardrail: OOXML leído como texto (bug UI clásico).
+    if raw.startswith("PK") or "[Content_Types].xml" in raw[:4096]:
+        raise ValueError(
+            "El contenido parece un Excel (.xlsx) leído como texto. "
+            "Suba el .xlsx para parseo en servidor (columnas CC|FMI); "
+            "no lo valide como CSV."
+        )
     sample = raw[:4096]
-    dialect = _detect_dialect(sample)
-    reader = csv.DictReader(io.StringIO(raw), dialect=dialect)
-    if not reader.fieldnames:
-        raise ValueError("CSV sin encabezado")
-
-    colmap = _map_header_columns(reader.fieldnames)
+    try:
+        dialect = _detect_dialect(sample)
+        reader = csv.DictReader(io.StringIO(raw), dialect=dialect)
+        if not reader.fieldnames:
+            raise ValueError("CSV sin encabezado")
+        colmap = _map_header_columns(reader.fieldnames)
+    except csv.Error as exc:
+        raise ValueError(
+            f"CSV inválido ({exc}). Si subió un .xlsx, debe parsearse como Excel."
+        ) from exc
 
     if "fmi" not in colmap:
         raise ValueError("CSV debe incluir columna fmi")
@@ -228,21 +254,26 @@ def parse_fmi_csv(texto: str) -> list[dict[str, str]]:
         )
 
     filas: list[dict[str, str]] = []
-    for row in reader:
-        if not row:
-            continue
-        item: dict[str, str] = {"fmi": str(row.get(colmap["fmi"]) or "").strip()}
-        for canon in _CLAVES_FILA:
-            if canon in colmap:
-                raw_val = row.get(colmap[canon])
-                if raw_val is None:
-                    item[canon] = ""
-                else:
-                    item[canon] = str(raw_val).strip()
-        # Saltar filas totalmente vacías
-        if not any(item.values()):
-            continue
-        filas.append(item)
+    try:
+        for row in reader:
+            if not row:
+                continue
+            item: dict[str, str] = {"fmi": str(row.get(colmap["fmi"]) or "").strip()}
+            for canon in _CLAVES_FILA:
+                if canon in colmap:
+                    raw_val = row.get(colmap[canon])
+                    if raw_val is None:
+                        item[canon] = ""
+                    else:
+                        item[canon] = str(raw_val).strip()
+            # Saltar filas totalmente vacías
+            if not any(item.values()):
+                continue
+            filas.append(item)
+    except csv.Error as exc:
+        raise ValueError(
+            f"CSV inválido al leer filas ({exc}). Si es .xlsx, use parseo Excel."
+        ) from exc
     return filas
 
 
@@ -250,25 +281,102 @@ def filas_desde_excel(contenido: bytes, *, nombre: str = "") -> list[dict[str, s
     """
     Lee la primera hoja de un .xlsx/.xls y la trata como tabla FMI.
 
-    Requiere encabezado con `fmi` + clave (`cedula` u otras). Usa openpyxl/pandas.
+    Requiere encabezado con `fmi` + clave (`cedula`/`CC` u otras).
+    Prefiere openpyxl (sin round-trip CSV). Nunca decodificar OOXML como texto.
     """
+    name_l = (nombre or "").lower()
+    if not contenido:
+        return []
+
+    es_xls_legacy = name_l.endswith(".xls") and not name_l.endswith(".xlsx")
+    openpyxl_err: Optional[Exception] = None
+
+    if not es_xls_legacy:
+        try:
+            filas_op = _filas_desde_openpyxl(contenido)
+            if filas_op is not None:
+                return filas_op
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — caer a pandas
+            openpyxl_err = exc
+
     import pandas as pd
 
-    name_l = (nombre or "").lower()
-    engine = None
-    if name_l.endswith(".xls") and not name_l.endswith(".xlsx"):
-        engine = "xlrd"
+    engine = "xlrd" if es_xls_legacy else None
     try:
         df = pd.read_excel(io.BytesIO(contenido), engine=engine, dtype=str)
     except Exception as exc:  # noqa: BLE001 — mensaje claro al usuario
-        raise ValueError(f"No se pudo leer el Excel: {exc}") from exc
+        extra = f" (openpyxl: {openpyxl_err})" if openpyxl_err else ""
+        raise ValueError(f"No se pudo leer el Excel: {exc}{extra}") from exc
     if df is None or df.empty:
         return []
-    # Normalizar NaN → ""
     df = df.fillna("")
     buf = io.StringIO()
     df.to_csv(buf, index=False)
-    return parse_fmi_csv(buf.getvalue())
+    try:
+        return parse_fmi_csv(buf.getvalue())
+    except ValueError as exc:
+        cols = ", ".join(str(c) for c in list(df.columns)[:12])
+        raise ValueError(f"{exc}. Columnas del Excel: {cols}") from exc
+
+
+def _filas_desde_openpyxl(contenido: bytes) -> list[dict[str, str]]:
+    """Parsea .xlsx con openpyxl; levanta ValueError de columnas, otras excepciones al caller."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(contenido), read_only=True, data_only=True)
+    try:
+        ws = wb.active
+        rows_iter = ws.iter_rows(values_only=True)
+        header_row = next(rows_iter, None)
+        if not header_row:
+            return []
+        headers = ["" if c is None else str(c).strip() for c in header_row]
+        colmap = _map_header_columns(headers)
+        if "fmi" not in colmap:
+            raise ValueError(
+                "Excel debe incluir columna fmi (o FMI/folio). "
+                "Encabezados vistos: " + ", ".join(h for h in headers if h)
+            )
+        if not any(k in colmap for k in _CLAVES_FILA):
+            raise ValueError(
+                "Excel debe incluir CC/cedula (u otra clave) además de fmi. "
+                "Encabezados vistos: " + ", ".join(h for h in headers if h)
+            )
+        idx_by_name = {h: i for i, h in enumerate(headers)}
+        filas: list[dict[str, str]] = []
+        for row in rows_iter:
+            if row is None:
+                continue
+            vals = list(row)
+
+            def _cell(canon: str, _vals=vals) -> str:
+                orig = colmap.get(canon)
+                if not orig:
+                    return ""
+                i = idx_by_name.get(orig)
+                if i is None or i >= len(_vals):
+                    return ""
+                raw_val = _vals[i]
+                if raw_val is None:
+                    return ""
+                if isinstance(raw_val, float) and raw_val.is_integer():
+                    return str(int(raw_val))
+                if isinstance(raw_val, int):
+                    return str(raw_val)
+                return str(raw_val).strip()
+
+            item: dict[str, str] = {"fmi": _cell("fmi")}
+            for canon in _CLAVES_FILA:
+                if canon in colmap:
+                    item[canon] = _cell(canon)
+            if not any(item.values()):
+                continue
+            filas.append(item)
+        return filas
+    finally:
+        wb.close()
 
 
 def indice_cedulas_preview(

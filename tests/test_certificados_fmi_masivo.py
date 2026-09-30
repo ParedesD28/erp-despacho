@@ -323,12 +323,32 @@ class FilasDesdeExcelTests(unittest.TestCase):
         )
         if not sample.is_file():
             self.skipTest("sample Libro2.xlsx no montado en este entorno")
-        filas = filas_desde_excel(sample.read_bytes(), nombre="Libro2.xlsx")
+        raw = sample.read_bytes()
+        filas = filas_desde_excel(raw, nombre="Libro2.xlsx")
         self.assertGreaterEqual(len(filas), 50)
         self.assertIn("cedula", filas[0])
         self.assertIn("fmi", filas[0])
         self.assertTrue(filas[0]["cedula"].isdigit() or filas[0]["cedula"])
         self.assertTrue(str(filas[0]["fmi"]).startswith("290-"))
+
+        # Sin nombre de archivo (solo bytes) también debe funcionar vía openpyxl.
+        filas2 = filas_desde_excel(raw, nombre="")
+        self.assertEqual(len(filas2), len(filas))
+
+        # Regresión del bug de UI: leer OOXML como texto CSV → error claro.
+        as_text = raw.decode("utf-8", errors="replace")
+        with self.assertRaises(ValueError) as ctx:
+            parse_fmi_csv(as_text)
+        self.assertRegex(str(ctx.exception).lower(), r"xlsx|excel|columna fmi")
+
+
+class PareceExcelRouterTests(unittest.TestCase):
+    def test_firma_pk_sin_extension(self):
+        from certificados_fmi_masivo import _parece_excel_fmi
+
+        self.assertTrue(_parece_excel_fmi("", b"PK\x03\x04resto"))
+        self.assertTrue(_parece_excel_fmi("Libro2.xlsx", b"no-es-firma"))
+        self.assertFalse(_parece_excel_fmi("fmi.csv", b"cedula,fmi\n1,2\n"))
 
 
 class PlantillaCsvTests(unittest.TestCase):
