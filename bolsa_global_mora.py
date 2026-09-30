@@ -163,15 +163,56 @@ def _tokens(concepto_norm: str) -> list[str]:
     return concepto_norm.split() if concepto_norm else []
 
 
-def _es_cuota_ordinaria(concepto: str) -> bool:
+# Tokens que, junto a ADMIN*, tipifican gasto/extra y NO cuota ordinaria.
+_KW_ADMIN_NO_ORDINARIA: frozenset[str] = frozenset(
+    {
+        "EXTRA",
+        "EXTRAORDINARIA",
+        "EXTRAORDINARIO",
+        "EXTRAORDINARIAS",
+        "PINTURA",
+        "FACHADA",
+        "RETROACTIVO",
+        "HONORARIO",
+        "HONORARIOS",
+        "PREJURIDICO",
+        "ABOGADO",
+        "COBRO",
+        "GASTO",
+        "GASTOS",
+    }
+)
+
+
+def _es_cuota_ordinaria(
+    concepto: str,
+    *,
+    forzados_ordinaria: frozenset[str] | set[str] | None = None,
+) -> bool:
     """
-    Misma heurística que el Word: CUOTA/COUTA + ADMIN*/ADMON → ordinaria.
-    Resto del capital demandable (extras, pintura, gastos, no reconocido) → no ordinaria.
+    Heurística Word/Bolsa: cuota de administración → ordinaria.
+
+    - CUOTA/COUTA + ADMIN*/ADMON → ordinaria.
+    - Solo ADMINISTRACION / ADMINISTRACIÓN / ADMON (sin EXTRA/gasto) → ordinaria
+      (PDFs COLON a veces omiten la palabra CUOTA).
+    - Override manual: `forzados_ordinaria` con texto normalizado o crudo.
+    - EXTRA*, pintura, honorarios, etc. → no ordinaria.
     """
     normal = _normalizar_texto(concepto)
     if not normal or "INTERES" in normal:
         return False
+    if forzados_ordinaria:
+        crudo = str(concepto or "").strip().upper()
+        if normal in forzados_ordinaria or crudo in forzados_ordinaria:
+            return True
     tokens = normal.split()
+    if any(
+        tok.startswith("EXTRA") or tok in _KW_ADMIN_NO_ORDINARIA
+        for tok in tokens
+    ):
+        # EXTRA* siempre fuera; otros keywords solo bloquean el camino "solo ADMIN".
+        if any(tok.startswith("EXTRA") for tok in tokens):
+            return False
     tiene_cuota = any(tok.startswith("CUOT") or tok.startswith("COUT") for tok in tokens)
     tiene_admin = any(
         tok.startswith("ADMIN")
@@ -179,7 +220,17 @@ def _es_cuota_ordinaria(concepto: str) -> bool:
         or tok in {"ADMINISTRATIVA", "ADMINISTRATIVO"}
         for tok in tokens
     )
-    return bool(tiene_cuota and tiene_admin)
+    if tiene_cuota and tiene_admin:
+        return True
+    if tiene_admin and not tiene_cuota:
+        # ADMINISTRACION suelta (o con DE/DEL/LA): ordinaria salvo ruido tipificado.
+        if any(
+            tok in _KW_ADMIN_NO_ORDINARIA or tok.startswith("HONOR")
+            for tok in tokens
+        ):
+            return False
+        return True
+    return False
 
 
 def _capitales_prelacion_b_remanente(capitales: Sequence[_ItemMes]) -> list[_ItemMes]:

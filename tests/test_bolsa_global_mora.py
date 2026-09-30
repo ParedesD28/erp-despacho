@@ -202,9 +202,12 @@ class TestEscenarioA_B_C(unittest.TestCase):
     def test_es_cuota_ordinaria_heuristica(self):
         self.assertTrue(_es_cuota_ordinaria("CUOTA ADMINISTRACION"))
         self.assertTrue(_es_cuota_ordinaria("CUOTA ADMON"))
+        self.assertTrue(_es_cuota_ordinaria("ADMINISTRACION"))
+        self.assertTrue(_es_cuota_ordinaria("ADMINISTRACIÓN"))
         self.assertFalse(_es_cuota_ordinaria("CUOTA EXTRAORDINARIA"))
         self.assertFalse(_es_cuota_ordinaria("HONORARIOS"))
         self.assertFalse(_es_cuota_ordinaria("PINTURA FACHADA"))
+        self.assertFalse(_es_cuota_ordinaria("GASTOS DE ADMINISTRACION"))
 
     def test_mes_limpio_perdon_intereses_capital_intacto(self):
         """Bolsa < intereses → Mes Limpio: capital 100% intacto; mora ese mes."""

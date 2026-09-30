@@ -5,10 +5,31 @@
     <a href="/informes" class="text-slate-400 hover:text-slate-700" title="Volver a Informes">
         <i data-lucide="arrow-left" class="w-5 h-5"></i>
     </a>
+    {% if modo_phasecob %}
+    <h2 class="text-xl font-semibold text-slate-800">Phasecob · certificados editables</h2>
+    <span class="text-xs font-bold uppercase tracking-wide text-rose-700 bg-rose-50 border border-rose-200 rounded px-2 py-0.5">secreto</span>
+    {% else %}
     <h2 class="text-xl font-semibold text-slate-800">Estado de cuenta PDF → Excel</h2>
+    {% endif %}
 </header>
 
 <div class="p-8 max-w-5xl mx-auto mt-6 space-y-6">
+    {% if modo_phasecob %}
+    <div class="bg-rose-50 border border-rose-200 rounded-xl p-4 text-sm text-rose-950">
+        <p class="font-bold flex items-center gap-2">
+            <i data-lucide="key-round" class="w-4 h-4"></i>
+            Phasecob (asecob) — no aparece en el menú; solo por URL <code>/phasecob</code>
+        </p>
+        <p class="mt-1">
+            Mismo flujo Analizar → Bolsa → Certificado que
+            <a class="underline font-semibold" href="/herramientas/estado-cuenta">/herramientas/estado-cuenta</a>,
+            más edición de <strong>nombre</strong>, <strong>cédula</strong>, <strong>FMI</strong>
+            y remapeo de conceptos a <strong>cuota ordinaria</strong> antes de generar el Word.
+            Extraordinarias del mismo mes <strong>no se suman</strong>: la 1ª va con la ordinaria;
+            la 2ª+ cada una en fila nueva.
+        </p>
+    </div>
+    {% endif %}
     <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900">
         <p class="font-bold flex items-center gap-2">
             <i data-lucide="shield-alert" class="w-4 h-4"></i>
@@ -443,6 +464,7 @@
 <script>
 (function () {
     const BATCH_SIZE = {{ ui_batch_size|default(15) }};
+    const MODO_PHASECOB = {{ 'true' if modo_phasecob else 'false' }};
     const fileInput = document.getElementById('pdf-file');
     const statusEl = document.getElementById('status');
     const progressWrap = document.getElementById('progress-wrap');
@@ -576,6 +598,8 @@
     let lastCertPreview = null;
     let lastCuentasAnalizadas = [];
     let certFmiByGlobalIdx = {}; // { [globalIdx]: "290-…" } persiste entre filtros
+    // Phasecob / remapeo: { titular_nombre, titular_cedula, fmi, conceptos_ordinaria[], propietarios[] }
+    let certEdicionByGlobalIdx = {};
     let certJobMap = []; // [{ jobIndex, localIndex }] alineado a resultados merged
     // Evita descarga doble: doble clic / reentrada mientras antefirma o fetch.
     let certDescargaLoteEnCurso = false;
@@ -768,7 +792,7 @@
         };
     }
 
-    async function postProcesarCert(modo, cacheId, files, indices, fmiPorIndice) {
+    async function postProcesarCert(modo, cacheId, files, indices, fmiPorIndice, edicionPorIndice) {
         const fd = new FormData();
         if (cacheId) fd.append('cache_id', cacheId);
         (files || []).forEach(f => fd.append('archivos', f));
@@ -796,6 +820,9 @@
             if (fmiPorIndice && Object.keys(fmiPorIndice).length) {
                 fd.append('fmi_por_indice', JSON.stringify(fmiPorIndice));
             }
+            if (edicionPorIndice && Object.keys(edicionPorIndice).length) {
+                fd.append('edicion_por_indice', JSON.stringify(edicionPorIndice));
+            }
         }
         return fetch('/herramientas/estado-cuenta/procesar-certificado', {
             method: 'POST',
@@ -810,6 +837,87 @@
                 certFmiByGlobalIdx[g] = (inp.value || '').trim();
             }
         });
+    }
+
+    function capturarEdicionDelDom() {
+        capturarFmiDelDom();
+        certBloques.querySelectorAll('[data-edicion-global-idx]').forEach(block => {
+            const g = Number(block.dataset.edicionGlobalIdx);
+            if (!Number.isFinite(g)) return;
+            const prev = certEdicionByGlobalIdx[g] || {};
+            const nombreInp = block.querySelector('.cert-edit-nombre');
+            const cedulaInp = block.querySelector('.cert-edit-cedula');
+            const conceptos = [];
+            block.querySelectorAll('.cert-concepto-ord:checked').forEach(chk => {
+                const c = (chk.dataset.concepto || '').trim();
+                if (c) conceptos.push(c);
+            });
+            const props = [];
+            block.querySelectorAll('.cert-prop-row').forEach(row => {
+                const nom = ((row.querySelector('.cert-prop-nombre') || {}).value || '').trim();
+                const ced = ((row.querySelector('.cert-prop-cedula') || {}).value || '').trim();
+                const prin = !!(row.querySelector('.cert-prop-principal') || {}).checked;
+                if (nom || ced) {
+                    props.push({
+                        nombre: nom,
+                        cedula: ced,
+                        es_principal: prin,
+                        rol: prin ? 'principal' : 'co_propietario',
+                    });
+                }
+            });
+            const fmi = (certFmiByGlobalIdx[g] || '').trim();
+            certEdicionByGlobalIdx[g] = {
+                ...prev,
+                titular_nombre: nombreInp ? (nombreInp.value || '').trim() : (prev.titular_nombre || ''),
+                titular_cedula: cedulaInp ? (cedulaInp.value || '').trim() : (prev.titular_cedula || ''),
+                fmi: fmi || prev.fmi || '',
+                conceptos_ordinaria: conceptos,
+                propietarios: props.length ? props : (prev.propietarios || []),
+                forzar: MODO_PHASECOB,
+            };
+        });
+        // Remapeo de conceptos también fuera de phasecob (bloques sin data-edicion).
+        certBloques.querySelectorAll('.cert-bloque-conceptos').forEach(box => {
+            const g = Number(box.dataset.globalIdx);
+            if (!Number.isFinite(g)) return;
+            const conceptos = [];
+            box.querySelectorAll('.cert-concepto-ord:checked').forEach(chk => {
+                const c = (chk.dataset.concepto || '').trim();
+                if (c) conceptos.push(c);
+            });
+            const prev = certEdicionByGlobalIdx[g] || {};
+            certEdicionByGlobalIdx[g] = {
+                ...prev,
+                conceptos_ordinaria: conceptos,
+                fmi: (certFmiByGlobalIdx[g] || '').trim() || prev.fmi || '',
+            };
+        });
+    }
+
+    function edicionLocalPorJob(jobIndex, localIndices) {
+        const out = {};
+        (localIndices || []).forEach(localIdx => {
+            const g = certJobMap.findIndex(
+                m => m && m.jobIndex === jobIndex && m.localIndex === localIdx
+            );
+            if (g < 0) return;
+            const ed = certEdicionByGlobalIdx[g];
+            if (!ed) return;
+            const limpio = {};
+            if (ed.titular_nombre) limpio.titular_nombre = ed.titular_nombre;
+            if (ed.titular_cedula) limpio.titular_cedula = ed.titular_cedula;
+            if (ed.fmi) limpio.fmi = ed.fmi;
+            if (ed.conceptos_ordinaria && ed.conceptos_ordinaria.length) {
+                limpio.conceptos_ordinaria = ed.conceptos_ordinaria;
+            }
+            if (ed.propietarios && ed.propietarios.length) {
+                limpio.propietarios = ed.propietarios;
+            }
+            if (ed.forzar) limpio.forzar = true;
+            if (Object.keys(limpio).length) out[String(localIdx)] = limpio;
+        });
+        return out;
     }
 
     function fmiLocalPorJob(jobIndex, localIndices) {
@@ -1473,7 +1581,7 @@
     function applyFiltrosCert() {
         const payload = lastCertPreview;
         if (!payload) return;
-        capturarFmiDelDom();
+        capturarEdicionDelDom();
         certBloques.innerHTML = '';
         let visibles = 0;
         let seleccionables = 0;
@@ -1486,23 +1594,91 @@
                 + (esSinMatch ? ' border-red-300 bg-red-50/40' : ' border-slate-200')
                 + (visible ? '' : ' hidden');
             block.dataset.globalIdx = String(globalIdx);
+            if (MODO_PHASECOB && emitible) {
+                block.dataset.edicionGlobalIdx = String(globalIdx);
+            }
             if (visible) visibles += 1;
             const deudores = r.deudores || [];
             const sel = r.titular_seleccionado;
             const advertencias = r.advertencias || [];
-            const deudaHtml = deudores.length
-                ? `<ul class="text-sm text-slate-700 list-disc list-inside">
-                    ${deudores.map(d => {
-                        const tag = d.es_principal ? ' <span class="text-xs font-bold text-indigo-700">(principal)</span>' : '';
-                        const rol = d.rol && d.rol !== 'principal' && !d.es_principal
-                            ? ` <span class="text-xs text-slate-500">[${esc(d.rol)}]</span>` : '';
-                        const ced = d.cedula ? esc(d.cedula) : '<span class="text-amber-700 font-semibold">s/d</span>';
-                        return `<li>${esc(d.nombre || '—')} · CC ${ced}${tag}${rol}</li>`;
-                    }).join('')}
-                   </ul>`
-                : (esSinMatch
-                    ? '<p class="text-sm text-red-800">Sin deudores Neon — la unidad no cruzó (no es lista de codeudores).</p>'
-                    : '<p class="text-sm text-slate-400">Sin deudores Neon.</p>');
+            const edPrev = certEdicionByGlobalIdx[globalIdx] || {};
+            const nombreEdit = edPrev.titular_nombre
+                || (sel && sel.nombre)
+                || r.titular_pdf
+                || '';
+            const cedulaEdit = edPrev.titular_cedula
+                || (sel && sel.cedula)
+                || '';
+            const conceptos = r.conceptos_capital || [];
+            const forzados = new Set(edPrev.conceptos_ordinaria || []);
+            const conceptosHtml = conceptos.length
+                ? `<div class="cert-bloque-conceptos mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-1"
+                        data-global-idx="${globalIdx}">
+                     <p class="text-xs font-bold uppercase text-slate-500">Conceptos → ordinaria (remapeo)</p>
+                     <p class="text-[11px] text-slate-500">Marque conceptos que deben ir a CUOTAS ORDINARIAS (p.ej. si el PDF trae solo «ADMINISTRACIÓN» mal clasificado).</p>
+                     ${conceptos.map(c => {
+                        const sug = !!c.ordinaria_sugerida;
+                        const forceChecked = forzados.has(c.concepto);
+                        const label = sug
+                            ? `${esc(c.concepto)} <span class="text-emerald-700 text-[10px]">(ya ordinaria)</span>`
+                            : esc(c.concepto);
+                        return `<label class="flex items-start gap-2 text-sm text-slate-700 ${sug ? 'opacity-70' : ''}">
+                            <input type="checkbox" class="cert-concepto-ord mt-0.5 rounded border-slate-300 text-indigo-700"
+                                   data-concepto="${esc(c.concepto)}"
+                                   ${forceChecked ? 'checked' : ''}
+                                   ${sug ? 'disabled title="Ya clasificado como ordinaria"' : ''}>
+                            <span>${label}
+                              <span class="text-xs text-slate-400">· ${esc(String(c.n || 1))} ítem(s) · ${money(c.valor_total)}</span>
+                            </span>
+                          </label>`;
+                     }).join('')}
+                   </div>`
+                : '';
+            let deudaHtml;
+            if (MODO_PHASECOB && emitible) {
+                const propsSrc = (edPrev.propietarios && edPrev.propietarios.length)
+                    ? edPrev.propietarios
+                    : (deudores.length ? deudores : (sel ? [sel] : [{
+                        nombre: nombreEdit,
+                        cedula: cedulaEdit,
+                        es_principal: true,
+                    }]));
+                deudaHtml = `<div class="space-y-2">
+                    <p class="text-xs uppercase text-slate-500 font-bold">Editar propietarios / codeudores</p>
+                    ${propsSrc.map((d, pi) => `
+                      <div class="cert-prop-row grid grid-cols-1 md:grid-cols-3 gap-2 items-end border border-slate-100 rounded-lg p-2 bg-white">
+                        <div>
+                          <label class="text-[10px] font-bold uppercase text-slate-400">Nombre</label>
+                          <input type="text" class="cert-prop-nombre w-full rounded border border-slate-200 px-2 py-1 text-sm"
+                                 value="${esc(d.nombre || '')}">
+                        </div>
+                        <div>
+                          <label class="text-[10px] font-bold uppercase text-slate-400">Cédula</label>
+                          <input type="text" class="cert-prop-cedula w-full rounded border border-slate-200 px-2 py-1 text-sm"
+                                 value="${esc(d.cedula || '')}">
+                        </div>
+                        <label class="flex items-center gap-2 text-xs text-slate-600 pb-1">
+                          <input type="checkbox" class="cert-prop-principal rounded border-slate-300 text-indigo-700"
+                                 ${d.es_principal ? 'checked' : ''}>
+                          Principal (titular Word)
+                        </label>
+                      </div>`).join('')}
+                  </div>`;
+            } else {
+                deudaHtml = deudores.length
+                    ? `<ul class="text-sm text-slate-700 list-disc list-inside">
+                        ${deudores.map(d => {
+                            const tag = d.es_principal ? ' <span class="text-xs font-bold text-indigo-700">(principal)</span>' : '';
+                            const rol = d.rol && d.rol !== 'principal' && !d.es_principal
+                                ? ` <span class="text-xs text-slate-500">[${esc(d.rol)}]</span>` : '';
+                            const ced = d.cedula ? esc(d.cedula) : '<span class="text-amber-700 font-semibold">s/d</span>';
+                            return `<li>${esc(d.nombre || '—')} · CC ${ced}${tag}${rol}</li>`;
+                        }).join('')}
+                       </ul>`
+                    : (esSinMatch
+                        ? '<p class="text-sm text-red-800">Sin deudores Neon — la unidad no cruzó (no es lista de codeudores).</p>'
+                        : '<p class="text-sm text-slate-400">Sin deudores Neon.</p>');
+            }
             const checked = emitible && visible && (filtroSoloNeon && filtroSoloNeon.checked ? esMatchNeon(r) : true);
             if (checked) seleccionables += 1;
             const chk = emitible
@@ -1519,13 +1695,29 @@
                 ? `<p class="mt-1 text-sm font-semibold text-red-800">${esc(r.motivo_detalle || r.error || 'Sin match Neon')}</p>
                    ${r.criterios ? `<p class="mt-1 text-xs text-red-700/80">Buscado: ${esc(r.criterios)}</p>` : ''}`
                 : (r.error ? `<p class="mt-1 text-sm text-red-700 font-semibold">${esc(r.error)}</p>` : '');
-            const fmiVal = esc(certFmiByGlobalIdx[globalIdx] || '');
+            const fmiVal = esc(certFmiByGlobalIdx[globalIdx] || edPrev.fmi || '');
             const fmiHtml = emitible
                 ? `<div class="flex flex-wrap items-center gap-2 pt-1">
                      <label class="text-xs font-bold uppercase text-slate-500" for="cert-fmi-${globalIdx}">FMI</label>
                      <input type="text" id="cert-fmi-${globalIdx}" class="cert-fmi rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-800 w-40"
                             data-global-idx="${globalIdx}" placeholder="ej. 290-219335" value="${fmiVal}" autocomplete="off">
                      <span class="text-xs text-slate-400">Opcional · vacío = se omite en el poder</span>
+                   </div>`
+                : '';
+            const phaseEditHtml = (MODO_PHASECOB && emitible)
+                ? `<div class="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-lg border border-rose-200 bg-rose-50/50 p-3">
+                     <div>
+                       <label class="text-xs font-bold uppercase text-rose-800" for="cert-edit-nombre-${globalIdx}">Titular (Word)</label>
+                       <input type="text" id="cert-edit-nombre-${globalIdx}"
+                              class="cert-edit-nombre w-full rounded-lg border border-rose-200 px-2 py-1.5 text-sm"
+                              value="${esc(nombreEdit)}" autocomplete="off">
+                     </div>
+                     <div>
+                       <label class="text-xs font-bold uppercase text-rose-800" for="cert-edit-cedula-${globalIdx}">Cédula titular</label>
+                       <input type="text" id="cert-edit-cedula-${globalIdx}"
+                              class="cert-edit-cedula w-full rounded-lg border border-rose-200 px-2 py-1.5 text-sm"
+                              value="${esc(cedulaEdit)}" autocomplete="off">
+                     </div>
                    </div>`
                 : '';
             block.innerHTML = `
@@ -1546,14 +1738,16 @@
                     ${estadoBadge(r.estado)}
                 </div>
                 ${chk}
+                ${phaseEditHtml}
                 ${fmiHtml}
                 <div class="text-sm">
                     <p class="text-xs uppercase text-slate-500 font-bold mb-1">Propietarios relacionados (Neon)</p>
                     ${deudaHtml}
-                    ${sel ? `<p class="mt-1 text-sm text-indigo-900">Word (titular plantilla) → <strong>${esc(sel.nombre || '—')}</strong> (CC ${esc(sel.cedula || '—')}) · 1 doc / unidad</p>` : ''}
+                    ${(!MODO_PHASECOB && sel) ? `<p class="mt-1 text-sm text-indigo-900">Word (titular plantilla) → <strong>${esc(sel.nombre || '—')}</strong> (CC ${esc(sel.cedula || '—')}) · 1 doc / unidad</p>` : ''}
                     ${advHtml}
                     ${motivoHtml}
-                </div>`;
+                </div>
+                ${emitible ? conceptosHtml : ''}`;
             certBloques.appendChild(block);
         });
         if (filtroCertCount) {
@@ -1758,7 +1952,7 @@
             setStatus('No hay lote en memoria para generar certificados.', true);
             return;
         }
-        capturarFmiDelDom();
+        capturarEdicionDelDom();
         const porJob = indicesSeleccionadosPorJob();
         const totalSel = porJob.reduce((n, arr) => n + arr.length, 0);
         if (!totalSel) {
@@ -1807,9 +2001,10 @@
                         : `Generando ${indices.length} certificado(s) Word…`
                 );
                 const fmiMap = fmiLocalPorJob(jobIndex, indices);
-                let res = await postProcesarCert('generar', job.id, [], indices, fmiMap);
+                const edicionMap = edicionLocalPorJob(jobIndex, indices);
+                let res = await postProcesarCert('generar', job.id, [], indices, fmiMap, edicionMap);
                 if (!res.ok && job.files.length) {
-                    res = await postProcesarCert('generar', '', job.files, indices, fmiMap);
+                    res = await postProcesarCert('generar', '', job.files, indices, fmiMap, edicionMap);
                 }
                 if (!res.ok) {
                     let data = {};

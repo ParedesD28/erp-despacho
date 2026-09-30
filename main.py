@@ -1883,6 +1883,27 @@ def vista_estado_cuenta_pdf(request: Request):
             "max_archivos": MAX_ARCHIVOS_LOTE,
             "ui_batch_size": getattr(estado_cuenta_pdf_service, "UI_BATCH_SIZE", 15),
             "parse_workers": getattr(estado_cuenta_pdf_service, "PARSE_WORKERS", 4),
+            "modo_phasecob": False,
+        },
+    )
+
+
+@app.get("/phasecob")
+def vista_phasecob(request: Request):
+    """
+    Módulo secreto (URL directa, sin menú): mismo flujo de estados de cuenta
+    + certificados, con edición post-análisis de nombres, cédulas, FMI y
+    remapeo de conceptos → ordinaria antes de generar Word.
+    """
+    return render_template(
+        "estado_cuenta_pdf.html",
+        {
+            "request": request,
+            "max_mb": int(MAX_PDF_BYTES / (1024 * 1024)),
+            "max_archivos": MAX_ARCHIVOS_LOTE,
+            "ui_batch_size": getattr(estado_cuenta_pdf_service, "UI_BATCH_SIZE", 15),
+            "parse_workers": getattr(estado_cuenta_pdf_service, "PARSE_WORKERS", 4),
+            "modo_phasecob": True,
         },
     )
 

@@ -353,14 +353,39 @@ def _generar_uno(
     ciudad: str = "",
     incluir_poder: bool = True,
     fmi: str = "",
+    edicion: Optional[dict[str, Any]] = None,
 ) -> tuple[BytesIO, str, dict[str, Any]]:
     """Genera un certificado por unidad (principal + lista completa en contexto)."""
     neon = item.get("datos_neon")
     inmueble_id = item.get("inmueble_id")
     sel = item.get("titular_seleccionado") or {}
-    titular_nombre = (sel.get("nombre") or item.get("titular_pdf") or "").strip()
-    cedula = (sel.get("cedula") or titular_cedula or "").strip()
-    fmi_final = (fmi or item.get("fmi") or "").strip()
+    ed = edicion if isinstance(edicion, dict) else {}
+    titular_nombre = (
+        str(ed.get("titular_nombre") or "").strip()
+        or (sel.get("nombre") or item.get("titular_pdf") or "")
+    ).strip()
+    cedula = (
+        str(ed.get("titular_cedula") or "").strip()
+        or (sel.get("cedula") or titular_cedula or "")
+    ).strip()
+    fmi_final = (
+        str(ed.get("fmi") or "").strip()
+        or (fmi or item.get("fmi") or "")
+    ).strip()
+    props_override = ed.get("propietarios")
+    if not isinstance(props_override, list):
+        props_override = None
+    conceptos_ord = ed.get("conceptos_ordinaria") or ed.get("conceptos_forzar_ordinaria")
+    if isinstance(conceptos_ord, str):
+        conceptos_ord = [conceptos_ord]
+    if not isinstance(conceptos_ord, list):
+        conceptos_ord = None
+    forzar = bool(ed) and (
+        bool(ed.get("titular_nombre"))
+        or bool(ed.get("titular_cedula"))
+        or bool(props_override)
+        or bool(ed.get("forzar"))
+    )
 
     return generar_certificado_deuda(
         capital_limpio_a_demandar=item.get("capital_limpio_a_demandar") or [],
@@ -397,6 +422,9 @@ def _generar_uno(
         or item.get("estado") == "fallback_pdf",
         incluir_poder=incluir_poder,
         fmi=fmi_final,
+        forzar_datos_titular=forzar,
+        conceptos_forzar_ordinaria=conceptos_ord,
+        propietarios_override=props_override,
     )
 
 
@@ -414,6 +442,7 @@ def generar_certificados_desde_preview(
     indices: Optional[list[int]] = None,
     incluir_poder: bool = True,
     fmi_por_indice: Optional[dict[int, str]] = None,
+    edicion_por_indice: Optional[dict[int, dict[str, Any]]] = None,
 ) -> tuple[BytesIO, str, dict[str, Any]]:
     """
     Emite Word(s) para resultados emitibles del preview.
@@ -429,6 +458,8 @@ def generar_certificados_desde_preview(
     `incluir_poder`: append del poder en el mismo .docx (default True).
     `fmi_por_indice`: mapa índice del preview → FMI (texto). Vacío permitido;
     la plantilla omite el fragmento FMI si no hay valor.
+    `edicion_por_indice`: overrides phasecob (nombre/cédula/propietarios/
+    conceptos→ordinaria / fmi) por índice de preview.
     """
     # Early-return: no zip/docx parciales sin antefirma del RL.
     rl_nombre, rl_cedula = validar_antefirma_representante(
@@ -439,6 +470,10 @@ def generar_certificados_desde_preview(
     fmi_map = {
         int(k): str(v or "").strip()
         for k, v in (fmi_por_indice or {}).items()
+    }
+    edicion_map = {
+        int(k): (v if isinstance(v, dict) else {})
+        for k, v in (edicion_por_indice or {}).items()
     }
     if indices is not None:
         elegidos = [
@@ -479,6 +514,7 @@ def generar_certificados_desde_preview(
                 ciudad=ciudad,
                 incluir_poder=incluir_poder,
                 fmi=fmi_map.get(idx, ""),
+                edicion=edicion_map.get(idx),
             )
             generados.append((nombre, buf.getvalue()))
             meta_lista.append(meta)
@@ -540,6 +576,7 @@ def procesar_y_generar_certificados(
     solo_match_neon: bool = False,
     incluir_poder: bool = True,
     fmi_por_indice: Optional[dict[int, str]] = None,
+    edicion_por_indice: Optional[dict[int, dict[str, Any]]] = None,
 ) -> dict[str, Any] | tuple[BytesIO, str, dict[str, Any]]:
     """
     Punto único: preview (dict) o generar (buffer, filename, meta).
@@ -551,6 +588,7 @@ def procesar_y_generar_certificados(
     Filtros (`filtro_*` / `solo_match_neon`) aplican al emitir; si además
     hay `indices`, se intersectan (no se mezclan deudores entre cuentas).
     `fmi_por_indice` aplica solo en `generar` (índice del preview → FMI).
+    `edicion_por_indice` (phasecob): nombre/cédula/FMI/conceptos por índice.
     """
     preview = procesar_lote_certificados(
         cuentas,
@@ -590,4 +628,5 @@ def procesar_y_generar_certificados(
         indices=idxs,
         incluir_poder=incluir_poder,
         fmi_por_indice=fmi_por_indice,
+        edicion_por_indice=edicion_por_indice,
     )
