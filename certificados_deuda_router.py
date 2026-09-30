@@ -364,3 +364,31 @@ async def procesar_certificado_unificado(
             "X-Regla-Multi-Deudor": str(meta.get("regla_multi_deudor") or ""),
         },
     )
+
+
+@router.post("/herramientas/estado-cuenta/fmi-parse-tabla")
+async def fmi_parse_tabla(
+    archivo: UploadFile = File(..., description="CSV o Excel con cedula/fmi u otras claves"),
+):
+    """Parsea CSV/Excel a filas FMI para aplicar en el preview (cliente)."""
+    from certificados_fmi_masivo import filas_desde_excel, parse_fmi_csv
+
+    nombre = (archivo.filename or "").strip()
+    raw = await archivo.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Archivo vacío")
+    name_l = nombre.lower()
+    try:
+        if name_l.endswith((".xlsx", ".xls")):
+            filas = filas_desde_excel(raw, nombre=nombre)
+        else:
+            texto = raw.decode("utf-8-sig")
+            filas = parse_fmi_csv(texto)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="No se pudo leer el archivo como texto UTF-8; use CSV o Excel.",
+        ) from exc
+    return {"filas": filas, "archivo": nombre, "n": len(filas)}
