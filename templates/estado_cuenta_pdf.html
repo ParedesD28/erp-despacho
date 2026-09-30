@@ -365,12 +365,15 @@
                     </div>
                     <div class="space-y-2">
                         <label class="block text-xs font-bold uppercase text-indigo-900" for="fmi-csv-file">CSV / Excel (unidad o cédula)</label>
-                        <input type="file" id="fmi-csv-file" accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                        <input type="file" id="fmi-csv-file"
+                               accept=".xlsx,.csv,.tsv,.txt,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain,text/tab-separated-values,application/vnd.ms-excel"
                                class="block w-full text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-700 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-indigo-800">
                         <p class="text-xs text-indigo-800">
-                            Mínimo para cédula: columnas <code>cedula</code> (o <code>documento</code>/<code>cc</code>) + <code>fmi</code>.
-                            También acepta pegar desde Excel en el recuadro de abajo (TSV).
-                            Separador <code>,</code> / <code>;</code> / tab.
+                            Acepta <code>.xlsx</code> y <code>.csv</code> (p.ej. maestro <code>CC</code> + <code>FMI</code>).
+                            Si Windows no muestra el Excel en Descargas, en el diálogo elija
+                            <strong>Todos los archivos</strong> y seleccione el <code>.xlsx</code>.
+                            Mínimo para cédula: <code>cedula</code>/<code>cc</code>/<code>documento</code> + <code>fmi</code>.
+                            También pegar desde Excel abajo (TSV). Separador <code>,</code> / <code>;</code> / tab.
                         </p>
                         <label class="block text-xs font-bold uppercase text-indigo-900" for="fmi-cedula-textarea">Pegar cédula + FMI</label>
                         <textarea id="fmi-cedula-textarea" rows="4"
@@ -949,8 +952,8 @@
         if (lines.length < 2) throw new Error('CSV sin filas de datos');
         const headers = lines[0].split(delim).map(h => h.trim().replace(/^"|"$/g, ''));
         const col = {};
-        const cedulaKeys = ['cedula', 'documento', 'cc', 'nro_documento', 'numero_documento',
-            'num_documento', 'identificacion', 'doc'];
+        const cedulaKeys = ['cedula', 'documento', 'cc', 'nro_cc', 'nro_cedula', 'numero_cedula',
+            'nro_documento', 'numero_documento', 'num_documento', 'identificacion', 'doc'];
         headers.forEach((name, i) => {
             const key = _normFmiKey(name);
             if (['indice', 'index', 'idx', '#'].includes(key)) col.indice = i;

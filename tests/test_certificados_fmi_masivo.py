@@ -276,6 +276,60 @@ class FilasDesdeExcelTests(unittest.TestCase):
         # Excel numérico → str sin .0
         self.assertTrue(filas[1]["cedula"].startswith("10017480"))
 
+    def test_xlsx_headers_cc_fmi_estilo_libro2(self):
+        """Libro2.xlsx del despacho usa encabezados CC + FMI (mayúsculas)."""
+        try:
+            import openpyxl
+        except ImportError:
+            self.skipTest("openpyxl no disponible")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Hoja1"
+        ws.append(["CC", "FMI"])
+        ws.append([9873245, "290-204144"])
+        ws.append([1088536040, "290-204145"])
+        ws.append([42018743, "290-204146"])
+        buf = io.BytesIO()
+        wb.save(buf)
+        filas = filas_desde_excel(buf.getvalue(), nombre="Libro2.xlsx")
+        self.assertEqual(len(filas), 3)
+        self.assertEqual(filas[0], {"fmi": "290-204144", "cedula": "9873245"})
+        self.assertEqual(filas[1]["cedula"], "1088536040")
+        self.assertEqual(filas[2]["fmi"], "290-204146")
+
+        resultados = [
+            _row(
+                deudores=[{"cedula": "9873245", "es_principal": True}],
+                titular_seleccionado={"cedula": "9873245"},
+            ),
+            _row(
+                deudores=[{"cedula": "42018743", "es_principal": True}],
+                titular_seleccionado={"cedula": "42018743"},
+            ),
+        ]
+        res = mapear_csv_a_indices(filas, resultados)
+        self.assertEqual(res["mapa"][0], "290-204144")
+        self.assertEqual(res["mapa"][1], "290-204146")
+        self.assertEqual(res["aplicadas"], 2)
+        self.assertEqual(len(res["sin_match"]), 1)
+
+    def test_sample_libro2_si_existe(self):
+        """Regression opcional contra el sample del store del proyecto."""
+        from pathlib import Path
+
+        sample = Path(
+            "/cursor/stores/bc-2b92a817-5490-4c88-a556-8ad39d11cb5d"
+            "/docs/samples/Libro2.xlsx"
+        )
+        if not sample.is_file():
+            self.skipTest("sample Libro2.xlsx no montado en este entorno")
+        filas = filas_desde_excel(sample.read_bytes(), nombre="Libro2.xlsx")
+        self.assertGreaterEqual(len(filas), 50)
+        self.assertIn("cedula", filas[0])
+        self.assertIn("fmi", filas[0])
+        self.assertTrue(filas[0]["cedula"].isdigit() or filas[0]["cedula"])
+        self.assertTrue(str(filas[0]["fmi"]).startswith("290-"))
+
 
 class PlantillaCsvTests(unittest.TestCase):
     def test_plantilla_solo_emitibles(self):
