@@ -86,6 +86,17 @@ class CertificadoDeudaRequest(BaseModel):
             "del PDF. Exige NIT y cédula explícitos (body); no inventa datos."
         ),
     )
+    incluir_poder: bool = Field(
+        default=True,
+        description=(
+            "Si true, append del poder en el mismo .docx tras un salto de página. "
+            "No inventa FMI/resolución; usa antefirma RL y datos del certificado."
+        ),
+    )
+    fmi: str = Field(
+        default="",
+        description="Folio de matrícula (opcional). Vacío = se omite; no se inventa.",
+    )
 
 
 @router.post("/herramientas/estado-cuenta/certificado-deuda")
@@ -141,6 +152,8 @@ async def emitir_certificado_deuda(payload: CertificadoDeudaRequest):
             representante_cedula=payload.representante_cedula,
             dia_vencimiento=payload.dia_vencimiento,
             permitir_datos_pdf=payload.permitir_datos_pdf,
+            incluir_poder=payload.incluir_poder,
+            fmi=payload.fmi,
         )
     except CertificadoNoEncontradoError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -208,6 +221,12 @@ async def procesar_certificado_unificado(
         False,
         description="Si true, solo emite cuentas con match Neon (ok/varios_propietarios).",
     ),
+    incluir_poder: bool = Form(
+        True,
+        description=(
+            "Si true, cada Word incluye el poder (misma sección tras page break)."
+        ),
+    ),
 ):
     """
     Flujo unificado: Bolsa Global → lookup Neon (clave canónica) → certificado(s).
@@ -220,7 +239,8 @@ async def procesar_certificado_unificado(
     - `modo=generar`: un `.docx` o `.zip`; **un Word por unidad** (principal
       en plantilla; lista completa en contexto). No prorratea Bolsa.
       Acepta `indices` y/o filtros (`filtro_conjunto`, `filtro_busqueda`,
-      `solo_match_neon`).
+      `solo_match_neon`). Con `incluir_poder` (default true) append del poder
+      en el mismo archivo.
 
     Acepta `cache_id` (tras Analizar) y/o `archivos` PDF.
     `sin_match` = fallo de cruce Neon (no confundir con co-propietarios).
@@ -252,6 +272,7 @@ async def procesar_certificado_unificado(
             filtro_conjunto=filtro_conjunto,
             filtro_busqueda=filtro_busqueda,
             solo_match_neon=solo_match_neon,
+            incluir_poder=incluir_poder,
         )
     except CertificadoNoEncontradoError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

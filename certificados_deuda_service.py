@@ -22,6 +22,9 @@ from certificados_deuda_repository import describir_busqueda, resolver_datos_cer
 PLANTILLA_PATH = (
     Path(__file__).resolve().parent / "static" / "plantillas" / "CERTIFICADO_DE_DEUDA.docx"
 )
+PLANTILLA_PODER_PATH = (
+    Path(__file__).resolve().parent / "static" / "plantillas" / "PODER.docx"
+)
 
 # Placeholders de la plantilla oficial (docxtpl). Ver docs/certificados-deuda-word.md.
 PLANTILLA_PLACEHOLDERS: tuple[str, ...] = (
@@ -49,6 +52,15 @@ PLANTILLA_PLACEHOLDERS_MULTI: tuple[str, ...] = (
     "propietarios_nombres",
     "hay_varios_propietarios",
 )
+
+# Identidad del apoderado del despacho (fija; no se inventa por cuenta).
+APODERADO_NOMBRE = "DIEGO ALEJANDRO PAREDES GARCIA"
+APODERADO_CEDULA = "1.004.681.583"
+APODERADO_LT = "44.872"
+APODERADO_EMAIL = "notificacionesdiegoparedes@outlook.com.com"
+APODERADO_CIUDAD = "Pereira"
+APODERADO_CEDULA_CIUDAD = "Pereira, Risaralda"
+DEPARTAMENTO_DEFAULT = "Risaralda"
 
 _MESES_ES = (
     "",
@@ -187,6 +199,9 @@ def datos_certificado_desde_pdf(
         "conjunto_nombre": nombre_conjunto,
         "copropiedad_nombre": nombre_copropiedad,
         "copropiedad_nit": (copropiedad_nit or "").strip() or None,
+        "copropiedad_direccion": None,
+        "copropiedad_telefono": None,
+        "copropiedad_email": None,
         "ciudad": (ciudad or "").strip() or None,
         "titular_nombre": (titular or "").strip() or None,
         "titular_cedula": (titular_cedula or "").strip() or None,
@@ -529,6 +544,214 @@ def renderizar_docx(contexto: dict[str, Any], *, plantilla: Optional[Path] = Non
     return buf
 
 
+def _parse_fecha_item(raw: Any) -> Optional[date]:
+    """Parsea fecha COLON `YYYY.MM.DD` / ISO / date."""
+    if isinstance(raw, date):
+        return raw
+    texto = str(raw or "").strip()
+    if not texto:
+        return None
+    for fmt in ("%Y.%m.%d", "%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"):
+        try:
+            from datetime import datetime
+
+            return datetime.strptime(texto[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def periodo_desde_capital(
+    capital_limpio_a_demandar: list[dict[str, Any]] | None,
+) -> tuple[str, str]:
+    """Min/max mes-año en español a partir del capital limpio (sin inventar)."""
+    fechas: list[date] = []
+    for item in capital_limpio_a_demandar or []:
+        f = _parse_fecha_item(item.get("fecha"))
+        if f:
+            fechas.append(f)
+    if not fechas:
+        return "________", "________"
+    fmin, fmax = min(fechas), max(fechas)
+    desde = f"{_MESES_EMISION[fmin.month]} de {fmin.year}"
+    hasta = f"{_MESES_EMISION[fmax.month]} de {fmax.year}"
+    return desde, hasta
+
+
+def _genero_sufijo_nombre(nombre: str) -> str:
+    """Heurística mínima a/o para 'identificad{{a|o}}'; vacío → 'o'."""
+    tokens = [t for t in re.split(r"\s+", (nombre or "").strip()) if t]
+    if not tokens:
+        return "o"
+    primero = tokens[0].casefold()
+    # Nombres comunes femeninos terminados en a (no aplica a Andrea→a ok; José→é)
+    if primero.endswith("a") and primero not in {"juan", "luca"}:
+        return "a"
+    return "o"
+
+
+def _texto_ejecutados(
+    datos_neon: dict[str, Any],
+    *,
+    ciudad: str,
+) -> tuple[str, str, str, bool]:
+    """
+    Devuelve (ejecutados_texto, ejecutados_proceso, deudor_mandamiento, varios).
+
+    Lista todos los propietarios si hay; si no, el titular principal.
+    """
+    multi = _formatear_propietarios_contexto(datos_neon)
+    props = list(multi.get("propietarios") or [])
+    if not props:
+        props = [
+            {
+                "nombre": (datos_neon.get("titular_nombre") or "").strip(),
+                "cedula": (datos_neon.get("titular_cedula") or "").strip(),
+                "es_principal": True,
+            }
+        ]
+    partes_corto: list[str] = []
+    partes_proceso: list[str] = []
+    for p in props:
+        nom = (p.get("nombre") or "").strip() or "—"
+        ced = (p.get("cedula") or "").strip() or "s/d"
+        gen = _genero_sufijo_nombre(nom)
+        partes_corto.append(f"{nom} identificad{gen} con C.C. {ced}")
+        partes_proceso.append(
+            f"{nom} identificad{gen} con la cédula de ciudadanía número {ced}, "
+            f"persona mayor de edad y vecina de la ciudad de {ciudad}"
+        )
+    varios = len(props) > 1
+    if varios:
+        ejecutados_texto = "; ".join(partes_corto)
+        ejecutados_proceso = (
+            "las personas naturales: " + "; ".join(partes_proceso)
+        )
+    else:
+        ejecutados_texto = partes_corto[0]
+        ejecutados_proceso = "la persona natural: " + partes_proceso[0]
+    deudor = multi.get("propietarios_nombres") or (
+        (datos_neon.get("titular_nombre") or "").strip()
+    )
+    return ejecutados_texto, ejecutados_proceso, deudor, varios
+
+
+def construir_contexto_poder(
+    *,
+    datos_neon: dict[str, Any],
+    capital_limpio_a_demandar: list[dict[str, Any]] | None = None,
+    ciudad: str = "",
+    representante_nombre: str = "",
+    representante_cedula: str = "",
+    representante_cedula_expedida_en: str = "",
+    fmi: str = "",
+    resolucion_numero: str = "",
+    resolucion_fecha: str = "",
+    resolucion_autoridad: str = "",
+    resolucion2_numero: str = "",
+    resolucion2_fecha: str = "",
+    resolucion2_autoridad: str = "",
+    departamento: str = "",
+) -> dict[str, Any]:
+    """Arma el dict docxtpl del poder (reutiliza datos del certificado; no inventa IDs)."""
+    ciudad_final = (
+        (ciudad or "").strip()
+        or (datos_neon.get("ciudad") or "").strip()
+        or "Pereira"
+    )
+    ejecutante = (
+        (datos_neon.get("copropiedad_nombre") or "").strip()
+        or (datos_neon.get("conjunto_nombre") or "").strip()
+    )
+    ejecutados_texto, ejecutados_proceso, deudor, varios = _texto_ejecutados(
+        datos_neon, ciudad=ciudad_final
+    )
+    periodo_desde, periodo_hasta = periodo_desde_capital(capital_limpio_a_demandar)
+    rl_nombre = (representante_nombre or "").strip()
+    return {
+        "ciudad": ciudad_final,
+        "ciudad_mayus": ciudad_final.upper(),
+        "departamento": (departamento or "").strip() or DEPARTAMENTO_DEFAULT,
+        "ejecutante_nombre": ejecutante,
+        "ejecutante_nit": (datos_neon.get("copropiedad_nit") or "").strip(),
+        "ejecutados_texto": ejecutados_texto,
+        "ejecutados_proceso": ejecutados_proceso,
+        "deudor_mandamiento": deudor,
+        "hay_varios_propietarios": varios,
+        "torre_apto": (datos_neon.get("torre_apto") or "").strip(),
+        "fmi": (fmi or datos_neon.get("fmi") or "").strip(),
+        "representante_nombre": rl_nombre,
+        "representante_cedula": (representante_cedula or "").strip(),
+        "representante_genero": _genero_sufijo_nombre(rl_nombre),
+        "representante_cedula_expedida_en": (
+            representante_cedula_expedida_en or ""
+        ).strip(),
+        "copropiedad_direccion": (
+            datos_neon.get("copropiedad_direccion") or ""
+        ).strip(),
+        "copropiedad_telefono": (
+            datos_neon.get("copropiedad_telefono") or ""
+        ).strip(),
+        "copropiedad_email": (datos_neon.get("copropiedad_email") or "").strip(),
+        "resolucion_numero": (resolucion_numero or "").strip(),
+        "resolucion_fecha": (resolucion_fecha or "").strip(),
+        "resolucion_autoridad": (resolucion_autoridad or "").strip(),
+        "resolucion2_numero": (resolucion2_numero or "").strip(),
+        "resolucion2_fecha": (resolucion2_fecha or "").strip(),
+        "resolucion2_autoridad": (resolucion2_autoridad or "").strip(),
+        "periodo_desde": periodo_desde,
+        "periodo_hasta": periodo_hasta,
+        "apoderado_nombre": APODERADO_NOMBRE,
+        "apoderado_cedula": APODERADO_CEDULA,
+        "apoderado_lt": APODERADO_LT,
+        "apoderado_email": APODERADO_EMAIL,
+        "apoderado_ciudad": APODERADO_CIUDAD,
+        "apoderado_cedula_ciudad": APODERADO_CEDULA_CIUDAD,
+    }
+
+
+def renderizar_poder(contexto: dict[str, Any], *, plantilla: Optional[Path] = None) -> BytesIO:
+    """Renderiza PODER.docx → BytesIO."""
+    path = plantilla or PLANTILLA_PODER_PATH
+    if not path.is_file():
+        raise FileNotFoundError(f"Plantilla de poder no encontrada: {path}")
+    return renderizar_docx(contexto, plantilla=path)
+
+
+def componer_certificado_con_poder(
+    certificado_buf: BytesIO,
+    poder_buf: BytesIO,
+) -> BytesIO:
+    """
+    Concatena poder tras un salto de página en el mismo .docx.
+
+    No muta las plantillas en disco: opera sobre buffers ya renderizados.
+    """
+    from copy import deepcopy
+
+    from docx import Document
+    from docx.oxml.ns import qn
+
+    cert = Document(certificado_buf)
+    poder = Document(poder_buf)
+    cert.add_page_break()
+    body = cert.element.body
+    # Insertar antes del sectPr final del certificado.
+    sect = body[-1] if len(body) and body[-1].tag == qn("w:sectPr") else None
+    for child in list(poder.element.body):
+        if child.tag == qn("w:sectPr"):
+            continue
+        node = deepcopy(child)
+        if sect is not None:
+            sect.addprevious(node)
+        else:
+            body.append(node)
+    out = BytesIO()
+    cert.save(out)
+    out.seek(0)
+    return out
+
+
 def generar_certificado_deuda(
     *,
     capital_limpio_a_demandar: list[dict[str, Any]] | None,
@@ -548,6 +771,15 @@ def generar_certificado_deuda(
     representante_cedula: str = "",
     dia_vencimiento: int = 5,
     permitir_datos_pdf: bool = False,
+    incluir_poder: bool = True,
+    fmi: str = "",
+    representante_cedula_expedida_en: str = "",
+    resolucion_numero: str = "",
+    resolucion_fecha: str = "",
+    resolucion_autoridad: str = "",
+    resolucion2_numero: str = "",
+    resolucion2_fecha: str = "",
+    resolucion2_autoridad: str = "",
     conn=None,
 ) -> tuple[BytesIO, str, dict[str, Any]]:
     """
@@ -556,6 +788,9 @@ def generar_certificado_deuda(
     Prioriza match Neon. Si no hay fila y `permitir_datos_pdf`, usa titular /
     bloque-apto / conjunto del PDF; NIT y cédula deben venir en el body
     (no se inventan).
+
+    Si `incluir_poder` (default True), append del poder en el mismo .docx
+    (salto de página; plantilla CERTIFICADO intacta).
 
     Returns:
         (buffer_docx, nombre_archivo, meta)
@@ -646,6 +881,32 @@ def generar_certificado_deuda(
         representante_cedula=rl_cedula,
     )
     buffer = renderizar_docx(contexto)
+    meta_poder: dict[str, Any] = {"incluir_poder": False}
+    if incluir_poder:
+        ctx_poder = construir_contexto_poder(
+            datos_neon=datos,
+            capital_limpio_a_demandar=capital_limpio_a_demandar,
+            ciudad=ciudad or str(contexto.get("ciudad") or ""),
+            representante_nombre=rl_nombre,
+            representante_cedula=rl_cedula,
+            representante_cedula_expedida_en=representante_cedula_expedida_en,
+            fmi=fmi,
+            resolucion_numero=resolucion_numero,
+            resolucion_fecha=resolucion_fecha,
+            resolucion_autoridad=resolucion_autoridad,
+            resolucion2_numero=resolucion2_numero,
+            resolucion2_fecha=resolucion2_fecha,
+            resolucion2_autoridad=resolucion2_autoridad,
+        )
+        poder_buf = renderizar_poder(ctx_poder)
+        buffer = componer_certificado_con_poder(buffer, poder_buf)
+        meta_poder = {
+            "incluir_poder": True,
+            "plantilla_poder": str(PLANTILLA_PODER_PATH.name),
+            "periodo_desde": ctx_poder.get("periodo_desde"),
+            "periodo_hasta": ctx_poder.get("periodo_hasta"),
+            "fmi": ctx_poder.get("fmi") or "",
+        }
     nombre = nombre_archivo_certificado(str(datos.get("titular_nombre") or ""))
     meta = {
         "inmueble_id": datos.get("inmueble_id"),
@@ -661,5 +922,6 @@ def generar_certificado_deuda(
         + list(PLANTILLA_PLACEHOLDERS_MULTI),
         "plantilla": str(PLANTILLA_PATH.name),
         "fuente": datos.get("fuente") or "neon",
+        **meta_poder,
     }
     return buffer, nombre, meta

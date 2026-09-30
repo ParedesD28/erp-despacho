@@ -112,6 +112,13 @@
                     </div>
                 </div>
                 <p id="rl-antefirma-preview" class="text-xs text-indigo-700 font-medium">Antefirma: (indique nombre y cédula)</p>
+                <label class="flex items-start gap-2 text-sm text-indigo-950 pt-1 cursor-pointer">
+                    <input type="checkbox" id="chk-incluir-poder" class="mt-0.5 rounded border-indigo-300 text-indigo-700" checked>
+                    <span>
+                        <span class="font-semibold">Incluir poder (mismo Word)</span>
+                        <span class="block text-xs text-indigo-800">Append tras salto de página; no inventa FMI ni resolución.</span>
+                    </span>
+                </label>
             </div>
             <p id="status" class="text-sm text-slate-500"></p>
             <div id="progress-wrap" class="hidden space-y-1">
@@ -682,6 +689,8 @@
             const rl = representanteOpts();
             if (rl.nombre) fd.append('representante_nombre', rl.nombre);
             if (rl.cedula) fd.append('representante_cedula', rl.cedula);
+            const incluirPoder = !!(document.getElementById('chk-incluir-poder') || {}).checked;
+            fd.append('incluir_poder', incluirPoder ? 'true' : 'false');
         }
         return fetch('/herramientas/estado-cuenta/procesar-certificado', {
             method: 'POST',
@@ -1285,6 +1294,7 @@
                     titular_cedula: cedulaPdf,
                     representante_nombre: rl.nombre,
                     representante_cedula: rl.cedula,
+                    incluir_poder: !!(document.getElementById('chk-incluir-poder') || {}).checked,
                 }),
             });
             if (!res.ok) {

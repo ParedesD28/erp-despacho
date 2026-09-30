@@ -607,6 +607,127 @@ class GeneracionWordTests(unittest.TestCase):
         self.assertIn("representante_cedula", svc.PLANTILLA_PLACEHOLDERS)
 
 
+class PoderConCertificadoTests(unittest.TestCase):
+    def test_plantilla_poder_versionada(self):
+        self.assertTrue(svc.PLANTILLA_PODER_PATH.is_file())
+        self.assertEqual(svc.PLANTILLA_PODER_PATH.name, "PODER.docx")
+
+    def test_periodo_desde_capital(self):
+        desde, hasta = svc.periodo_desde_capital(
+            [
+                {"fecha": "2024.02.01", "valor_a_demandar": 1},
+                {"fecha": "2024.06.15", "valor_a_demandar": 1},
+            ]
+        )
+        self.assertEqual(desde, "febrero de 2024")
+        self.assertEqual(hasta, "junio de 2024")
+        vacio_d, vacio_h = svc.periodo_desde_capital([])
+        self.assertEqual(vacio_d, "________")
+        self.assertEqual(vacio_h, "________")
+
+    def test_contexto_poder_no_inventa_fmi(self):
+        ctx = svc.construir_contexto_poder(
+            datos_neon={
+                "copropiedad_nombre": "PH Demo",
+                "copropiedad_nit": "900",
+                "torre_apto": "2-202",
+                "conjunto_nombre": "Demo",
+                "titular_nombre": "JUAN LOPEZ",
+                "titular_cedula": "555",
+                "ciudad": "Pereira",
+            },
+            capital_limpio_a_demandar=[
+                {"fecha": "2024.06.01", "valor_a_demandar": 40},
+            ],
+            representante_nombre="GLADYS DEMO",
+            representante_cedula="35.319.382",
+        )
+        self.assertEqual(ctx["fmi"], "")
+        self.assertEqual(ctx["ejecutante_nit"], "900")
+        self.assertIn("JUAN LOPEZ", ctx["ejecutados_texto"])
+        self.assertEqual(ctx["apoderado_nombre"], svc.APODERADO_NOMBRE)
+        self.assertEqual(ctx["periodo_desde"], "junio de 2024")
+        buf = svc.renderizar_poder(ctx)
+        self.assertTrue(buf.getvalue()[:2] == b"PK")
+        with zipfile.ZipFile(BytesIO(buf.getvalue())) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+            self.assertIn("JUAN LOPEZ", xml)
+            self.assertIn(svc.APODERADO_NOMBRE, xml)
+            self.assertNotIn("290-219335", xml)
+
+    def test_generar_incluye_poder_por_default(self):
+        with patch(
+            "certificados_deuda_service.resolver_datos_certificado",
+            return_value={
+                "inmueble_id": 7,
+                "copropiedad_nombre": "PH Demo",
+                "copropiedad_nit": "900",
+                "titular_nombre": "JUAN LOPEZ",
+                "titular_cedula": "555",
+                "torre_apto": "2-202",
+                "conjunto_nombre": "Demo",
+                "ciudad": "Pereira",
+            },
+        ):
+            buf, nombre, meta = svc.generar_certificado_deuda(
+                capital_limpio_a_demandar=[
+                    {
+                        "fecha": "2024.06.01",
+                        "concepto": "CUOTA ADMINISTRACION",
+                        "valor_a_demandar": 40,
+                    }
+                ],
+                inmueble_id=7,
+                representante_nombre="RL",
+                representante_cedula="99",
+            )
+        self.assertEqual(nombre, "Certificado_JUAN_LOPEZ.docx")
+        self.assertTrue(meta["incluir_poder"])
+        self.assertEqual(meta["plantilla_poder"], "PODER.docx")
+        with zipfile.ZipFile(BytesIO(buf.getvalue())) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+            self.assertIn("CERTIFICADO DE DEUDA", xml)
+            self.assertIn("Asunto", xml)
+            self.assertIn("Poder", xml)
+            self.assertIn("Acepto", xml)
+            self.assertIn(svc.APODERADO_NOMBRE, xml)
+
+    def test_generar_sin_poder_si_flag_false(self):
+        with patch(
+            "certificados_deuda_service.resolver_datos_certificado",
+            return_value={
+                "inmueble_id": 7,
+                "copropiedad_nombre": "PH Demo",
+                "copropiedad_nit": "900",
+                "titular_nombre": "JUAN LOPEZ",
+                "titular_cedula": "555",
+                "torre_apto": "2-202",
+                "conjunto_nombre": "Demo",
+                "ciudad": "Pereira",
+            },
+        ):
+            buf, _nombre, meta = svc.generar_certificado_deuda(
+                capital_limpio_a_demandar=[
+                    {
+                        "fecha": "2024.06.01",
+                        "concepto": "CUOTA ADMINISTRACION",
+                        "valor_a_demandar": 40,
+                    }
+                ],
+                inmueble_id=7,
+                representante_nombre="RL",
+                representante_cedula="99",
+                incluir_poder=False,
+            )
+        self.assertFalse(meta.get("incluir_poder"))
+        self.assertNotIn("plantilla_poder", meta)
+        with zipfile.ZipFile(BytesIO(buf.getvalue())) as zf:
+            xml = zf.read("word/document.xml").decode("utf-8")
+            self.assertIn("CERTIFICADO DE DEUDA", xml)
+            self.assertNotIn(svc.APODERADO_NOMBRE, xml)
+            self.assertNotIn("Acepto", xml)
+
+
 class RbacCertificadoTests(unittest.TestCase):
     def test_post_exige_accion_editar(self):
         consulta = permisos.permisos_de_perfil(permisos.PERFIL_CONSULTA)

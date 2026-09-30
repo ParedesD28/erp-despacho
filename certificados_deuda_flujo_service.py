@@ -351,6 +351,7 @@ def _generar_uno(
     copropiedad_nit: str = "",
     copropiedad_nombre: str = "",
     ciudad: str = "",
+    incluir_poder: bool = True,
 ) -> tuple[BytesIO, str, dict[str, Any]]:
     """Genera un certificado por unidad (principal + lista completa en contexto)."""
     neon = item.get("datos_neon")
@@ -392,6 +393,7 @@ def _generar_uno(
         dia_vencimiento=dia_vencimiento,
         permitir_datos_pdf=permitir_datos_pdf
         or item.get("estado") == "fallback_pdf",
+        incluir_poder=incluir_poder,
     )
 
 
@@ -407,6 +409,7 @@ def generar_certificados_desde_preview(
     copropiedad_nombre: str = "",
     ciudad: str = "",
     indices: Optional[list[int]] = None,
+    incluir_poder: bool = True,
 ) -> tuple[BytesIO, str, dict[str, Any]]:
     """
     Emite Word(s) para resultados emitibles del preview.
@@ -418,6 +421,8 @@ def generar_certificados_desde_preview(
 
     Antefirma (`representante_*`) es obligatoria y se aplica a **todos**
     los Word del lote; si falta, no se genera ningún archivo.
+
+    `incluir_poder`: append del poder en el mismo .docx (default True).
     """
     # Early-return: no zip/docx parciales sin antefirma del RL.
     rl_nombre, rl_cedula = validar_antefirma_representante(
@@ -458,6 +463,7 @@ def generar_certificados_desde_preview(
                 copropiedad_nit=copropiedad_nit,
                 copropiedad_nombre=copropiedad_nombre,
                 ciudad=ciudad,
+                incluir_poder=incluir_poder,
             )
             generados.append((nombre, buf.getvalue()))
             meta_lista.append(meta)
@@ -478,6 +484,7 @@ def generar_certificados_desde_preview(
         "metas": meta_lista,
         "representante_nombre": rl_nombre,
         "representante_cedula": rl_cedula,
+        "incluir_poder": bool(incluir_poder),
     }
 
     if len(generados) == 1:
@@ -516,6 +523,7 @@ def procesar_y_generar_certificados(
     filtro_conjunto: str = "",
     filtro_busqueda: str = "",
     solo_match_neon: bool = False,
+    incluir_poder: bool = True,
 ) -> dict[str, Any] | tuple[BytesIO, str, dict[str, Any]]:
     """
     Punto único: preview (dict) o generar (buffer, filename, meta).
@@ -563,4 +571,5 @@ def procesar_y_generar_certificados(
         copropiedad_nombre=copropiedad_nombre,
         ciudad=ciudad,
         indices=idxs,
+        incluir_poder=incluir_poder,
     )
