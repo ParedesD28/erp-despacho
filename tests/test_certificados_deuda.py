@@ -381,8 +381,8 @@ class GeneracionWordTests(unittest.TestCase):
             self.assertIn("ANA PEREZ", xml)
             self.assertIn("FEBRERO", xml)
 
-    def test_plantillas_oficio_parentesis_y_negritas(self):
-        """Oficio 8.5×13, ((campos)), negritas y spacing single (after=0)."""
+    def test_plantillas_oficio_sin_parentesis_y_negritas(self):
+        """Oficio 8.5×13, campos sin (( )), negritas y spacing single (after=0)."""
         from docx import Document
         from docx.oxml.ns import qn
 
@@ -413,16 +413,21 @@ class GeneracionWordTests(unittest.TestCase):
         self.assertAlmostEqual(doc.sections[0].page_height.inches, 13.0, places=2)
         self.assertEqual(
             doc.paragraphs[1].text,
-            "((MIRADOR DE LLANO GRANDE PH PROPIEDAD HORIZONTAL))",
+            "MIRADOR DE LLANO GRANDE PH PROPIEDAD HORIZONTAL",
         )
-        self.assertEqual(doc.paragraphs[2].text, "N.I.T.: ((900938646))")
+        self.assertEqual(doc.paragraphs[2].text, "N.I.T.: 900938646")
+        self.assertNotIn("((", doc.paragraphs[1].text)
+        self.assertNotIn("((", doc.paragraphs[2].text)
         cuerpo = doc.paragraphs[8].text
-        self.assertIn("((MIRADOR DE LLANO GRANDE))", cuerpo)
-        self.assertIn("((21423830))", cuerpo)
+        self.assertIn("PROPIEDAD HORIZONTAL MIRADOR DE LLANO GRANDE,", cuerpo)
+        self.assertIn("cedula 21423830,", cuerpo)
+        self.assertNotIn("((", cuerpo)
+        self.assertNotIn("))", cuerpo)
         self.assertIn("del (la) señor(a)", cuerpo)
         bold_cuerpo = "".join(r.text for r in doc.paragraphs[8].runs if r.bold)
         self.assertIn("ALBA DOLLY CARDONA AMARILES", bold_cuerpo)
-        self.assertIn("((21423830))", bold_cuerpo)
+        self.assertIn("21423830", bold_cuerpo)
+        self.assertIn("PROPIEDAD HORIZONTAL MIRADOR DE LLANO GRANDE,", bold_cuerpo)
         sp = doc.paragraphs[8]._p.find(qn("w:pPr")).find(qn("w:spacing"))
         self.assertEqual(sp.get(qn("w:after")), "0")
         self.assertEqual(sp.get(qn("w:line")), "240")
@@ -447,9 +452,20 @@ class GeneracionWordTests(unittest.TestCase):
         docp = Document(svc.renderizar_poder(ctx_poder))
         self.assertAlmostEqual(docp.sections[0].page_height.inches, 13.0, places=2)
         cuerpo_p = next(p.text for p in docp.paragraphs if "CONFIERO PODER" in p.text)
-        self.assertIn("((MIRADOR DE LLANO GRANDE PH))", cuerpo_p)
-        self.assertIn("((900938646))", cuerpo_p)
+        self.assertIn("propiedad horizontal MIRADOR DE LLANO GRANDE PH", cuerpo_p)
+        self.assertIn("N.I.T.: 900938646", cuerpo_p)
+        self.assertNotIn("((", cuerpo_p)
+        self.assertNotIn("))", cuerpo_p)
         self.assertIn("identificado con el FMI 290-204208", cuerpo_p)
+        bold_poder = "".join(
+            r.text
+            for p in docp.paragraphs
+            if "CONFIERO PODER" in p.text
+            for r in p.runs
+            if r.bold
+        )
+        self.assertIn("MIRADOR DE LLANO GRANDE PH", bold_poder)
+        self.assertIn("900938646", bold_poder)
 
     def test_nombre_archivo_dinamico(self):
         self.assertEqual(
