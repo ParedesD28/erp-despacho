@@ -41,7 +41,7 @@ PLANTILLA_PLACEHOLDERS: tuple[str, ...] = (
     "anio_emision",
     "representante_nombre",
     "representante_cedula",
-    "filas",  # mes, anio, cuotas_ordinarias, cuotas_extraordinarias, vencimiento, saldo
+    "filas",  # mes, anio, cuotas_ordinarias, cuotas_extraordinarias[, cuota_extra_2], vencimiento, saldo
     "total_saldo",
 )
 
@@ -263,7 +263,12 @@ def validar_datos_criticos(datos: dict[str, Any]) -> None:
 
 @dataclass(frozen=True)
 class FilaCertificado:
-    """Fila de la tabla oficial: MES | AÑO | ORDINARIAS | EXTRAORDINARIAS | VENCIMIENTO | SALDO."""
+    """Fila de la tabla oficial: MES | AÑO | ORDINARIAS | EXTRAORDINARIAS | VENCIMIENTO | SALDO.
+
+    Si hay 2+ extraordinarias en el mismo mes, la 1ª va en la fila principal
+    (junto a la ordinaria) y cada extraordinaria adicional genera una fila
+    nueva (`es_extra_adicional=True`) con el mismo mes/año y solo ese valor.
+    """
 
     mes: str
     anio: int
@@ -271,6 +276,8 @@ class FilaCertificado:
     cuotas_extraordinarias: float
     vencimiento: str
     saldo: float
+    es_extra_adicional: bool = False
+    indice_extra: int = 0  # 0 = 1ª extra (columna de la fila principal); 1 = 2ª; …
 
     @property
     def periodo(self) -> str:
@@ -285,6 +292,12 @@ class FilaCertificado:
     def saldo_acumulado(self) -> float:
         return self.saldo
 
+    @property
+    def cuota_extra_2(self) -> float:
+        """Compat plantillas que esperan 2ª extra en la misma fila (siempre 0 aquí:
+        la 2ª+ van en filas adicionales)."""
+        return 0.0
+
 
 def _normalizar_texto(texto: str) -> str:
     base = unicodedata.normalize("NFKD", str(texto or ""))
@@ -292,12 +305,48 @@ def _normalizar_texto(texto: str) -> str:
     return re.sub(r"\s+", " ", sin).upper().strip()
 
 
-def _es_cuota_ordinaria(concepto: str) -> bool:
-    """Heurística: CUOTA + ADMIN*/ADMON → ordinaria; resto del capital limpio → extraordinaria."""
+# Misma lista que bolsa_global_mora (evitar EXTRA/gastos como ordinaria).
+_KW_ADMIN_NO_ORDINARIA: frozenset[str] = frozenset(
+    {
+        "EXTRA",
+        "EXTRAORDINARIA",
+        "EXTRAORDINARIO",
+        "EXTRAORDINARIAS",
+        "PINTURA",
+        "FACHADA",
+        "RETROACTIVO",
+        "HONORARIO",
+        "HONORARIOS",
+        "PREJURIDICO",
+        "ABOGADO",
+        "COBRO",
+        "GASTO",
+        "GASTOS",
+    }
+)
+
+
+def _es_cuota_ordinaria(
+    concepto: str,
+    *,
+    forzados_ordinaria: frozenset[str] | set[str] | None = None,
+) -> bool:
+    """
+    Heurística Word: cuota de administración → ordinaria.
+
+    Acepta CUOTA+ADMIN* y también ADMINISTRACION/ADMON solos (PDFs sin 'CUOTA').
+    `forzados_ordinaria`: override manual (texto normalizado o crudo en mayúsculas).
+    """
     normal = _normalizar_texto(concepto)
     if not normal or "INTERES" in normal:
         return False
+    if forzados_ordinaria:
+        crudo = str(concepto or "").strip().upper()
+        if normal in forzados_ordinaria or crudo in forzados_ordinaria:
+            return True
     tokens = normal.split()
+    if any(tok.startswith("EXTRA") for tok in tokens):
+        return False
     tiene_cuota = any(tok.startswith("CUOT") or tok.startswith("COUT") for tok in tokens)
     tiene_admin = any(
         tok.startswith("ADMIN")
@@ -305,7 +354,41 @@ def _es_cuota_ordinaria(concepto: str) -> bool:
         or tok in {"ADMINISTRATIVA", "ADMINISTRATIVO"}
         for tok in tokens
     )
-    return bool(tiene_cuota and tiene_admin)
+    if tiene_cuota and tiene_admin:
+        return True
+    if tiene_admin and not tiene_cuota:
+        if any(
+            tok in _KW_ADMIN_NO_ORDINARIA or tok.startswith("HONOR")
+            for tok in tokens
+        ):
+            return False
+        return True
+    return False
+
+
+def es_cuota_ordinaria(
+    concepto: str,
+    *,
+    forzados_ordinaria: frozenset[str] | set[str] | None = None,
+) -> bool:
+    """API pública de la heurística ordinaria (tests / UI de remapeo)."""
+    return _es_cuota_ordinaria(concepto, forzados_ordinaria=forzados_ordinaria)
+
+
+def normalizar_forzados_ordinaria(
+    conceptos: list[str] | tuple[str, ...] | set[str] | None,
+) -> frozenset[str]:
+    """Normaliza lista de conceptos UI → set comparable con `_es_cuota_ordinaria`."""
+    out: set[str] = set()
+    for raw in conceptos or []:
+        texto = str(raw or "").strip()
+        if not texto:
+            continue
+        out.add(texto.upper())
+        norm = _normalizar_texto(texto)
+        if norm:
+            out.add(norm)
+    return frozenset(out)
 
 
 def _parse_mes_anio(fecha: Any) -> Optional[tuple[int, int]]:
@@ -347,18 +430,24 @@ def agrupar_capital_limpio(
     items: list[dict[str, Any]] | None,
     *,
     dia_vencimiento: int = 5,
+    conceptos_forzar_ordinaria: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> list[FilaCertificado]:
     """
     Agrupa ítems de `capital_limpio_a_demandar` por mes/año.
 
-    - CUOTAS ORDINARIAS: conceptos tipo cuota de administración.
-    - CUOTAS EXTRAORDINARIAS: resto del capital limpio (extras, gastos demandables, etc.).
+    - CUOTAS ORDINARIAS: conceptos tipo cuota de administración (se suman).
+    - CUOTAS EXTRAORDINARIAS: resto del capital limpio — **no se suman** entre sí.
+      En el mismo mes: la 1ª extraordinaria va en la columna EXTRA de la fila
+      principal (junto a la ordinaria); la 2ª, 3ª, … cada una en una **fila nueva**
+      (mismo mes/año, ordinaria=0, saldo acumulado).
     - SALDO: acumulado fila a fila (orden cronológico).
     - VENCIMIENTO: día fijo del mes (default 5, como el Word del usuario).
+    - `conceptos_forzar_ordinaria`: override UI (mapear concepto → ordinaria).
     """
-    buckets: "OrderedDict[tuple[int, int], dict[str, float]]" = OrderedDict()
+    forzados = normalizar_forzados_ordinaria(conceptos_forzar_ordinaria)
+    buckets: "OrderedDict[tuple[int, int], dict[str, Any]]" = OrderedDict()
     sin_fecha_ord = 0.0
-    sin_fecha_ext = 0.0
+    sin_fecha_extras: list[float] = []
     dia = max(1, min(28, int(dia_vencimiento or 5)))
 
     for raw in items or []:
@@ -371,50 +460,92 @@ def agrupar_capital_limpio(
         if abs(valor) < 1e-9:
             continue
         concepto = str(raw.get("concepto") or "")
-        ordinarias = _es_cuota_ordinaria(concepto)
+        ordinarias = _es_cuota_ordinaria(concepto, forzados_ordinaria=forzados)
         clave = _parse_mes_anio(raw.get("fecha") or raw.get("mes_corte"))
         if clave is None:
             if ordinarias:
                 sin_fecha_ord += valor
             else:
-                sin_fecha_ext += valor
+                sin_fecha_extras.append(valor)
             continue
         if clave not in buckets:
-            buckets[clave] = {"ord": 0.0, "ext": 0.0}
+            buckets[clave] = {"ord": 0.0, "extras": []}
         if ordinarias:
             buckets[clave]["ord"] += valor
         else:
-            buckets[clave]["ext"] += valor
+            buckets[clave]["extras"].append(valor)
+
+    def _emitir_filas_mes(
+        *,
+        mes_label: str,
+        anio: int,
+        ord_val: float,
+        extras: list[float],
+        vencimiento: str,
+        acum_in: float,
+    ) -> tuple[list[FilaCertificado], float]:
+        """1ª extra en fila principal; 2ª+ en filas nuevas. No suma extras."""
+        out: list[FilaCertificado] = []
+        acum = acum_in
+        extras_pos = [round(float(x), 2) for x in extras if abs(float(x)) >= 1e-9]
+        primera = extras_pos[0] if extras_pos else 0.0
+        resto = extras_pos[1:]
+        total0 = round(float(ord_val) + primera, 2)
+        # Fila principal solo si hay ordinaria o al menos una extra (o ambas).
+        if abs(ord_val) >= 1e-9 or extras_pos:
+            acum = round(acum + total0, 2)
+            out.append(
+                FilaCertificado(
+                    mes=mes_label,
+                    anio=anio,
+                    cuotas_ordinarias=round(float(ord_val), 2),
+                    cuotas_extraordinarias=primera,
+                    vencimiento=vencimiento,
+                    saldo=acum,
+                    es_extra_adicional=False,
+                    indice_extra=0,
+                )
+            )
+        for i, extra_n in enumerate(resto, start=1):
+            acum = round(acum + extra_n, 2)
+            out.append(
+                FilaCertificado(
+                    mes=mes_label,
+                    anio=anio,
+                    cuotas_ordinarias=0.0,
+                    cuotas_extraordinarias=extra_n,
+                    vencimiento=vencimiento,
+                    saldo=acum,
+                    es_extra_adicional=True,
+                    indice_extra=i,
+                )
+            )
+        return out, acum
 
     ordenados = sorted(buckets.items(), key=lambda kv: (kv[0][0], kv[0][1]))
     filas: list[FilaCertificado] = []
     acum = 0.0
     for (anio, mes), montos in ordenados:
-        total = round(montos["ord"] + montos["ext"], 2)
-        acum = round(acum + total, 2)
-        filas.append(
-            FilaCertificado(
-                mes=_MESES_ES[mes] if 1 <= mes <= 12 else f"MES{mes}",
-                anio=anio,
-                cuotas_ordinarias=round(montos["ord"], 2),
-                cuotas_extraordinarias=round(montos["ext"], 2),
-                vencimiento=_fmt_vencimiento(anio, mes, dia),
-                saldo=acum,
-            )
+        mes_label = _MESES_ES[mes] if 1 <= mes <= 12 else f"MES{mes}"
+        nuevas, acum = _emitir_filas_mes(
+            mes_label=mes_label,
+            anio=anio,
+            ord_val=montos["ord"],
+            extras=list(montos["extras"]),
+            vencimiento=_fmt_vencimiento(anio, mes, dia),
+            acum_in=acum,
         )
-    if abs(sin_fecha_ord) > 1e-9 or abs(sin_fecha_ext) > 1e-9:
-        total = round(sin_fecha_ord + sin_fecha_ext, 2)
-        acum = round(acum + total, 2)
-        filas.append(
-            FilaCertificado(
-                mes="SIN MES",
-                anio=0,
-                cuotas_ordinarias=round(sin_fecha_ord, 2),
-                cuotas_extraordinarias=round(sin_fecha_ext, 2),
-                vencimiento="—",
-                saldo=acum,
-            )
+        filas.extend(nuevas)
+    if abs(sin_fecha_ord) > 1e-9 or sin_fecha_extras:
+        nuevas, acum = _emitir_filas_mes(
+            mes_label="SIN MES",
+            anio=0,
+            ord_val=sin_fecha_ord,
+            extras=sin_fecha_extras,
+            vencimiento="—",
+            acum_in=acum,
         )
+        filas.extend(nuevas)
     return filas
 
 
@@ -517,8 +648,17 @@ def construir_contexto_plantilla(
             {
                 "mes": f.mes,
                 "anio": str(f.anio) if f.anio else "",
-                "cuotas_ordinarias": _fmt_cop(f.cuotas_ordinarias),
+                "cuotas_ordinarias": (
+                    _fmt_cop(f.cuotas_ordinarias)
+                    if abs(f.cuotas_ordinarias) >= 1e-9
+                    else ("\u00a0" if f.es_extra_adicional else _fmt_cop(0))
+                ),
                 "cuotas_extraordinarias": _fmt_extra(f.cuotas_extraordinarias),
+                # 2ª+ extraordinaria = filas nuevas; cuota_extra_2 queda vacío
+                # (compat plantillas antiguas que esperaban 2 columnas).
+                "cuota_extra_2": _fmt_extra(f.cuota_extra_2),
+                "es_extra_adicional": bool(f.es_extra_adicional),
+                "indice_extra": int(f.indice_extra or 0),
                 "vencimiento": f.vencimiento,
                 "saldo": _fmt_cop(f.saldo),
             }
@@ -755,6 +895,9 @@ def generar_certificado_deuda(
     permitir_datos_pdf: bool = False,
     incluir_poder: bool = True,
     fmi: str = "",
+    forzar_datos_titular: bool = False,
+    conceptos_forzar_ordinaria: list[str] | None = None,
+    propietarios_override: list[dict[str, Any]] | None = None,
     conn=None,
 ) -> tuple[BytesIO, str, dict[str, Any]]:
     """
@@ -767,6 +910,9 @@ def generar_certificado_deuda(
     Si `incluir_poder` (default True), append del poder en el mismo .docx
     (salto de página; plantilla CERTIFICADO intacta). `fmi` opcional por
     cuenta: vacío = se omite en el poder; no se inventa.
+
+    `forzar_datos_titular` / `propietarios_override` / `conceptos_forzar_ordinaria`:
+    edición manual post-análisis (módulo `/phasecob` y remapeo de conceptos).
 
     Returns:
         (buffer_docx, nombre_archivo, meta)
@@ -828,17 +974,58 @@ def generar_certificado_deuda(
             )
     # Overrides explícitos del body (fallback / corrección manual) sin inventar.
     if (titular or "").strip():
-        # No reemplaza principal Neon salvo fallback PDF (sin inmueble_id).
-        if datos.get("fuente") == "pdf" or not datos.get("titular_nombre"):
+        if (
+            forzar_datos_titular
+            or datos.get("fuente") == "pdf"
+            or not datos.get("titular_nombre")
+        ):
             datos["titular_nombre"] = titular.strip()
     if (titular_cedula or "").strip() and (
-        datos.get("fuente") == "pdf" or not (datos.get("titular_cedula") or "").strip()
+        forzar_datos_titular
+        or datos.get("fuente") == "pdf"
+        or not (datos.get("titular_cedula") or "").strip()
     ):
         datos["titular_cedula"] = titular_cedula.strip()
     if (copropiedad_nombre or "").strip() and not (datos.get("copropiedad_nombre") or "").strip():
         datos["copropiedad_nombre"] = copropiedad_nombre.strip()
     if (copropiedad_nit or "").strip() and not (datos.get("copropiedad_nit") or "").strip():
         datos["copropiedad_nit"] = copropiedad_nit.strip()
+
+    if propietarios_override:
+        props: list[dict[str, Any]] = []
+        for p in propietarios_override:
+            if not isinstance(p, dict):
+                continue
+            nom = str(p.get("nombre") or "").strip()
+            ced = str(p.get("cedula") or "").strip()
+            if not nom and not ced:
+                continue
+            es_prin = bool(p.get("es_principal"))
+            props.append(
+                {
+                    "nombre": nom,
+                    "cedula": ced,
+                    "es_principal": es_prin,
+                    "rol": str(
+                        p.get("rol") or ("principal" if es_prin else "co_propietario")
+                    ),
+                }
+            )
+        if props:
+            if not any(p.get("es_principal") for p in props):
+                props[0]["es_principal"] = True
+                props[0]["rol"] = "principal"
+            datos["propietarios"] = props
+            datos["deudores"] = list(props)
+            principal = next((p for p in props if p.get("es_principal")), props[0])
+            if forzar_datos_titular or not (datos.get("titular_nombre") or "").strip():
+                datos["titular_nombre"] = (
+                    principal.get("nombre") or datos.get("titular_nombre")
+                )
+            if forzar_datos_titular or not (datos.get("titular_cedula") or "").strip():
+                datos["titular_cedula"] = (
+                    principal.get("cedula") or datos.get("titular_cedula")
+                )
 
     validar_datos_criticos(datos)
     rl_nombre, rl_cedula = validar_antefirma_representante(
@@ -848,6 +1035,7 @@ def generar_certificado_deuda(
     filas = agrupar_capital_limpio(
         capital_limpio_a_demandar,
         dia_vencimiento=dia_vencimiento,
+        conceptos_forzar_ordinaria=conceptos_forzar_ordinaria,
     )
     contexto = construir_contexto_plantilla(
         datos_neon=datos,

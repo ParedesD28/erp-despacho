@@ -99,7 +99,8 @@ def _token_cerca(token: str, objetivo: str, max_dist: int) -> bool:
 def clasificar_concepto(concepto: str) -> str:
     """
     Clasifica sin modificar el texto original.
-    Tolera COUTA, CUOTA ADMINISTRATIVA y APORTE CUOTA DE ADMINISTRACION.
+    Tolera COUTA, CUOTA ADMINISTRATIVA, APORTE CUOTA DE ADMINISTRACION
+    y ADMINISTRACION / ADMINISTRACIÓN solos (sin palabra CUOTA).
     """
     normal = normalizar_texto(concepto)
     if not normal:
@@ -107,14 +108,34 @@ def clasificar_concepto(concepto: str) -> str:
     if "INTERES" in normal:
         return CLASIFICACION_INTERES
     tokens = normal.split()
+    if any(tok.startswith("EXTRA") for tok in tokens):
+        return CLASIFICACION_EXTRA
     tiene_cuota = any(_token_cerca(tok, "CUOTA", 1) for tok in tokens)
     tiene_admin = any(
         tok.startswith("ADMIN") and len(tok) >= 5
+        or tok.startswith("ADMON")
         or _token_cerca(tok, "ADMINISTRACION", 2)
         or _token_cerca(tok, "ADMINISTRATIVA", 2)
         for tok in tokens
     )
     if tiene_cuota and tiene_admin:
+        return CLASIFICACION_CUOTA
+    # PDF COLON a veces trae solo "ADMINISTRACION" / "ADMINISTRACIÓN".
+    if tiene_admin and not tiene_cuota:
+        ruido = {
+            "PINTURA",
+            "FACHADA",
+            "RETROACTIVO",
+            "HONORARIO",
+            "HONORARIOS",
+            "PREJURIDICO",
+            "ABOGADO",
+            "COBRO",
+            "GASTO",
+            "GASTOS",
+        }
+        if any(t in ruido or t.startswith("HONOR") for t in tokens):
+            return CLASIFICACION_EXTRA
         return CLASIFICACION_CUOTA
     return CLASIFICACION_EXTRA
 

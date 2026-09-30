@@ -16,6 +16,7 @@ from certificados_deuda_flujo_service import (
 from certificados_deuda_service import (
     CertificadoDatosFaltantesError,
     CertificadoNoEncontradoError,
+    es_cuota_ordinaria,
     generar_certificado_deuda,
 )
 
@@ -177,21 +178,6 @@ async def emitir_certificado_deuda(payload: CertificadoDeudaRequest):
     )
 
 
-def _parse_indices(raw: str) -> Optional[list[int]]:
-    texto = (raw or "").strip()
-    if not texto:
-        return None
-    try:
-        data = json.loads(texto)
-    except json.JSONDecodeError:
-        # "0,1,2"
-        parts = [p.strip() for p in texto.split(",") if p.strip()]
-        return [int(p) for p in parts]
-    if isinstance(data, list):
-        return [int(x) for x in data]
-    raise ValueError("indices debe ser JSON array o lista separada por comas")
-
-
 def _parse_fmi_por_indice(raw: str) -> Optional[dict[int, str]]:
     """Parsea mapa índice→FMI (`{"0":"290-1"}` o `[[0,"290-1"]]`)."""
     texto = (raw or "").strip()
@@ -218,6 +204,69 @@ def _parse_fmi_por_indice(raw: str) -> Optional[dict[int, str]]:
                 )
         return out
     raise ValueError("fmi_por_indice debe ser JSON objeto o lista")
+
+
+def _parse_edicion_por_indice(raw: str) -> Optional[dict[int, dict[str, Any]]]:
+    """Parsea overrides phasecob: índice → {titular_nombre, titular_cedula, fmi, …}."""
+    texto = (raw or "").strip()
+    if not texto:
+        return None
+    try:
+        data = json.loads(texto)
+    except json.JSONDecodeError as exc:
+        raise ValueError("edicion_por_indice debe ser JSON objeto") from exc
+    if not isinstance(data, dict):
+        raise ValueError("edicion_por_indice debe ser JSON objeto índice→edición")
+    out: dict[int, dict[str, Any]] = {}
+    for k, v in data.items():
+        if v is None:
+            continue
+        if not isinstance(v, dict):
+            raise ValueError(f"edicion_por_indice[{k}] debe ser objeto")
+        out[int(k)] = v
+    return out
+
+
+def _resumen_conceptos_capital(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Conceptos únicos del capital limpio para UI de remapeo ordinaria/extra."""
+    seen: dict[str, dict[str, Any]] = {}
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        concepto = str(it.get("concepto") or "").strip()
+        if not concepto:
+            continue
+        try:
+            valor = float(it.get("valor_a_demandar") or 0)
+        except (TypeError, ValueError):
+            valor = 0.0
+        if concepto not in seen:
+            seen[concepto] = {
+                "concepto": concepto,
+                "ordinaria_sugerida": es_cuota_ordinaria(concepto),
+                "valor_total": 0.0,
+                "n": 0,
+            }
+        seen[concepto]["valor_total"] = round(
+            float(seen[concepto]["valor_total"]) + valor, 2
+        )
+        seen[concepto]["n"] = int(seen[concepto]["n"]) + 1
+    return list(seen.values())
+
+
+def _parse_indices(raw: str) -> Optional[list[int]]:
+    texto = (raw or "").strip()
+    if not texto:
+        return None
+    try:
+        data = json.loads(texto)
+    except json.JSONDecodeError:
+        # "0,1,2"
+        parts = [p.strip() for p in texto.split(",") if p.strip()]
+        return [int(p) for p in parts]
+    if isinstance(data, list):
+        return [int(x) for x in data]
+    raise ValueError("indices debe ser JSON array o lista separada por comas")
 
 
 @router.post("/herramientas/estado-cuenta/procesar-certificado")
@@ -265,6 +314,13 @@ async def procesar_certificado_unificado(
             '{"0":"290-219335","2":"290-1"}. Vacío por cuenta = se omite.'
         ),
     ),
+    edicion_por_indice: str = Form(
+        "",
+        description=(
+            "Opcional (modo generar / phasecob): JSON índice→edición "
+            '{titular_nombre,titular_cedula,fmi,propietarios[],conceptos_ordinaria[]}.'
+        ),
+    ),
 ):
     """
     Flujo unificado: Bolsa Global → lookup Neon (clave canónica) → certificado(s).
@@ -280,6 +336,8 @@ async def procesar_certificado_unificado(
       `solo_match_neon`). Con `incluir_poder` (default true) append del poder
       en el mismo archivo. `fmi_por_indice` alimenta el placeholder FMI del
       poder por cuenta (vacío permitido; no se inventa).
+      `edicion_por_indice` permite overrides de nombre/cédula/FMI/conceptos
+      (módulo `/phasecob`).
 
     Acepta `cache_id` (tras Analizar) y/o `archivos` PDF.
     `sin_match` = fallo de cruce Neon (no confundir con co-propietarios).
@@ -294,6 +352,11 @@ async def procesar_certificado_unificado(
 
     try:
         fmi_map = _parse_fmi_por_indice(fmi_por_indice)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        edicion_map = _parse_edicion_por_indice(edicion_por_indice)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -318,6 +381,7 @@ async def procesar_certificado_unificado(
             solo_match_neon=solo_match_neon,
             incluir_poder=incluir_poder,
             fmi_por_indice=fmi_map,
+            edicion_por_indice=edicion_map,
         )
     except CertificadoNoEncontradoError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -337,10 +401,11 @@ async def procesar_certificado_unificado(
                     "total_capital_demandado_lote"
                 ),
             }
-        # Quitar datos_neon pesados / internos de cada ítem
+        # Quitar datos_neon / capital crudo; dejar conceptos para remapeo UI.
         for item in resultado.get("resultados") or []:
+            capital = item.pop("capital_limpio_a_demandar", None)
+            item["conceptos_capital"] = _resumen_conceptos_capital(capital)
             item.pop("datos_neon", None)
-            item.pop("capital_limpio_a_demandar", None)
         resultado["regla_multi_deudor_doc"] = REGLA_MULTI_DEUDOR_DOC
         return JSONResponse(resultado)
 
