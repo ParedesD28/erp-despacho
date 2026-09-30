@@ -381,6 +381,76 @@ class GeneracionWordTests(unittest.TestCase):
             self.assertIn("ANA PEREZ", xml)
             self.assertIn("FEBRERO", xml)
 
+    def test_plantillas_oficio_parentesis_y_negritas(self):
+        """Oficio 8.5×13, ((campos)), negritas y spacing single (after=0)."""
+        from docx import Document
+        from docx.oxml.ns import qn
+
+        ctx = svc.construir_contexto_plantilla(
+            datos_neon={
+                "copropiedad_nombre": "MIRADOR DE LLANO GRANDE PH",
+                "copropiedad_nit": "900938646",
+                "torre_apto": "4-34",
+                "conjunto_nombre": "MIRADOR DE LLANO GRANDE",
+                "titular_nombre": "ALBA DOLLY CARDONA AMARILES",
+                "titular_cedula": "21423830",
+                "ciudad": "Pereira",
+            },
+            filas=svc.agrupar_capital_limpio(
+                [
+                    {
+                        "fecha": "2026.02.01",
+                        "concepto": "CUOTA ADMINISTRACION",
+                        "valor_a_demandar": 30000,
+                    }
+                ]
+            ),
+            representante_nombre="GLADYS DEMO",
+            representante_cedula="35.319.382",
+        )
+        doc = Document(svc.renderizar_docx(ctx))
+        self.assertAlmostEqual(doc.sections[0].page_width.inches, 8.5, places=2)
+        self.assertAlmostEqual(doc.sections[0].page_height.inches, 13.0, places=2)
+        self.assertEqual(
+            doc.paragraphs[1].text,
+            "((MIRADOR DE LLANO GRANDE PH PROPIEDAD HORIZONTAL))",
+        )
+        self.assertEqual(doc.paragraphs[2].text, "N.I.T.: ((900938646))")
+        cuerpo = doc.paragraphs[8].text
+        self.assertIn("((MIRADOR DE LLANO GRANDE))", cuerpo)
+        self.assertIn("((21423830))", cuerpo)
+        self.assertIn("del (la) señor(a)", cuerpo)
+        bold_cuerpo = "".join(r.text for r in doc.paragraphs[8].runs if r.bold)
+        self.assertIn("ALBA DOLLY CARDONA AMARILES", bold_cuerpo)
+        self.assertIn("((21423830))", bold_cuerpo)
+        sp = doc.paragraphs[8]._p.find(qn("w:pPr")).find(qn("w:spacing"))
+        self.assertEqual(sp.get(qn("w:after")), "0")
+        self.assertEqual(sp.get(qn("w:line")), "240")
+
+        ctx_poder = svc.construir_contexto_poder(
+            datos_neon={
+                "copropiedad_nombre": "MIRADOR DE LLANO GRANDE PH",
+                "copropiedad_nit": "900938646",
+                "torre_apto": "4-34",
+                "conjunto_nombre": "MIRADOR DE LLANO GRANDE",
+                "titular_nombre": "ALBA DOLLY CARDONA AMARILES",
+                "titular_cedula": "21423830",
+                "ciudad": "Pereira",
+            },
+            capital_limpio_a_demandar=[
+                {"fecha": "2026.02.01", "valor_a_demandar": 30000},
+            ],
+            representante_nombre="GLADYS DEMO",
+            representante_cedula="35.319.382",
+            fmi="290-204208",
+        )
+        docp = Document(svc.renderizar_poder(ctx_poder))
+        self.assertAlmostEqual(docp.sections[0].page_height.inches, 13.0, places=2)
+        cuerpo_p = next(p.text for p in docp.paragraphs if "CONFIERO PODER" in p.text)
+        self.assertIn("((MIRADOR DE LLANO GRANDE PH))", cuerpo_p)
+        self.assertIn("((900938646))", cuerpo_p)
+        self.assertIn("identificado con el FMI 290-204208", cuerpo_p)
+
     def test_nombre_archivo_dinamico(self):
         self.assertEqual(
             svc.nombre_archivo_certificado("ANA PÉREZ GOMEZ"),
