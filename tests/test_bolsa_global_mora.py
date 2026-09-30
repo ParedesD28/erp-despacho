@@ -13,6 +13,7 @@ from bolsa_global_mora import (
     clasificar_concepto_bolsa,
     determinar_mora_y_capital_limpio,
     _a_float_seguro,
+    _es_cuota_ordinaria,
     _extraer_mes_corte,
 )
 
@@ -102,6 +103,108 @@ class TestEscenarioA_B_C(unittest.TestCase):
         self.assertIn(500.0, valores)
         # Intereses de mar descartados: solo 2 ítems de capital
         self.assertEqual(len(r["capital_limpio_a_demandar"]), 2)
+
+    def test_b_remanente_prelacion_extra_antes_que_ordinaria(self):
+        """
+        Hallazgo IA: con FIFO por aparición, ordinaria primero queda en $0.
+        Regla: sobrante B−I amortiza extras/gastos primero; ordinaria al final.
+        I=80, C=500+200, bolsa=580 → sobrante=500 → extra 0; ordinaria 200.
+        """
+        rows = [
+            _fila("2024.02.10", "CUOTA ADMINISTRACION", 500, 0),
+            _fila("2024.02.10", "CUOTA EXTRAORDINARIA", 200, 0),
+            _fila("2024.02.10", "INTERES", 80, 0),
+            _fila("2024.02.15", "ABONO", 0, 580),
+        ]
+        r = determinar_mora_y_capital_limpio(rows)
+        self.assertEqual(r["fecha_inicio_mora"], "2024.02")
+        self.assertEqual(r["total_capital_demandado"], 200.0)
+        por_concepto = {
+            i["concepto"]: i["valor_a_demandar"] for i in r["capital_limpio_a_demandar"]
+        }
+        self.assertEqual(por_concepto.get("CUOTA ADMINISTRACION"), 200.0)
+        self.assertNotIn("CUOTA EXTRAORDINARIA", por_concepto)
+
+    def test_b_remanente_prelacion_independiente_del_orden_extracto(self):
+        """Misma bolsa/causaciones: misma asignación aunque EXTRA vaya primero."""
+        base_abono_interes = [
+            _fila("2024.02.10", "INTERES", 80, 0),
+            _fila("2024.02.15", "ABONO", 0, 280),  # sobrante 200
+        ]
+        ord_primero = [
+            _fila("2024.02.10", "CUOTA ADMINISTRACION", 500, 0),
+            _fila("2024.02.10", "CUOTA EXTRAORDINARIA", 200, 0),
+            *base_abono_interes,
+        ]
+        extra_primero = [
+            _fila("2024.02.10", "CUOTA EXTRAORDINARIA", 200, 0),
+            _fila("2024.02.10", "CUOTA ADMINISTRACION", 500, 0),
+            *base_abono_interes,
+        ]
+        r1 = determinar_mora_y_capital_limpio(ord_primero)
+        r2 = determinar_mora_y_capital_limpio(extra_primero)
+        self.assertEqual(r1["total_capital_demandado"], 500.0)
+        self.assertEqual(r2["total_capital_demandado"], 500.0)
+        for r in (r1, r2):
+            por = {i["concepto"]: i["valor_a_demandar"] for i in r["capital_limpio_a_demandar"]}
+            self.assertEqual(por.get("CUOTA ADMINISTRACION"), 500.0)
+            self.assertNotIn("CUOTA EXTRAORDINARIA", por)
+
+    def test_b_remanente_gasto_antes_que_ordinaria(self):
+        """Honorarios (gasto) se extinguen antes que la cuota ordinaria."""
+        rows = [
+            _fila("2024.01.01", "CUOTA ADMINISTRACION", 300, 0),
+            _fila("2024.01.01", "HONORARIOS ABOGADO", 100, 0),
+            _fila("2024.01.01", "INTERES", 50, 0),
+            _fila("2024.01.10", "ABONO", 0, 200),  # sobrante 150
+        ]
+        r = determinar_mora_y_capital_limpio(rows)
+        self.assertEqual(r["fecha_inicio_mora"], "2024.01")
+        self.assertEqual(r["total_capital_demandado"], 250.0)
+        por = {i["concepto"]: i["valor_a_demandar"] for i in r["capital_limpio_a_demandar"]}
+        self.assertEqual(por.get("CUOTA ADMINISTRACION"), 250.0)
+        self.assertNotIn("HONORARIOS ABOGADO", por)
+
+    def test_mes_limpio_no_toca_capital_ni_con_extra(self):
+        """Mes Limpio: bolsa < I_m → ordinaria y extra intactas (sin prelación)."""
+        rows = [
+            _fila("2024.01.01", "CUOTA ADMINISTRACION", 500, 0),
+            _fila("2024.01.01", "CUOTA EXTRAORDINARIA", 200, 0),
+            _fila("2024.01.01", "INTERES", 100, 0),
+            _fila("2024.01.10", "ABONO", 0, 50),
+        ]
+        r = determinar_mora_y_capital_limpio(rows)
+        self.assertEqual(r["fecha_inicio_mora"], "2024.01")
+        self.assertEqual(r["total_capital_demandado"], 700.0)
+        por = {i["concepto"]: i["valor_a_demandar"] for i in r["capital_limpio_a_demandar"]}
+        self.assertEqual(por.get("CUOTA ADMINISTRACION"), 500.0)
+        self.assertEqual(por.get("CUOTA EXTRAORDINARIA"), 200.0)
+        self.assertTrue(all("Mes Limpio" in i["nota"] for i in r["capital_limpio_a_demandar"]))
+
+    def test_post_quiebre_capital_pleno_sin_prelacion_de_montos(self):
+        """Tras quiebre, meses posteriores demandan capital pleno (ord + extra)."""
+        rows = [
+            _fila("2024.01.10", "CUOTA ADMINISTRACION", 500, 0),
+            _fila("2024.01.10", "INTERES", 100, 0),
+            _fila("2024.01.15", "ABONO", 0, 50),  # Mes Limpio ene
+            _fila("2024.02.10", "CUOTA ADMINISTRACION", 400, 0),
+            _fila("2024.02.10", "CUOTA EXTRAORDINARIA", 150, 0),
+            _fila("2024.02.10", "INTERES", 80, 0),
+        ]
+        r = determinar_mora_y_capital_limpio(rows)
+        self.assertEqual(r["fecha_inicio_mora"], "2024.01")
+        self.assertEqual(r["total_capital_demandado"], 1050.0)  # 500+400+150
+        feb = [
+            i for i in r["capital_limpio_a_demandar"] if i["mes_corte"] == "2024.02"
+        ]
+        self.assertEqual(sum(i["valor_a_demandar"] for i in feb), 550.0)
+
+    def test_es_cuota_ordinaria_heuristica(self):
+        self.assertTrue(_es_cuota_ordinaria("CUOTA ADMINISTRACION"))
+        self.assertTrue(_es_cuota_ordinaria("CUOTA ADMON"))
+        self.assertFalse(_es_cuota_ordinaria("CUOTA EXTRAORDINARIA"))
+        self.assertFalse(_es_cuota_ordinaria("HONORARIOS"))
+        self.assertFalse(_es_cuota_ordinaria("PINTURA FACHADA"))
 
     def test_mes_limpio_perdon_intereses_capital_intacto(self):
         """Bolsa < intereses → Mes Limpio: capital 100% intacto; mora ese mes."""
