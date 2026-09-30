@@ -119,6 +119,35 @@ class TemplateAntiColisionTests(unittest.TestCase):
         self.assertIn("btn-certs-label", html)
         self.assertIn("un solo ZIP plano", html)
 
+    def test_ui_guarda_descarga_doble_clic(self):
+        """Regresión: un clic → un a.click(); candado antes de antefirma/fetch."""
+        html = (ROOT / "templates" / "estado_cuenta_pdf.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("certDescargaLoteEnCurso", html)
+        self.assertIn("certDescargaUnoEnCurso", html)
+        self.assertIn("triggerBlobDownload", html)
+        # Candado sincrónico antes del await de antefirma (doble clic).
+        self.assertIn(
+            "Candado sincrónico ANTES de antefirma/await",
+            html,
+        )
+        self.assertIn("vistos[ji].has(map.localIndex)", html)
+        # Un solo addEventListener de descarga de lote (no onclick + listener).
+        self.assertEqual(
+            html.count("btnDescargarCerts.addEventListener('click'"),
+            1,
+        )
+        self.assertEqual(
+            html.count("btnProcesarCert.addEventListener('click'"),
+            1,
+        )
+        # Generar preview no auto-descarga (false), evita preview+download doble.
+        self.assertIn(
+            "runProcesarCertificado(false)",
+            html,
+        )
+
 
 class BatchSizeHipótesisTests(unittest.TestCase):
     def test_31_con_batch_15_da_grupos_15_15_1(self):
