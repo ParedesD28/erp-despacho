@@ -53,35 +53,39 @@
 
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex-1 flex flex-col relative">
         <div class="overflow-y-auto flex-1">
-            <table class="w-full text-left border-collapse">
+            <table class="w-full text-left border-separate" style="border-spacing: 0 0.6rem;">
                 <thead class="bg-slate-900 sticky top-0 z-10">
                     <tr>
-                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Expediente</th>
+                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider first:rounded-tl-xl">Expediente</th>
                         <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Cartera</th>
-                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Partes</th>
+                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Demandante</th>
+                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider last:rounded-tr-xl">Demandado</th>
                     </tr>
                 </thead>
-                <tbody id="cuerpo-tabla" class="divide-y divide-slate-100">
+                <tbody id="cuerpo-tabla">
                 {% for p in procesos %}
-                    <tr onclick="window.location.href='/expediente/{{ p.radicado_interno }}'" class="hover:bg-blue-50 transition-colors fila-proceso cursor-pointer {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}bg-rose-50/40{% endif %}" data-cartera="{{ (p.tipo_cartera or 'JURIDICO')|upper }}" data-estado="{{ (p.estado or 'ACTIVO')|upper }}" data-demandante-id="{{ p.demandante_identificacion or '' }}" data-demandado-id="{{ p.demandado_identificacion or '' }}">
-                        <td class="px-6 py-4">
+                    <tr onclick="window.location.href='/expediente/{{ p.radicado_interno }}'" class="fila-proceso cursor-pointer hover:bg-blue-50 transition-colors {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}bg-rose-50/40{% else %}bg-white{% endif %}" data-cartera="{{ (p.tipo_cartera or 'JURIDICO')|upper }}" data-estado="{{ (p.estado or 'ACTIVO')|upper }}" data-demandante-id="{{ p.demandante_identificacion or '' }}" data-demandado-id="{{ p.demandado_identificacion or '' }}">
+                        <td class="px-6 py-4 border-y border-l border-slate-200 rounded-l-lg align-top">
                             <div class="font-bold text-blue-600">{{ p.radicado_interno }}</div>
                             {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}<span class="inline-flex mt-1 items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">Inactivo</span>{% endif %}
                             <div class="text-xs font-mono text-slate-500 mt-1">{{ p.radicado_rama }}</div>
                         </td>
-                        <td class="px-6 py-4">
+                        <td class="px-6 py-4 border-y border-slate-200 align-top">
                             {% if (p.tipo_cartera or 'JURIDICO')|upper == 'PREJURIDICO' %}
                                 <span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-amber-100 text-amber-800 border border-amber-200">Prejurídico</span>
                             {% else %}
                                 <span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-blue-100 text-blue-800 border border-blue-200">Jurídico</span>
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4 text-sm text-slate-700 font-medium uppercase">
-                            <div class="font-bold">{{ p.demandante_nombre or 'SIN DEMANDANTE' }}</div>
-                            {% if p.demandante_identificacion %}<div class="text-[10px] font-mono font-normal normal-case text-slate-400 mt-0.5">CC {{ p.demandante_identificacion }}</div>{% endif %}
-                            <div class="text-[10px] font-black text-slate-400 uppercase my-1">vs</div>
-                            <div class="font-bold">{{ p.demandado_nombre or 'SIN DEMANDADO' }}</div>
-                            {% if p.demandado_identificacion %}<div class="text-[10px] font-mono font-normal normal-case text-slate-400 mt-0.5">CC {{ p.demandado_identificacion }}</div>{% endif %}
+                        <td class="px-6 py-4 border-y border-slate-200 align-top text-sm text-slate-700">
+                            <div class="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">Demandante</div>
+                            <div class="font-bold uppercase">{{ p.demandante_nombre or 'SIN DEMANDANTE' }}</div>
+                            {% if p.demandante_identificacion %}<div class="text-[10px] font-mono font-normal text-slate-400 mt-0.5">CC {{ p.demandante_identificacion }}</div>{% endif %}
+                        </td>
+                        <td class="px-6 py-4 border-y border-r border-slate-200 rounded-r-lg align-top text-sm text-slate-700">
+                            <div class="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">Demandado</div>
+                            <div class="font-bold uppercase">{{ p.demandado_nombre or 'SIN DEMANDADO' }}</div>
+                            {% if p.demandado_identificacion %}<div class="text-[10px] font-mono font-normal text-slate-400 mt-0.5">CC {{ p.demandado_identificacion }}</div>{% endif %}
                         </td>
                     </tr>
                 {% endfor %}
