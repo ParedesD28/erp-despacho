@@ -75,6 +75,23 @@ class ExpedientesTemplateContratoTests(unittest.TestCase):
         self.assertIn("CC {{ p.demandante_identificacion }}", tpl)
         self.assertIn("CC {{ p.demandado_identificacion }}", tpl)
 
+    def test_listado_usa_columnas_demandante_demandado(self):
+        """El listado no agrupa bajo 'Partes'; muestra DEMANDANTE y DEMANDADO."""
+        tpl = (ROOT / "templates" / "expedientes.html").read_text(encoding="utf-8")
+        self.assertNotIn(">Partes</th>", tpl)
+        self.assertIn(">Demandante</th>", tpl)
+        self.assertIn(">Demandado</th>", tpl)
+        # Etiquetas visibles en cada celda (además del encabezado).
+        self.assertGreaterEqual(tpl.count(">Demandante</div>"), 1)
+        self.assertGreaterEqual(tpl.count(">Demandado</div>"), 1)
+        # Delimitación visual fuerte entre expedientes (borde + gap).
+        self.assertIn("border-y-2", tpl)
+        self.assertIn("border-l-blue-600", tpl)
+        self.assertIn("fila-expediente", tpl)
+        self.assertIn("tabla-expedientes", tpl)
+        self.assertIn("border-separate", tpl)
+        self.assertIn("border-spacing", tpl)
+
     def test_filtrar_normaliza_puntos_espacios_guiones(self):
         tpl = (ROOT / "templates" / "expedientes.html").read_text(encoding="utf-8")
         self.assertIn("normalizarIdentificacion", tpl)
