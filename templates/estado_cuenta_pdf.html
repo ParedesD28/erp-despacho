@@ -273,7 +273,7 @@
                     <span class="btn-certs-label">Descargar certificado(s)</span>
                 </button>
             </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
                 <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
                     <p class="text-xs uppercase text-slate-500 font-bold">Evaluadas</p>
                     <p id="c-eval" class="text-xl font-black text-slate-800">—</p>
@@ -287,22 +287,27 @@
                     <p id="c-fail" class="text-xl font-black text-red-700">—</p>
                 </div>
                 <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                    <p class="text-xs uppercase text-slate-500 font-bold">No emitibles</p>
+                    <p id="c-no-emit" class="text-xl font-black text-amber-700">—</p>
+                </div>
+                <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
                     <p class="text-xs uppercase text-slate-500 font-bold">Capital lote</p>
                     <p id="c-total" class="text-xl font-black text-slate-800">—</p>
                 </div>
             </div>
+            <p id="cert-resumen-conteo" class="text-sm text-slate-600 font-medium"></p>
             <div id="cert-sin-match-panel" class="hidden rounded-lg border border-red-300 bg-red-50 px-4 py-3 space-y-2">
                 <div class="flex flex-wrap items-start justify-between gap-2">
                     <div>
-                        <p class="text-sm font-bold text-red-900">Sin match Neon (no son co-propietarios)</p>
+                        <p class="text-sm font-bold text-red-900">Cuentas que no salen en el ZIP</p>
                         <p class="text-xs text-red-800 mt-0.5">
-                            El PDF parseó bien (Analizar OK), pero conjunto + torre/apto no cruzaron con maestros.
-                            Use «Permitir datos del PDF» + NIT/cédula, o cargue el inmueble en Neon.
+                            Incluye sin match Neon, sin capital, PDF omitido o datos incompletos (NIT/cédula).
+                            Así se ve cuál falta cuando evaluadas ≠ emitibles (p.ej. 61→60).
                         </p>
                     </div>
                     <button type="button" id="btn-ver-sin-match"
                             class="text-xs font-semibold border border-red-300 bg-white text-red-800 rounded-lg px-3 py-1.5 hover:bg-red-100">
-                        Ver sin match en lista
+                        Ver en lista
                     </button>
                 </div>
                 <div class="overflow-x-auto">
@@ -312,6 +317,7 @@
                                 <th class="text-left py-1 pr-2">Archivo</th>
                                 <th class="text-left py-1 pr-2">Titular PDF</th>
                                 <th class="text-left py-1 pr-2">Bloque/Apto → clave</th>
+                                <th class="text-left py-1 pr-2">Estado</th>
                                 <th class="text-left py-1 pr-2">Conjunto</th>
                                 <th class="text-left py-1">Motivo</th>
                             </tr>
@@ -1532,6 +1538,7 @@
             sin_match: 'text-red-700 bg-red-50 border-red-200|Sin match Neon',
             sin_capital: 'text-slate-600 bg-slate-50 border-slate-200|Sin capital',
             omitido: 'text-amber-700 bg-amber-50 border-amber-200|Omitido',
+            datos_incompletos: 'text-orange-800 bg-orange-50 border-orange-300|Datos incompletos',
         };
         const raw = map[estado] || 'text-slate-600 bg-slate-50 border-slate-200|' + (estado || '—');
         const [cls, label] = raw.split('|');
@@ -1542,15 +1549,17 @@
         const panel = document.getElementById('cert-sin-match-panel');
         const tbody = document.getElementById('cert-sin-match-tbody');
         if (!panel || !tbody) return;
-        const rows = payload.sin_match_detalle
-            || (payload.resultados || []).filter(r => r.estado === 'sin_match').map(r => ({
+        const rows = payload.no_emitibles_detalle
+            || payload.sin_match_detalle
+            || (payload.resultados || []).filter(r => !esEmitibleCert(r)).map(r => ({
                 archivo: r.archivo,
                 titular_pdf: r.titular_pdf,
                 conjunto: r.conjunto,
                 bloque: r.bloque,
                 apartamento: r.apartamento,
                 clave_canonica: r.clave_canonica,
-                motivo: r.motivo || 'sin_inmueble_neon',
+                estado: r.estado,
+                motivo: r.motivo || r.estado || 'no_emitible',
                 motivo_detalle: r.motivo_detalle || r.error || '',
                 criterios: r.criterios || '',
             }));
@@ -1562,11 +1571,12 @@
         panel.classList.remove('hidden');
         tbody.innerHTML = rows.map(r => {
             const unidad = `B${esc(r.bloque || '—')} · ${esc(r.apartamento || '—')} → <code>${esc(r.clave_canonica || '—')}</code>`;
-            const motivo = esc(r.motivo_detalle || r.motivo || 'Sin inmueble en Neon');
+            const motivo = esc(r.motivo_detalle || r.motivo || 'No emitible');
             return `<tr>
                 <td class="py-1.5 pr-2 font-semibold">${esc(r.archivo || '—')}</td>
                 <td class="py-1.5 pr-2">${esc(r.titular_pdf || '—')}</td>
                 <td class="py-1.5 pr-2">${unidad}</td>
+                <td class="py-1.5 pr-2"><code>${esc(r.estado || '—')}</code></td>
                 <td class="py-1.5 pr-2">${esc(r.conjunto || '—')}</td>
                 <td class="py-1.5">${motivo}</td>
             </tr>`;
@@ -1574,10 +1584,27 @@
     }
 
     function renderCertPreview(payload) {
-        document.getElementById('c-eval').textContent = payload.cuentas_evaluadas ?? 0;
-        document.getElementById('c-ok').textContent = payload.emitibles ?? 0;
-        document.getElementById('c-fail').textContent = payload.sin_match ?? 0;
+        const evaluadas = payload.cuentas_evaluadas ?? 0;
+        const emitibles = payload.emitibles ?? 0;
+        const sinMatch = payload.sin_match ?? 0;
+        const noEmit = (payload.no_emitibles_detalle && payload.no_emitibles_detalle.length)
+            || ((payload.sin_match || 0) + (payload.omitidos || 0)
+                + (payload.sin_capital || 0) + (payload.datos_incompletos || 0));
+        document.getElementById('c-eval').textContent = evaluadas;
+        document.getElementById('c-ok').textContent = emitibles;
+        document.getElementById('c-fail').textContent = sinMatch;
+        const cNoEmit = document.getElementById('c-no-emit');
+        if (cNoEmit) cNoEmit.textContent = noEmit;
         document.getElementById('c-total').textContent = money(payload.total_capital_demandado_lote);
+        const resumenEl = document.getElementById('cert-resumen-conteo');
+        if (resumenEl) {
+            resumenEl.textContent = payload.resumen_conteo
+                || `${evaluadas} evaluadas → ${emitibles} emitibles`
+                    + (noEmit ? `, ${noEmit} no emitible(s)` : '');
+            resumenEl.className = noEmit
+                ? 'text-sm text-amber-800 font-semibold'
+                : 'text-sm text-slate-600 font-medium';
+        }
         fillConjuntoSelect(
             filtroConjuntoCert,
             (payload.resultados || []).map(r => r.conjunto || r.conjunto_nombre || '').filter(Boolean)
@@ -1600,9 +1627,9 @@
             const visible = pasaFiltroCert(r);
             const emitible = esEmitibleCert(r);
             const block = document.createElement('div');
-            const esSinMatch = r.estado === 'sin_match';
+            const esNoEmitible = !emitible;
             block.className = 'border rounded-lg p-4 space-y-2'
-                + (esSinMatch ? ' border-red-300 bg-red-50/40' : ' border-slate-200')
+                + (esNoEmitible ? ' border-red-300 bg-red-50/40' : ' border-slate-200')
                 + (visible ? '' : ' hidden');
             block.dataset.globalIdx = String(globalIdx);
             if (MODO_PHASECOB && emitible) {
@@ -1686,8 +1713,8 @@
                             return `<li>${esc(d.nombre || '—')} · CC ${ced}${tag}${rol}</li>`;
                         }).join('')}
                        </ul>`
-                    : (esSinMatch
-                        ? '<p class="text-sm text-red-800">Sin deudores Neon — la unidad no cruzó (no es lista de codeudores).</p>'
+                    : (esNoEmitible
+                        ? '<p class="text-sm text-red-800">Sin deudores Neon emitibles — revise match, capital o datos incompletos.</p>'
                         : '<p class="text-sm text-slate-400">Sin deudores Neon.</p>');
             }
             const checked = emitible && visible && (filtroSoloNeon && filtroSoloNeon.checked ? esMatchNeon(r) : true);
@@ -1702,8 +1729,8 @@
             const advHtml = advertencias.length
                 ? `<ul class="mt-1 text-xs text-amber-800 list-disc list-inside">${advertencias.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`
                 : '';
-            const motivoHtml = esSinMatch
-                ? `<p class="mt-1 text-sm font-semibold text-red-800">${esc(r.motivo_detalle || r.error || 'Sin match Neon')}</p>
+            const motivoHtml = esNoEmitible
+                ? `<p class="mt-1 text-sm font-semibold text-red-800">${esc(r.motivo_detalle || r.error || r.estado || 'No emitible')}</p>
                    ${r.criterios ? `<p class="mt-1 text-xs text-red-700/80">Buscado: ${esc(r.criterios)}</p>` : ''}`
                 : (r.error ? `<p class="mt-1 text-sm text-red-700 font-semibold">${esc(r.error)}</p>` : '');
             const fmiVal = esc(certFmiByGlobalIdx[globalIdx] || edPrev.fmi || '');
@@ -1799,18 +1826,29 @@
         }
     }
 
-    /** Nombres únicos en ZIP (JSZip pisa entradas con el mismo path). */
+    /**
+     * Nombres únicos en ZIP (JSZip pisa entradas con el mismo path).
+     * `usados` es un Set de todos los nombres ya tomados (incl. renombres),
+     * para no colisionar A.docx×2 → A_1.docx con un A_1.docx natural.
+     */
     function uniqueZipEntryName(usados, name) {
         let base = name || 'Certificado_deuda.docx';
-        if (!(base in usados)) {
-            usados[base] = 0;
+        if (!usados.has(base)) {
+            usados.add(base);
             return base;
         }
-        usados[base] += 1;
-        const n = usados[base];
         const i = base.lastIndexOf('.');
-        if (i > 0) return `${base.slice(0, i)}_${n}${base.slice(i)}`;
-        return `${base}_${n}`;
+        const stem = i > 0 ? base.slice(0, i) : base;
+        const ext = i > 0 ? base.slice(i) : '';
+        let n = 1;
+        while (true) {
+            const candidate = stem ? `${stem}_${n}${ext}` : `${base}_${n}`;
+            if (!usados.has(candidate)) {
+                usados.add(candidate);
+                return candidate;
+            }
+            n += 1;
+        }
     }
 
     /**
@@ -1820,7 +1858,7 @@
      */
     async function empaquetarCertificadosPlanos(partes) {
         const zip = new JSZip();
-        const usados = {};
+        const usados = new Set();
         let total = 0;
         for (let i = 0; i < partes.length; i++) {
             const { filename, buffer } = partes[i];
@@ -1869,7 +1907,12 @@
             total_capital_demandado_lote: 0,
             emitibles: 0,
             sin_match: 0,
+            omitidos: 0,
+            sin_capital: 0,
+            datos_incompletos: 0,
             sin_match_detalle: [],
+            no_emitibles_detalle: [],
+            resumen_conteo: null,
             resultados: [],
         };
         certJobMap = [];
@@ -1894,8 +1937,18 @@
                 merged.total_capital_demandado_lote += Number(data.total_capital_demandado_lote || 0);
                 merged.emitibles += data.emitibles || 0;
                 merged.sin_match += data.sin_match || 0;
+                merged.omitidos = (merged.omitidos || 0) + (data.omitidos || 0);
+                merged.sin_capital = (merged.sin_capital || 0) + (data.sin_capital || 0);
+                merged.datos_incompletos = (merged.datos_incompletos || 0) + (data.datos_incompletos || 0);
                 if (Array.isArray(data.sin_match_detalle)) {
                     merged.sin_match_detalle.push(...data.sin_match_detalle);
+                }
+                if (Array.isArray(data.no_emitibles_detalle)) {
+                    if (!merged.no_emitibles_detalle) merged.no_emitibles_detalle = [];
+                    merged.no_emitibles_detalle.push(...data.no_emitibles_detalle);
+                }
+                if (data.resumen_conteo) {
+                    merged.resumen_conteo = null; // se recalcula al final
                 }
                 const batch = data.resultados || [];
                 batch.forEach((r, localIdx) => {
@@ -1904,6 +1957,28 @@
                 });
             }
             merged.total_capital_demandado_lote = Math.round(merged.total_capital_demandado_lote * 100) / 100;
+            merged.omitidos = (merged.omitidos || 0);
+            merged.sin_capital = (merged.sin_capital || 0);
+            merged.datos_incompletos = (merged.datos_incompletos || 0);
+            // Acumular contadores de no-emitibles si el servidor los manda por batch.
+            if (!merged.no_emitibles_detalle) merged.no_emitibles_detalle = [];
+            // Reconstruir detalle unificado si solo vino sin_match_detalle.
+            if (!merged.no_emitibles_detalle.length) {
+                merged.no_emitibles_detalle = (merged.resultados || [])
+                    .filter(r => !esEmitibleCert(r))
+                    .map(r => ({
+                        archivo: r.archivo,
+                        titular_pdf: r.titular_pdf,
+                        conjunto: r.conjunto,
+                        bloque: r.bloque,
+                        apartamento: r.apartamento,
+                        clave_canonica: r.clave_canonica,
+                        estado: r.estado,
+                        motivo: r.motivo || r.estado || 'no_emitible',
+                        motivo_detalle: r.motivo_detalle || r.error || '',
+                        criterios: r.criterios || '',
+                    }));
+            }
             if (!merged.sin_match_detalle.length && merged.sin_match) {
                 merged.sin_match_detalle = (merged.resultados || [])
                     .filter(r => r.estado === 'sin_match')
@@ -1914,27 +1989,32 @@
                         bloque: r.bloque,
                         apartamento: r.apartamento,
                         clave_canonica: r.clave_canonica,
+                        estado: r.estado,
                         motivo: r.motivo || 'sin_inmueble_neon',
                         motivo_detalle: r.motivo_detalle || r.error || '',
                         criterios: r.criterios || '',
                     }));
             }
+            const noEmitN = (merged.no_emitibles_detalle || []).length;
+            merged.resumen_conteo = merged.resumen_conteo
+                || `${merged.cuentas_evaluadas} evaluadas → ${merged.emitibles} emitibles`
+                    + (noEmitN ? `, ${noEmitN} no emitible(s)` : '');
             renderCertPreview(merged);
             actualizarAntefirmaPreview();
-            if (merged.sin_match && !merged.emitibles) {
+            if (noEmitN && !merged.emitibles) {
                 setStatus(
-                    'Sin match Neon (PDF OK, sin cruce de maestros). Active «Permitir datos del PDF», indique NIT y cédula, y reintente. Ver panel rojo.',
+                    `Ningún certificado emitible. ${merged.resumen_conteo}. Ver panel rojo (cuál falta y por qué).`,
                     true
                 );
-            } else if (merged.sin_match) {
-                const nombres = (merged.sin_match_detalle || [])
-                    .map(x => x.archivo || '?')
+            } else if (noEmitN) {
+                const nombres = (merged.no_emitibles_detalle || [])
+                    .map(x => `${x.archivo || '?'}[${x.estado || '?'}]`)
                     .slice(0, 5)
                     .join(', ');
                 setStatus(
-                    `Preview: ${merged.emitibles} emitible(s), ${merged.sin_match} sin match Neon`
-                    + (nombres ? ` (${nombres}${merged.sin_match > 5 ? '…' : ''})` : '')
-                    + '. Ver panel rojo — no son co-propietarios.'
+                    `Preview: ${merged.resumen_conteo}`
+                    + (nombres ? ` — ${nombres}${noEmitN > 5 ? '…' : ''}` : '')
+                    + '. Ver panel rojo.'
                 );
             } else {
                 setStatus(`Preview listo: ${merged.emitibles} certificado(s) emitible(s). Use filtros si hay varios conjuntos.`);
@@ -2004,6 +2084,10 @@
                 .map((job, i) => ({ job, indices: porJob[i] || [], i }))
                 .filter(x => x.indices.length);
             const partes = [];
+            let pedidosSrv = 0;
+            let generadosSrv = 0;
+            let fallidosSrv = 0;
+            const erroresSrv = [];
             for (let k = 0; k < jobsConSel.length; k++) {
                 const { job, indices, i: jobIndex } = jobsConSel[k];
                 setStatus(
@@ -2024,6 +2108,14 @@
                     liberarDescargaLote();
                     return;
                 }
+                const ped = Number(res.headers.get('X-Certificados-Pedidos') || indices.length) || indices.length;
+                const gen = Number(res.headers.get('X-Certificados-Generados') || 0) || 0;
+                const fal = Number(res.headers.get('X-Certificados-Fallidos') || 0) || 0;
+                const errH = (res.headers.get('X-Certificados-Errores') || '').trim();
+                pedidosSrv += ped;
+                generadosSrv += gen || (fal ? 0 : ped);
+                fallidosSrv += fal;
+                if (errH) erroresSrv.push(errH);
                 const cd = res.headers.get('Content-Disposition') || '';
                 const m = /filename=\"([^\"]+)\"/.exec(cd);
                 const filename = (m && m[1]) || (
@@ -2039,7 +2131,14 @@
                     type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                 });
                 triggerBlobDownload(blob, partes[0].filename || 'Certificado_deuda.docx');
-                setStatus(`Descargado: ${partes[0].filename || 'Certificado_deuda.docx'} (${totalSel} cuenta(s)).`);
+                let msg = `Descargado: ${partes[0].filename || 'Certificado_deuda.docx'} (${totalSel} cuenta(s)).`;
+                if (fallidosSrv > 0) {
+                    msg = `Descarga parcial: ${generadosSrv} de ${pedidosSrv || totalSel} generados, ${fallidosSrv} fallido(s)`
+                        + (erroresSrv.length ? ` — ${erroresSrv.join(' | ')}` : '');
+                    setStatus(msg, true);
+                } else {
+                    setStatus(msg);
+                }
                 liberarDescargaLote();
                 return;
             }
@@ -2058,11 +2157,21 @@
             const zipBlob = await zip.generateAsync({ type: 'blob' });
             // Una sola descarga por acción (ni ZIP + docx suelto, ni doble a.click).
             triggerBlobDownload(zipBlob, 'Certificados_deuda_lote.zip');
-            setStatus(
-                `ZIP plano descargado: ${total} certificado(s)`
+            const esperado = generadosSrv || totalSel;
+            let msg = `ZIP plano descargado: ${total} certificado(s)`
                 + (jobsConSel.length > 1 ? ` en ${jobsConSel.length} grupos de análisis` : '')
-                + '.'
-            );
+                + ` (seleccionados ${totalSel}`;
+            if (pedidosSrv) msg += `, pedidos ${pedidosSrv}`;
+            if (generadosSrv) msg += `, generados ${generadosSrv}`;
+            msg += ').';
+            if (fallidosSrv > 0 || total !== totalSel || (generadosSrv && total !== generadosSrv)) {
+                msg += ` Atención: pérdida o fallo — fallidos ${fallidosSrv}`
+                    + (erroresSrv.length ? ` (${erroresSrv.join(' | ')})` : '')
+                    + `. ZIP tiene ${total}; seleccionados ${totalSel}.`;
+                setStatus(msg, true);
+            } else {
+                setStatus(msg);
+            }
             liberarDescargaLote();
         } catch (e) {
             setStatus('Fallo de red al descargar certificados.', true);
@@ -2592,7 +2701,7 @@
             applyFiltrosCert();
             const panel = document.getElementById('cert-sin-match-panel');
             if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            setStatus('Filtro «Solo match Neon» desmarcado: la lista muestra también sin match.');
+            setStatus('Filtro «Solo match Neon» desmarcado: la lista muestra también no emitibles.');
         });
     }
     if (certBloques) {

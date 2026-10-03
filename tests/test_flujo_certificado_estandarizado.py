@@ -888,5 +888,266 @@ class FmiPorCuentaFlujoTests(unittest.TestCase):
         self.assertEqual(meta["generados"], 1)
 
 
+class ConteoLoteYZipUnicoTests(unittest.TestCase):
+    """Regresión 61→60: preview no_emitible + ZIP sin colisión de nombres."""
+
+    def _cuenta(self, **over):
+        base = {
+            "archivo": "a.pdf",
+            "titular": "MOSQUERA",
+            "bloque": "02",
+            "apartamento": "042",
+            "codigo_cuenta": "0242",
+            "conjunto": "MIRADOR",
+            "movimientos_extraidos": 1,
+            "error": None,
+            "rows": [
+                {
+                    "Concepto": "CUOTA ADMINISTRACION",
+                    "Fecha": "2024.02.01",
+                    "Valor": 30000,
+                    "Abono": 0,
+                    "Saldo": 30000,
+                }
+            ],
+        }
+        base.update(over)
+        return base
+
+    def test_preview_datos_incompletos_no_es_emitible(self):
+        neon = {
+            "inmueble_id": 42,
+            "torre_apto": "2-42",
+            "conjunto_nombre": "MIRADOR",
+            "copropiedad_nombre": "MIRADOR PH",
+            "copropiedad_nit": "",  # falta NIT → no emitir
+            "ciudad": "Pereira",
+            "titular_nombre": "MOSQUERA",
+            "titular_cedula": "52000000",
+            "deudores": [
+                {
+                    "contacto_id": 1,
+                    "nombre": "MOSQUERA",
+                    "cedula": "52000000",
+                    "es_principal": True,
+                }
+            ],
+            "titular_principal": {
+                "contacto_id": 1,
+                "nombre": "MOSQUERA",
+                "cedula": "52000000",
+                "es_principal": True,
+            },
+            "clave_canonica": "2-42",
+        }
+        neon["propietarios"] = neon["deudores"]
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            return_value=neon,
+        ):
+            preview = flujo.procesar_lote_certificados([self._cuenta()])
+        self.assertEqual(preview["emitibles"], 0)
+        self.assertEqual(preview["datos_incompletos"], 1)
+        self.assertEqual(preview["resultados"][0]["estado"], "datos_incompletos")
+        self.assertEqual(len(preview["no_emitibles_detalle"]), 1)
+        self.assertIn("evaluadas", preview["resumen_conteo"])
+        self.assertIn("datos_incompletos", preview["resumen_conteo"])
+
+    def test_preview_61_a_60_resumen_muestra_archivo(self):
+        ok = {
+            "inmueble_id": 1,
+            "torre_apto": "1-1",
+            "conjunto_nombre": "MIRADOR",
+            "copropiedad_nombre": "MIRADOR PH",
+            "copropiedad_nit": "900",
+            "titular_nombre": "OK",
+            "titular_cedula": "1",
+            "deudores": [
+                {"contacto_id": 1, "nombre": "OK", "cedula": "1", "es_principal": True}
+            ],
+            "titular_principal": {
+                "contacto_id": 1,
+                "nombre": "OK",
+                "cedula": "1",
+                "es_principal": True,
+            },
+            "clave_canonica": "1-1",
+        }
+        ok["propietarios"] = ok["deudores"]
+
+        def fake_resolver(**kwargs):
+            if (kwargs.get("titular") or "") == "FALTA":
+                return None
+            return ok
+
+        cuentas = [
+            self._cuenta(archivo=f"{i}.pdf", titular="OK", bloque="1", apartamento=str(i))
+            for i in range(60)
+        ]
+        cuentas.append(
+            self._cuenta(
+                archivo="falta.pdf",
+                titular="FALTA",
+                bloque="9",
+                apartamento="99",
+            )
+        )
+        with patch(
+            "certificados_deuda_flujo_service.resolver_datos_certificado",
+            side_effect=fake_resolver,
+        ):
+            preview = flujo.procesar_lote_certificados(cuentas)
+        self.assertEqual(preview["cuentas_evaluadas"], 61)
+        self.assertEqual(preview["emitibles"], 60)
+        self.assertEqual(preview["sin_match"], 1)
+        self.assertIn("falta.pdf", preview["resumen_conteo"])
+        self.assertEqual(preview["no_emitibles_detalle"][0]["archivo"], "falta.pdf")
+
+    def test_zip_generacion_nombres_unicos_sin_colision(self):
+        preview = {
+            "sin_match": 0,
+            "resultados": [
+                {
+                    "estado": "ok",
+                    "archivo": f"a{i}.pdf",
+                    "titular_pdf": "PEREZ",
+                    "inmueble_id": i + 1,
+                    "conjunto": "Demo",
+                    "clave_canonica": "2-1" if i < 2 else "2-1_1",
+                    "titular_seleccionado": {"nombre": "PEREZ", "cedula": "1"},
+                    "datos_neon": {
+                        "inmueble_id": i + 1,
+                        "copropiedad_nombre": "PH",
+                        "copropiedad_nit": "900",
+                        "titular_nombre": "PEREZ",
+                        "titular_cedula": "1",
+                        "torre_apto": "2-1" if i < 2 else "2-1_1",
+                        "clave_canonica": "2-1" if i < 2 else "2-1_1",
+                        "conjunto_nombre": "Demo",
+                    },
+                    "capital_limpio_a_demandar": [
+                        {
+                            "fecha": "2024.06.01",
+                            "concepto": "CUOTA ADMINISTRACION",
+                            "valor_a_demandar": 10,
+                        }
+                    ],
+                }
+                for i in range(3)
+            ],
+        }
+
+        def fake_gen(**kwargs):
+            # Dos primeras comparten nombre; la tercera natural = renombre antiguo.
+            torre = str(kwargs.get("torre_apto") or "")
+            if torre == "2-1_1":
+                name = "Certificado_PEREZ_2-1_1.docx"
+            else:
+                name = "Certificado_PEREZ_2-1.docx"
+            return BytesIO(b"PK\x03\x04x"), name, {"torre_apto": torre}
+
+        with patch(
+            "certificados_deuda_flujo_service.generar_certificado_deuda",
+            side_effect=fake_gen,
+        ):
+            buf, nombre, meta = flujo.generar_certificados_desde_preview(
+                preview,
+                representante_nombre="RL",
+                representante_cedula="99",
+            )
+        self.assertEqual(nombre, "Certificados_deuda.zip")
+        self.assertEqual(meta["generados"], 3)
+        self.assertEqual(meta["pedidos"], 3)
+        self.assertEqual(meta["entradas_zip"], 3)
+        self.assertEqual(meta["fallidos"], 0)
+        with zipfile.ZipFile(buf) as zf:
+            names = zf.namelist()
+        self.assertEqual(len(names), 3)
+        self.assertEqual(len(set(names)), 3)
+
+    def test_generacion_parcial_reporta_fallidos(self):
+        preview = {
+            "sin_match": 0,
+            "resultados": [
+                {
+                    "estado": "ok",
+                    "archivo": "ok.pdf",
+                    "titular_pdf": "OK",
+                    "inmueble_id": 1,
+                    "conjunto": "Demo",
+                    "clave_canonica": "1-1",
+                    "titular_seleccionado": {"nombre": "OK", "cedula": "1"},
+                    "datos_neon": {
+                        "inmueble_id": 1,
+                        "copropiedad_nombre": "PH",
+                        "copropiedad_nit": "900",
+                        "titular_nombre": "OK",
+                        "titular_cedula": "1",
+                        "torre_apto": "1-1",
+                        "conjunto_nombre": "Demo",
+                    },
+                    "capital_limpio_a_demandar": [
+                        {
+                            "fecha": "2024.06.01",
+                            "concepto": "CUOTA ADMINISTRACION",
+                            "valor_a_demandar": 10,
+                        }
+                    ],
+                },
+                {
+                    "estado": "ok",
+                    "archivo": "malo.pdf",
+                    "titular_pdf": "MALO",
+                    "inmueble_id": 2,
+                    "conjunto": "Demo",
+                    "clave_canonica": "1-2",
+                    "titular_seleccionado": {"nombre": "MALO", "cedula": ""},
+                    "datos_neon": {
+                        "inmueble_id": 2,
+                        "copropiedad_nombre": "PH",
+                        "copropiedad_nit": "900",
+                        "titular_nombre": "MALO",
+                        "titular_cedula": "",
+                        "torre_apto": "1-2",
+                        "conjunto_nombre": "Demo",
+                    },
+                    "capital_limpio_a_demandar": [
+                        {
+                            "fecha": "2024.06.01",
+                            "concepto": "CUOTA ADMINISTRACION",
+                            "valor_a_demandar": 10,
+                        }
+                    ],
+                },
+            ],
+        }
+
+        def fake_gen(**kwargs):
+            if kwargs.get("inmueble_id") == 2:
+                raise flujo.CertificadoDatosFaltantesError(
+                    ["cédula del titular"], fuente="neon"
+                )
+            return (
+                BytesIO(b"PK\x03\x04x"),
+                "Certificado_OK_1-1.docx",
+                {"inmueble_id": 1},
+            )
+
+        with patch(
+            "certificados_deuda_flujo_service.generar_certificado_deuda",
+            side_effect=fake_gen,
+        ):
+            buf, nombre, meta = flujo.generar_certificados_desde_preview(
+                preview,
+                representante_nombre="RL",
+                representante_cedula="99",
+            )
+        self.assertEqual(meta["pedidos"], 2)
+        self.assertEqual(meta["generados"], 1)
+        self.assertEqual(meta["fallidos"], 1)
+        self.assertTrue(any("malo.pdf" in e for e in meta["errores"]))
+        self.assertEqual(nombre, "Certificado_OK_1-1.docx")
+
+
 if __name__ == "__main__":
     unittest.main()

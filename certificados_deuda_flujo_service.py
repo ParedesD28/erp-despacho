@@ -23,6 +23,7 @@ from certificados_deuda_repository import (
 from certificados_deuda_service import (
     CertificadoDatosFaltantesError,
     CertificadoNoEncontradoError,
+    faltantes_datos_criticos,
     generar_certificado_deuda,
     validar_antefirma_representante,
 )
@@ -40,10 +41,37 @@ REGLA_MULTI_DEUDOR_DOC = (
 # Estados con match Neon usable (sin fallback PDF).
 ESTADOS_MATCH_NEON = frozenset({"ok", "varios_propietarios"})
 ESTADOS_EMITIBLES = frozenset({"ok", "varios_propietarios", "fallback_pdf"})
+ESTADOS_NO_EMITIBLES = frozenset(
+    {"sin_match", "sin_capital", "omitido", "datos_incompletos"}
+)
 
 MOTIVO_SIN_MATCH = "sin_inmueble_neon"
 MOTIVO_SIN_CAPITAL = "sin_capital_limpio"
 MOTIVO_OMITIDO = "pdf_omitido"
+MOTIVO_DATOS_INCOMPLETOS = "datos_incompletos_neon"
+
+
+def nombre_unico_entrada_zip(usados: set[str], name: str) -> str:
+    """
+    Nombre de entrada ZIP sin colisiones.
+
+    Registra también los nombres renombrados (`_1`, `_2`, …). El algoritmo
+    anterior solo contaba el nombre original: `A.docx`×2 + natural `A_1.docx`
+    escribía dos veces `A_1.docx` y JSZip/extractores colapsaban a una entrada
+    (pérdida silenciosa 61→60).
+    """
+    base = (name or "").strip() or "Certificado_deuda.docx"
+    if base not in usados:
+        usados.add(base)
+        return base
+    stem, sep, ext = base.rpartition(".")
+    n = 1
+    while True:
+        candidate = f"{stem}_{n}.{ext}" if sep and stem else f"{base}_{n}"
+        if candidate not in usados:
+            usados.add(candidate)
+            return candidate
+        n += 1
 
 
 def indices_filtrados_preview(
@@ -96,27 +124,73 @@ def indices_filtrados_preview(
     return out
 
 
+def _fila_no_emitible(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "archivo": r.get("archivo") or "",
+        "titular_pdf": r.get("titular_pdf") or "",
+        "conjunto": r.get("conjunto") or "",
+        "bloque": r.get("bloque") or "",
+        "apartamento": r.get("apartamento") or "",
+        "clave_canonica": r.get("clave_canonica") or "",
+        "codigo_cuenta": r.get("codigo_cuenta") or "",
+        "estado": r.get("estado") or "",
+        "motivo": r.get("motivo") or "",
+        "motivo_detalle": r.get("motivo_detalle") or r.get("error") or "",
+        "criterios": r.get("criterios") or "",
+    }
+
+
 def resumen_sin_match(preview: dict[str, Any]) -> list[dict[str, Any]]:
     """Filas compactas para UI: archivo, unidad PDF, motivo (no son co-propietarios)."""
     out: list[dict[str, Any]] = []
     for r in preview.get("resultados") or []:
         if r.get("estado") != "sin_match":
             continue
-        out.append(
-            {
-                "archivo": r.get("archivo") or "",
-                "titular_pdf": r.get("titular_pdf") or "",
-                "conjunto": r.get("conjunto") or "",
-                "bloque": r.get("bloque") or "",
-                "apartamento": r.get("apartamento") or "",
-                "clave_canonica": r.get("clave_canonica") or "",
-                "codigo_cuenta": r.get("codigo_cuenta") or "",
-                "motivo": r.get("motivo") or MOTIVO_SIN_MATCH,
-                "motivo_detalle": r.get("motivo_detalle") or r.get("error") or "",
-                "criterios": r.get("criterios") or "",
-            }
-        )
+        out.append(_fila_no_emitible(r))
     return out
+
+
+def resumen_no_emitibles(preview: dict[str, Any]) -> list[dict[str, Any]]:
+    """Todas las cuentas que no saldrán en el ZIP (sin_match, sin_capital, etc.)."""
+    out: list[dict[str, Any]] = []
+    for r in preview.get("resultados") or []:
+        estado = str(r.get("estado") or "")
+        if estado in ESTADOS_EMITIBLES and r.get("capital_limpio_a_demandar"):
+            continue
+        if estado in ESTADOS_NO_EMITIBLES or estado not in ESTADOS_EMITIBLES:
+            out.append(_fila_no_emitible(r))
+            continue
+        # Emitible por estado pero sin capital (defensivo).
+        if not r.get("capital_limpio_a_demandar"):
+            fila = _fila_no_emitible(r)
+            fila["motivo"] = fila.get("motivo") or MOTIVO_SIN_CAPITAL
+            out.append(fila)
+    return out
+
+
+def resumen_conteo_lote(preview: dict[str, Any]) -> str:
+    """Texto corto tipo: «61 evaluadas → 60 emitibles, 1 sin_match (a.pdf)»."""
+    evaluadas = int(preview.get("cuentas_evaluadas") or 0)
+    emitibles = int(preview.get("emitibles") or 0)
+    partes = [f"{evaluadas} evaluadas → {emitibles} emitibles"]
+    detalle = list(preview.get("no_emitibles_detalle") or [])
+    if not detalle:
+        detalle = resumen_no_emitibles(preview)
+    if detalle:
+        # Agrupar por estado para el resumen.
+        por_estado: dict[str, list[str]] = {}
+        for d in detalle:
+            est = str(d.get("estado") or "otro")
+            por_estado.setdefault(est, []).append(str(d.get("archivo") or "?"))
+        chunks: list[str] = []
+        for est, archivos in por_estado.items():
+            nombres = ", ".join(archivos[:5])
+            extra = "…" if len(archivos) > 5 else ""
+            chunks.append(f"{len(archivos)} {est} ({nombres}{extra})")
+        partes.append(", ".join(chunks))
+    elif evaluadas and emitibles == evaluadas:
+        partes.append("sin pérdidas")
+    return ", ".join(partes) if len(partes) > 1 else partes[0]
 
 
 def _meta_cuenta_bolsa(resultado: dict[str, Any]) -> dict[str, Any]:
@@ -216,6 +290,33 @@ def _lookup_cuenta(
             deudores[0] if deudores else None
         )
         advertencias = list(hallado.get("advertencias") or [])
+        # Preview usa los mismos campos críticos que la emisión Word.
+        faltantes = faltantes_datos_criticos(hallado)
+        if faltantes:
+            detalle = (
+                "Match Neon OK pero faltan datos para emitir el Word: "
+                + "; ".join(faltantes)
+            )
+            return {
+                **meta,
+                "estado": "datos_incompletos",
+                "inmueble_id": hallado.get("inmueble_id"),
+                "torre_apto_neon": hallado.get("torre_apto"),
+                "conjunto_nombre": hallado.get("conjunto_nombre"),
+                "copropiedad_nombre": hallado.get("copropiedad_nombre"),
+                "copropiedad_nit": hallado.get("copropiedad_nit"),
+                "deudores": deudores,
+                "titular_seleccionado": principal,
+                "advertencias": advertencias,
+                "diagnostico_propietarios": hallado.get("diagnostico_propietarios"),
+                "regla_multi_deudor": REGLA_MULTI_DEUDOR,
+                "motivo": MOTIVO_DATOS_INCOMPLETOS,
+                "motivo_detalle": detalle,
+                "error": detalle,
+                "criterios": criterios,
+                "datos_neon": hallado,
+                "faltantes": faltantes,
+            }
         estado = "ok"
         if len(deudores) > 1:
             estado = "varios_propietarios"
@@ -240,6 +341,58 @@ def _lookup_cuenta(
         }
 
     if permitir_datos_pdf:
+        datos_pdf = {
+            "fuente": "pdf",
+            "copropiedad_nombre": (copropiedad_nombre or "").strip()
+            or meta["conjunto"]
+            or None,
+            "copropiedad_nit": (copropiedad_nit or "").strip() or None,
+            "titular_nombre": meta["titular_pdf"] or None,
+            "titular_cedula": (titular_cedula or "").strip() or None,
+            "torre_apto": meta["clave_canonica"]
+            or (
+                f"{meta['bloque']}-{meta['apartamento']}"
+                if meta["bloque"] and meta["apartamento"]
+                else None
+            ),
+        }
+        faltantes_pdf = faltantes_datos_criticos(datos_pdf)
+        if faltantes_pdf:
+            detalle = (
+                "Fallback PDF activo pero faltan datos obligatorios: "
+                + "; ".join(faltantes_pdf)
+            )
+            return {
+                **meta,
+                "estado": "datos_incompletos",
+                "inmueble_id": None,
+                "deudores": [
+                    {
+                        "contacto_id": None,
+                        "nombre": meta["titular_pdf"] or None,
+                        "cedula": (titular_cedula or "").strip() or None,
+                        "es_principal": True,
+                        "rol": "principal",
+                    }
+                ],
+                "titular_seleccionado": {
+                    "contacto_id": None,
+                    "nombre": meta["titular_pdf"] or None,
+                    "cedula": (titular_cedula or "").strip() or None,
+                    "es_principal": True,
+                    "rol": "principal",
+                },
+                "advertencias": [],
+                "copropiedad_nit": datos_pdf.get("copropiedad_nit"),
+                "copropiedad_nombre": datos_pdf.get("copropiedad_nombre"),
+                "regla_multi_deudor": REGLA_MULTI_DEUDOR,
+                "motivo": MOTIVO_DATOS_INCOMPLETOS,
+                "motivo_detalle": detalle,
+                "error": detalle,
+                "criterios": criterios,
+                "datos_neon": None,
+                "faltantes": faltantes_pdf,
+            }
         return {
             **meta,
             "estado": "fallback_pdf",
@@ -325,22 +478,32 @@ def procesar_lote_certificados(
     emitibles = [
         x
         for x in resultados
-        if x.get("estado") in {"ok", "varios_propietarios", "fallback_pdf"}
+        if x.get("estado") in ESTADOS_EMITIBLES
         and x.get("capital_limpio_a_demandar")
     ]
     sin_match = [x for x in resultados if x.get("estado") == "sin_match"]
+    omitidos = [x for x in resultados if x.get("estado") == "omitido"]
+    sin_capital = [x for x in resultados if x.get("estado") == "sin_capital"]
+    datos_incompletos = [
+        x for x in resultados if x.get("estado") == "datos_incompletos"
+    ]
     preview = {
         "cuentas_evaluadas": bolsa.get("cuentas_evaluadas") or 0,
         "cuentas_con_capital": bolsa.get("cuentas_con_capital") or 0,
         "total_capital_demandado_lote": bolsa.get("total_capital_demandado_lote") or 0,
         "emitibles": len(emitibles),
         "sin_match": len(sin_match),
+        "omitidos": len(omitidos),
+        "sin_capital": len(sin_capital),
+        "datos_incompletos": len(datos_incompletos),
         "regla_multi_deudor": REGLA_MULTI_DEUDOR,
         "regla_multi_deudor_doc": REGLA_MULTI_DEUDOR_DOC,
         "resultados": resultados,
         "bolsa": bolsa,
     }
     preview["sin_match_detalle"] = resumen_sin_match(preview)
+    preview["no_emitibles_detalle"] = resumen_no_emitibles(preview)
+    preview["resumen_conteo"] = resumen_conteo_lote(preview)
     return preview
 
 
@@ -503,6 +666,7 @@ def generar_certificados_desde_preview(
     generados: list[tuple[str, bytes]] = []
     meta_lista: list[dict[str, Any]] = []
     errores: list[str] = []
+    nombres_zip: list[str] = []
 
     for idx, item in elegidos:
         try:
@@ -531,34 +695,45 @@ def generar_certificados_desde_preview(
             fuente="neon",
         )
 
+    if len(generados) == 1:
+        nombre, raw = generados[0]
+        nombres_zip = [nombre]
+        resumen = {
+            "pedidos": len(elegidos),
+            "generados": len(generados),
+            "entradas_zip": 1,
+            "fallidos": len(errores),
+            "errores": errores,
+            "nombres_zip": nombres_zip,
+            "regla_multi_deudor": REGLA_MULTI_DEUDOR,
+            "metas": meta_lista,
+            "representante_nombre": rl_nombre,
+            "representante_cedula": rl_cedula,
+            "incluir_poder": bool(incluir_poder),
+        }
+        return BytesIO(raw), nombre, resumen
+
+    zip_buf = BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        usados: set[str] = set()
+        for nombre, raw in generados:
+            base = nombre_unico_entrada_zip(usados, nombre)
+            nombres_zip.append(base)
+            zf.writestr(base, raw)
+    zip_buf.seek(0)
     resumen = {
+        "pedidos": len(elegidos),
         "generados": len(generados),
+        "entradas_zip": len(nombres_zip),
         "fallidos": len(errores),
         "errores": errores,
+        "nombres_zip": nombres_zip,
         "regla_multi_deudor": REGLA_MULTI_DEUDOR,
         "metas": meta_lista,
         "representante_nombre": rl_nombre,
         "representante_cedula": rl_cedula,
         "incluir_poder": bool(incluir_poder),
     }
-
-    if len(generados) == 1:
-        nombre, raw = generados[0]
-        return BytesIO(raw), nombre, resumen
-
-    zip_buf = BytesIO()
-    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        usados: dict[str, int] = {}
-        for nombre, raw in generados:
-            base = nombre
-            if base in usados:
-                usados[base] += 1
-                stem, _, ext = base.rpartition(".")
-                base = f"{stem}_{usados[nombre]}.{ext}" if stem else f"{base}_{usados[nombre]}"
-            else:
-                usados[base] = 0
-            zf.writestr(base, raw)
-    zip_buf.seek(0)
     return zip_buf, "Certificados_deuda.zip", resumen
 
 

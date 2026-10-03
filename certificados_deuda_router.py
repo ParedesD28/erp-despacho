@@ -422,14 +422,30 @@ async def procesar_certificado_unificado(
             "wordprocessingml.document"
         )
     )
+    # Errores parciales (p.ej. 61 pedidos → 60 generados): ASCII seguro en header
+    # para que la UI muestre cuál faltó sin tumbar la descarga del resto.
+    errores = list(meta.get("errores") or [])
+    errores_hdr = " | ".join(str(e) for e in errores)[:800]
+    errores_hdr = errores_hdr.encode("ascii", "replace").decode("ascii")
     return StreamingResponse(
         buffer,
         media_type=media,
         headers={
             "Content-Disposition": f'attachment; filename="{nombre}"',
+            "X-Certificados-Pedidos": str(meta.get("pedidos") or 0),
             "X-Certificados-Generados": str(meta.get("generados") or 0),
+            "X-Certificados-Entradas-Zip": str(
+                meta.get("entradas_zip") or meta.get("generados") or 0
+            ),
             "X-Certificados-Fallidos": str(meta.get("fallidos") or 0),
+            "X-Certificados-Errores": errores_hdr,
             "X-Regla-Multi-Deudor": str(meta.get("regla_multi_deudor") or ""),
+            "Access-Control-Expose-Headers": (
+                "Content-Disposition, X-Certificados-Pedidos, "
+                "X-Certificados-Generados, X-Certificados-Entradas-Zip, "
+                "X-Certificados-Fallidos, X-Certificados-Errores, "
+                "X-Regla-Multi-Deudor"
+            ),
         },
     )
 

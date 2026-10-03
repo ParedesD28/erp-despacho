@@ -210,10 +210,12 @@ def datos_certificado_desde_pdf(
     }
 
 
-def validar_datos_criticos(datos: dict[str, Any]) -> None:
+def faltantes_datos_criticos(datos: dict[str, Any]) -> list[str]:
     """
-    Early-return validation: exige nombre+NIT copropiedad, nombre+cédula titular
-    e identificación del inmueble (torre/apto).
+    Campos críticos faltantes para emitir Word (sin lanzar).
+
+    Usado en preview para no marcar como emitible una cuenta que luego
+    fallaría en `validar_datos_criticos` al generar (síntoma 61→60 silencioso).
     """
     fuente = str(datos.get("fuente") or "neon")
     faltantes: list[str] = []
@@ -258,8 +260,19 @@ def validar_datos_criticos(datos: dict[str, Any]) -> None:
                 else " (inmuebles_ph.torre_apto)"
             )
         )
+    return faltantes
+
+
+def validar_datos_criticos(datos: dict[str, Any]) -> None:
+    """
+    Early-return validation: exige nombre+NIT copropiedad, nombre+cédula titular
+    e identificación del inmueble (torre/apto).
+    """
+    faltantes = faltantes_datos_criticos(datos)
     if faltantes:
-        raise CertificadoDatosFaltantesError(faltantes, fuente=fuente)
+        raise CertificadoDatosFaltantesError(
+            faltantes, fuente=str(datos.get("fuente") or "neon")
+        )
 
 
 @dataclass(frozen=True)

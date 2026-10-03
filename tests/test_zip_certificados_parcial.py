@@ -5,6 +5,9 @@ cuentas por colisión de nombre en el ZIP externo.
 Causa histórica (31 emitibles → ~16 descargados):
   BATCH_SIZE=15 ⇒ grupos 15 + 16; cada grupo devolvía Certificados_deuda.zip;
   JSZip.file(mismo_nombre) pisaba el primero y solo quedaba el último grupo.
+
+Causa adicional (N → N-1): renombre A.docx×2 → A_1.docx sin registrar el
+nombre nuevo; un A_1.docx natural colisionaba y JSZip/extractores colapsaban.
 """
 from __future__ import annotations
 
@@ -16,18 +19,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def unique_zip_entry_name(usados: dict[str, int], name: str) -> str:
-    """Espejo de uniqueZipEntryName() en templates/estado_cuenta_pdf.html."""
+def unique_zip_entry_name(usados: set[str], name: str) -> str:
+    """Espejo de uniqueZipEntryName() / nombre_unico_entrada_zip()."""
     base = name or "Certificado_deuda.docx"
     if base not in usados:
-        usados[base] = 0
+        usados.add(base)
         return base
-    usados[base] += 1
-    n = usados[base]
-    if "." in base:
-        stem, _, ext = base.rpartition(".")
-        return f"{stem}_{n}.{ext}" if stem else f"{base}_{n}"
-    return f"{base}_{n}"
+    stem, sep, ext = base.rpartition(".")
+    n = 1
+    while True:
+        candidate = f"{stem}_{n}.{ext}" if sep and stem else f"{base}_{n}"
+        if candidate not in usados:
+            usados.add(candidate)
+            return candidate
+        n += 1
 
 
 def empaquetar_certificados_planos(
@@ -38,7 +43,7 @@ def empaquetar_certificados_planos(
     en un mapa plano con nombres únicos (sin anidar ni pisar).
     """
     out: dict[str, bytes] = {}
-    usados: dict[str, int] = {}
+    usados: set[str] = set()
     total = 0
     for filename, raw in partes:
         lower = (filename or "").lower()
@@ -100,6 +105,44 @@ class ColisionNombreZipTests(unittest.TestCase):
         self.assertIn("Certificado_Mirador_2-1.docx", planos)
         self.assertIn("Certificado_Mirador_2-1_1.docx", planos)
 
+    def test_renombre_no_pisa_nombre_natural_igual(self):
+        """A.docx×2 + A_1.docx natural → 3 entradas distintas (no 61→60)."""
+        usados: set[str] = set()
+        names = [
+            unique_zip_entry_name(usados, "Certificado_PEREZ.docx"),
+            unique_zip_entry_name(usados, "Certificado_PEREZ.docx"),
+            unique_zip_entry_name(usados, "Certificado_PEREZ_1.docx"),
+        ]
+        self.assertEqual(
+            names,
+            [
+                "Certificado_PEREZ.docx",
+                "Certificado_PEREZ_1.docx",
+                "Certificado_PEREZ_1_1.docx",
+            ],
+        )
+        self.assertEqual(len(set(names)), 3)
+
+    def test_servidor_zip_sin_entradas_duplicadas(self):
+        import certificados_deuda_flujo_service as flujo
+
+        usados: set[str] = set()
+        generados = [
+            ("Certificado_X_2-1.docx", b"a"),
+            ("Certificado_X_2-1.docx", b"b"),
+            ("Certificado_X_2-1_1.docx", b"c"),
+        ]
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for nombre, raw in generados:
+                zf.writestr(flujo.nombre_unico_entrada_zip(usados, nombre), raw)
+        buf.seek(0)
+        with zipfile.ZipFile(buf) as zf:
+            names = zf.namelist()
+        self.assertEqual(len(names), 3)
+        self.assertEqual(len(set(names)), 3)
+        self.assertIn("Certificado_X_2-1_1_1.docx", names)
+
 
 class TemplateAntiColisionTests(unittest.TestCase):
     def test_ui_aplana_zips_y_usa_nombres_unicos(self):
@@ -110,6 +153,8 @@ class TemplateAntiColisionTests(unittest.TestCase):
         self.assertIn("uniqueZipEntryName", html)
         self.assertIn("JSZip.loadAsync", html)
         self.assertIn("ZIP plano", html)
+        self.assertIn("new Set()", html)
+        self.assertIn("usados.has", html)
         # No debe volver al patrón que pisaba: zip.file(filename) con el
         # Content-Disposition crudo de varios grupos.
         self.assertNotIn(
@@ -147,6 +192,17 @@ class TemplateAntiColisionTests(unittest.TestCase):
             "runProcesarCertificado(false)",
             html,
         )
+
+    def test_ui_muestra_conteo_y_headers_parciales(self):
+        html = (ROOT / "templates" / "estado_cuenta_pdf.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("cert-resumen-conteo", html)
+        self.assertIn("no_emitibles_detalle", html)
+        self.assertIn("X-Certificados-Fallidos", html)
+        self.assertIn("X-Certificados-Generados", html)
+        self.assertIn("X-Certificados-Pedidos", html)
+        self.assertIn("c-no-emit", html)
 
 
 class BatchSizeHipótesisTests(unittest.TestCase):
@@ -193,6 +249,13 @@ class BatchSizeHipótesisTests(unittest.TestCase):
         self.assertIn("ui_batch_size|default(15)", html)
         svc = (ROOT / "estado_cuenta_pdf_service.py").read_text(encoding="utf-8")
         self.assertIn('ESTADO_CUENTA_UI_BATCH_SIZE", "15"', svc)
+
+    def test_61_con_batch_15_da_cinco_grupos(self):
+        batch = 15
+        n = 61
+        sizes = [min(batch, n - i) for i in range(0, n, batch)]
+        self.assertEqual(sizes, [15, 15, 15, 15, 1])
+        self.assertEqual(sum(sizes), 61)
 
 
 if __name__ == "__main__":
