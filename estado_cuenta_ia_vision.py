@@ -1,5 +1,9 @@
 """
-Fallback Claude (Anthropic) para estados de cuenta PDF sin texto nativo.
+Fallback IA (visión/PDF) para estados de cuenta sin texto nativo.
+
+Proveedores:
+  - gemini (default / gratis generoso): Google Gemini Flash multimodal
+  - anthropic (opcional): Claude vía document PDF
 
 Solo se usa cuando pypdf no encuentra texto seleccionable suficiente.
 Bolsa Global / mora NO se calculan aquí: la IA solo estructura cabecera +
@@ -18,20 +22,49 @@ from typing import Any
 _IA_SEMAPHORE = threading.Semaphore(1)
 _IA_TIMEOUT_S = max(30, min(int(os.environ.get("ESTADO_CUENTA_IA_TIMEOUT_S", "120")), 300))
 
+_PROVEEDOR_GEMINI = "gemini"
+_PROVEEDOR_ANTHROPIC = "anthropic"
+_MODELO_GEMINI_DEFAULT = "gemini-2.5-flash"
+_MODELO_ANTHROPIC_DEFAULT = "claude-sonnet-5-5"
 
-def _modelo_default() -> str:
-    """ESTADO_CUENTA_IA_MODEL → ANTHROPIC_MODEL → claude-sonnet-5-5."""
-    for key in ("ESTADO_CUENTA_IA_MODEL", "ANTHROPIC_MODEL"):
-        val = (os.environ.get(key) or "").strip()
-        if val:
-            return val
-    return "claude-sonnet-5-5"
+
+def proveedor_ia() -> str:
+    """
+    PDF_IA_PROVIDER / ESTADO_CUENTA_IA_PROVIDER → gemini|anthropic.
+    Sin override: Gemini si hay GEMINI_API_KEY; si no, Anthropic si hay key;
+    si ninguna key, default gemini (mensaje de error apunta al gratis).
+    """
+    raw = (
+        os.environ.get("PDF_IA_PROVIDER")
+        or os.environ.get("ESTADO_CUENTA_IA_PROVIDER")
+        or ""
+    ).strip().lower()
+    if raw in ("gemini", "google", "google-genai"):
+        return _PROVEEDOR_GEMINI
+    if raw in ("anthropic", "claude"):
+        return _PROVEEDOR_ANTHROPIC
+    if (os.environ.get("GEMINI_API_KEY") or "").strip():
+        return _PROVEEDOR_GEMINI
+    if (os.environ.get("ANTHROPIC_API_KEY") or "").strip():
+        return _PROVEEDOR_ANTHROPIC
+    return _PROVEEDOR_GEMINI
+
+
+def _modelo_default(provider: str | None = None) -> str:
+    """ESTADO_CUENTA_IA_MODEL → (GEMINI_MODEL|ANTHROPIC_MODEL) → default del proveedor."""
+    prov = provider or proveedor_ia()
+    explicit = (os.environ.get("ESTADO_CUENTA_IA_MODEL") or "").strip()
+    if explicit:
+        return explicit
+    if prov == _PROVEEDOR_GEMINI:
+        return (os.environ.get("GEMINI_MODEL") or "").strip() or _MODELO_GEMINI_DEFAULT
+    return (os.environ.get("ANTHROPIC_MODEL") or "").strip() or _MODELO_ANTHROPIC_DEFAULT
 
 
 # PDFs largos (6–7 págs.) generan JSON grande; 8k truncaba mid-string.
 _MAX_TOKENS = max(4096, min(int(os.environ.get("ESTADO_CUENTA_IA_MAX_TOKENS", "32000")), 64000))
 
-# tool_choice type "tool"/"any" rompe prod en modelos que no lo soportan.
+# tool_choice type "tool"/"any" rompe prod en modelos Anthropic que no lo soportan.
 # Default seguro: texto JSON + parse/repair/retry (sin tools).
 # Opt-in: ESTADO_CUENTA_IA_USE_TOOLS=1 solo si el modelo sí soporta tools forzados.
 def _use_tools_habilitado() -> bool:
@@ -156,13 +189,20 @@ class EstadoCuentaIaError(ValueError):
     """Error controlado del fallback IA (key, API, JSON inválido)."""
 
 
+def _api_key_opcional(provider: str | None = None) -> str:
+    prov = provider or proveedor_ia()
+    if prov == _PROVEEDOR_GEMINI:
+        return (os.environ.get("GEMINI_API_KEY") or "").strip()
+    return (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+
+
 def ia_fallback_habilitado() -> bool:
     """
-    Default: ON si existe ANTHROPIC_API_KEY.
+    Default: ON si el proveedor resuelto tiene API key.
     Override: ESTADO_CUENTA_IA_FALLBACK=0|1|true|false.
     """
     flag = (os.environ.get("ESTADO_CUENTA_IA_FALLBACK") or "").strip().lower()
-    tiene_key = bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip())
+    tiene_key = bool(_api_key_opcional())
     if flag in ("0", "false", "no", "off"):
         return False
     if flag in ("1", "true", "yes", "on"):
@@ -170,13 +210,20 @@ def ia_fallback_habilitado() -> bool:
     return tiene_key
 
 
-def _require_api_key() -> str:
-    key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-    if not key:
+def _require_api_key(provider: str | None = None) -> str:
+    prov = provider or proveedor_ia()
+    key = _api_key_opcional(prov)
+    if key:
+        return key
+    if prov == _PROVEEDOR_GEMINI:
         raise EstadoCuentaIaError(
-            "configure ANTHROPIC_API_KEY (variable de entorno; no hardcodear en código)."
+            "configure GEMINI_API_KEY (variable de entorno; no hardcodear en código). "
+            "Ver docs/ia-fallback-pdf-modelo.md. "
+            "Opcional: PDF_IA_PROVIDER=anthropic + ANTHROPIC_API_KEY."
         )
-    return key
+    raise EstadoCuentaIaError(
+        "configure ANTHROPIC_API_KEY (variable de entorno; no hardcodear en código)."
+    )
 
 
 def _escapar_comillas_interiores(raw: str) -> str:
@@ -309,7 +356,7 @@ def _normalizar_fecha(raw: Any) -> str:
 
 def validar_y_mapear_respuesta_ia(data: dict[str, Any]) -> dict[str, Any]:
     """
-    Valida el JSON de Claude y lo mapea a la estructura interna COLON
+    Valida el JSON de la IA y lo mapea a la estructura interna COLON
     (cabecera + rows con columnas del Excel/Bolsa).
     """
     cab_raw = data.get("cabecera") if isinstance(data.get("cabecera"), dict) else {}
@@ -418,15 +465,40 @@ def _extraer_payload_mensaje(message: Any) -> dict[str, Any] | str:
     return "\n".join(partes).strip()
 
 
-def _mapear_error_api(exc: Exception, modelo: str) -> EstadoCuentaIaError | None:
+def _mapear_error_api(exc: Exception, modelo: str, provider: str) -> EstadoCuentaIaError | None:
     nombre = type(exc).__name__
     msg = str(exc)
-    if "authentication" in msg.lower() or nombre == "AuthenticationError":
+    msg_l = msg.lower()
+    if provider == _PROVEEDOR_GEMINI:
+        if (
+            "api key" in msg_l
+            or "api_key" in msg_l
+            or "unauthenticated" in msg_l
+            or "401" in msg
+            or nombre in ("UnauthenticatedError", "PermissionDeniedError")
+        ):
+            return EstadoCuentaIaError(
+                "GEMINI_API_KEY inválida o rechazada por Google. "
+                "Revise el secret en Render / entorno."
+            )
+        if "404" in msg or "not found" in msg_l or ("model" in msg_l and "invalid" in msg_l):
+            return EstadoCuentaIaError(
+                f"Modelo Gemini no disponible ({modelo}). "
+                "Ajuste ESTADO_CUENTA_IA_MODEL o GEMINI_MODEL."
+            )
+        if "resource_exhausted" in msg_l or "429" in msg or "quota" in msg_l:
+            return EstadoCuentaIaError(
+                "Cuota/rate-limit de Gemini agotada (free tier). "
+                "Reintente más tarde o revise límites en AI Studio."
+            )
+        return None
+
+    if "authentication" in msg_l or nombre == "AuthenticationError":
         return EstadoCuentaIaError(
             "ANTHROPIC_API_KEY inválida o rechazada por Anthropic. "
             "Revise el secret en Render / entorno."
         )
-    if "not_found" in msg.lower() or ("model" in msg.lower() and "404" in msg):
+    if "not_found" in msg_l or ("model" in msg_l and "404" in msg):
         return EstadoCuentaIaError(
             f"Modelo Claude no disponible ({modelo}). "
             "Ajuste ESTADO_CUENTA_IA_MODEL o ANTHROPIC_MODEL."
@@ -453,7 +525,7 @@ def _construir_kwargs_mensaje(
     include_output_config: bool,
 ) -> dict[str, Any]:
     """
-    Arma kwargs de messages.create.
+    Arma kwargs de messages.create (Anthropic).
     Default prod-safe: sin tools ni tool_choice (JSON por prompt + parse).
     """
     kwargs: dict[str, Any] = {
@@ -485,7 +557,7 @@ def _llamar_claude_pdf(
     ESTADO_CUENTA_IA_USE_TOOLS=1; si la API responde 400 por tool_choice,
     reintenta automáticamente en modo texto.
     """
-    api_key = _require_api_key()
+    api_key = _require_api_key(_PROVEEDOR_ANTHROPIC)
     try:
         import anthropic
     except ImportError as exc:
@@ -494,7 +566,7 @@ def _llamar_claude_pdf(
         ) from exc
 
     b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
-    modelo = model or _modelo_default()
+    modelo = model or _modelo_default(_PROVEEDOR_ANTHROPIC)
     client = anthropic.Anthropic(api_key=api_key, timeout=_IA_TIMEOUT_S)
     tools_on = _use_tools_habilitado() if use_tools is None else use_tools
 
@@ -543,12 +615,12 @@ def _llamar_claude_pdf(
                 try:
                     message, used_kwargs = _create(False, False)
                 except Exception as exc2:
-                    mapped = _mapear_error_api(exc2, modelo)
+                    mapped = _mapear_error_api(exc2, modelo, _PROVEEDOR_ANTHROPIC)
                     if mapped:
                         raise mapped from exc2
                     raise
             else:
-                mapped = _mapear_error_api(exc, modelo)
+                mapped = _mapear_error_api(exc, modelo, _PROVEEDOR_ANTHROPIC)
                 if mapped:
                     raise mapped from exc
                 raise
@@ -557,15 +629,100 @@ def _llamar_claude_pdf(
     return _extraer_payload_mensaje(message)
 
 
+def _llamar_gemini_pdf(
+    pdf_bytes: bytes,
+    *,
+    model: str | None = None,
+    retry_json: bool = False,
+) -> str:
+    """
+    Envía el PDF a Gemini (inline application/pdf) y retorna texto JSON.
+    Usa response_mime_type=application/json para forzar objeto JSON.
+    """
+    api_key = _require_api_key(_PROVEEDOR_GEMINI)
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:
+        raise EstadoCuentaIaError(
+            "Falta el paquete google-genai. Instálelo en el entorno (requirements.txt)."
+        ) from exc
+
+    modelo = model or _modelo_default(_PROVEEDOR_GEMINI)
+    user_text = _RETRY_USER if retry_json else (
+        "Extrae cabecera y movimientos del estado de cuenta. "
+        "Responde ÚNICAMENTE con el objeto JSON completo "
+        "(cabecera + movimientos), sin markdown ni texto adicional."
+    )
+
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=_IA_TIMEOUT_S * 1000),
+    )
+    config = types.GenerateContentConfig(
+        system_instruction=_SYSTEM_PROMPT,
+        max_output_tokens=_MAX_TOKENS,
+        response_mime_type="application/json",
+        temperature=0,
+    )
+    contents = [
+        types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
+        user_text,
+    ]
+
+    with _IA_SEMAPHORE:
+        try:
+            response = client.models.generate_content(
+                model=modelo,
+                contents=contents,
+                config=config,
+            )
+        except Exception as exc:
+            mapped = _mapear_error_api(exc, modelo, _PROVEEDOR_GEMINI)
+            if mapped:
+                raise mapped from exc
+            raise
+
+    texto = (getattr(response, "text", None) or "").strip()
+    if not texto:
+        # Algunos SDKs exponen candidates[0].content.parts
+        partes: list[str] = []
+        for cand in getattr(response, "candidates", None) or []:
+            content = getattr(cand, "content", None)
+            for part in getattr(content, "parts", None) or []:
+                t = getattr(part, "text", None)
+                if t:
+                    partes.append(t)
+        texto = "\n".join(partes).strip()
+    return texto
+
+
+def _llamar_proveedor_pdf(
+    pdf_bytes: bytes,
+    *,
+    model: str | None = None,
+    retry_json: bool = False,
+) -> dict[str, Any] | str:
+    """Despacha al proveedor configurado (gemini|anthropic)."""
+    prov = proveedor_ia()
+    if prov == _PROVEEDOR_GEMINI:
+        return _llamar_gemini_pdf(pdf_bytes, model=model, retry_json=retry_json)
+    if prov == _PROVEEDOR_ANTHROPIC:
+        return _llamar_claude_pdf(pdf_bytes, model=model, retry_json=retry_json)
+    raise EstadoCuentaIaError(
+        f"PDF_IA_PROVIDER desconocido: {prov!r}. Use gemini o anthropic."
+    )
+
+
 def extraer_estado_cuenta_via_ia(pdf_bytes: bytes, *, model: str | None = None) -> dict[str, Any]:
     """
-    Llama a Claude, valida JSON y retorna estructura parcial compatible
+    Llama al proveedor IA, valida JSON y retorna estructura parcial compatible
     con analizar_estado_cuenta_pdf (cabecera, rows, métricas base).
     """
     if not pdf_bytes:
         raise EstadoCuentaIaError("PDF vacío para fallback IA.")
 
-    payload = _llamar_claude_pdf(pdf_bytes, model=model, retry_json=False)
+    payload = _llamar_proveedor_pdf(pdf_bytes, model=model, retry_json=False)
     try:
         if isinstance(payload, dict):
             data = payload
@@ -577,7 +734,7 @@ def extraer_estado_cuenta_via_ia(pdf_bytes: bytes, *, model: str | None = None) 
         # Reintento solo si falló el parseo JSON (comillas/truncado), no validación de filas.
         if "json" not in msg and "vacía" not in msg and "parseable" not in msg:
             raise
-        payload2 = _llamar_claude_pdf(pdf_bytes, model=model, retry_json=True)
+        payload2 = _llamar_proveedor_pdf(pdf_bytes, model=model, retry_json=True)
         if isinstance(payload2, dict):
             data2 = payload2
         else:

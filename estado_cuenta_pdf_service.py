@@ -417,7 +417,7 @@ def _resultado_analisis(
 
 
 def _analizar_via_ia_vision(pdf_bytes: bytes, paginas: int) -> dict:
-    """Fallback Claude → misma estructura interna que el parser COLON texto."""
+    """Fallback IA (Gemini/Claude) → misma estructura interna que el parser COLON texto."""
     try:
         parcial = extraer_estado_cuenta_via_ia(pdf_bytes)
     except EstadoCuentaIaError as exc:
@@ -447,7 +447,7 @@ def analizar_estado_cuenta_pdf(source: Source) -> dict:
       1) Validación estructural de cada bloque (anti-mala transcripción)
       2) Buffer continuo entre páginas + omisiones auditables
       3) Reparación de encoding + detección de PDF sin texto / �
-      4) Fallback IA (Claude) solo si no hay texto nativo y el flag lo permite
+      4) Fallback IA (Gemini/Claude) solo si no hay texto nativo y el flag lo permite
     """
     pdf_bytes = _pdf_bytes_desde_source(source)
     reader = PdfReader(io.BytesIO(pdf_bytes))
@@ -473,7 +473,8 @@ def analizar_estado_cuenta_pdf(source: Source) -> dict:
         raise EstadoCuentaPdfError(
             "El PDF no tiene texto seleccionable suficiente. "
             "Parece un escaneo o PDF solo imagen; exporte nuevamente desde COLON "
-            "(no imprimir a PDF), o configure ANTHROPIC_API_KEY y "
+            "(no imprimir a PDF), o configure GEMINI_API_KEY "
+            "(o ANTHROPIC_API_KEY con PDF_IA_PROVIDER=anthropic) y "
             "ESTADO_CUENTA_IA_FALLBACK=1 para el fallback con IA."
         )
 

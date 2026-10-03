@@ -1,4 +1,4 @@
-"""Tests del fallback Claude para PDF sin texto nativo."""
+"""Tests del fallback IA (Gemini default / Claude opcional) para PDF sin texto nativo."""
 from __future__ import annotations
 
 import json
@@ -16,6 +16,7 @@ from estado_cuenta_ia_vision import (
     _use_tools_habilitado,
     extraer_estado_cuenta_via_ia,
     ia_fallback_habilitado,
+    proveedor_ia,
     reparar_json_ligero,
     validar_y_mapear_respuesta_ia,
 )
@@ -326,7 +327,7 @@ class ParseJsonRobustoTests(unittest.TestCase):
                 return '{"cabecera": {, "movimientos": []'  # basura
             return bueno
 
-        with patch("estado_cuenta_ia_vision._llamar_claude_pdf", side_effect=fake_call):
+        with patch("estado_cuenta_ia_vision._llamar_proveedor_pdf", side_effect=fake_call):
             parcial = extraer_estado_cuenta_via_ia(b"%PDF-fake")
         self.assertEqual(calls["n"], 2)
         self.assertEqual(parcial["rows"][0]["Concepto"], "CUOTA ADMIN")
@@ -334,22 +335,69 @@ class ParseJsonRobustoTests(unittest.TestCase):
 
 class FlagIaTests(unittest.TestCase):
     def test_default_off_sin_key(self):
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "", "ESTADO_CUENTA_IA_FALLBACK": ""}, clear=False):
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-            self.assertFalse(ia_fallback_habilitado())
-
-    def test_on_con_key(self):
         with patch.dict(
             os.environ,
-            {"ANTHROPIC_API_KEY": "sk-test", "ESTADO_CUENTA_IA_FALLBACK": ""},
+            {
+                "ANTHROPIC_API_KEY": "",
+                "GEMINI_API_KEY": "",
+                "PDF_IA_PROVIDER": "",
+                "ESTADO_CUENTA_IA_FALLBACK": "",
+            },
             clear=False,
         ):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            os.environ.pop("GEMINI_API_KEY", None)
+            os.environ.pop("PDF_IA_PROVIDER", None)
+            self.assertFalse(ia_fallback_habilitado())
+
+    def test_on_con_gemini_key(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_API_KEY": "gem-test",
+                "ANTHROPIC_API_KEY": "",
+                "PDF_IA_PROVIDER": "",
+                "ESTADO_CUENTA_IA_FALLBACK": "",
+            },
+            clear=False,
+        ):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            os.environ.pop("PDF_IA_PROVIDER", None)
+            self.assertEqual(proveedor_ia(), "gemini")
             self.assertTrue(ia_fallback_habilitado())
+
+    def test_on_con_anthropic_sin_gemini(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_API_KEY": "",
+                "ANTHROPIC_API_KEY": "sk-test",
+                "PDF_IA_PROVIDER": "",
+                "ESTADO_CUENTA_IA_FALLBACK": "",
+            },
+            clear=False,
+        ):
+            os.environ.pop("GEMINI_API_KEY", None)
+            os.environ.pop("PDF_IA_PROVIDER", None)
+            self.assertEqual(proveedor_ia(), "anthropic")
+            self.assertTrue(ia_fallback_habilitado())
+
+    def test_force_provider_anthropic(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PDF_IA_PROVIDER": "anthropic",
+                "ANTHROPIC_API_KEY": "sk-test",
+                "GEMINI_API_KEY": "gem-test",
+            },
+            clear=False,
+        ):
+            self.assertEqual(proveedor_ia(), "anthropic")
 
     def test_force_off(self):
         with patch.dict(
             os.environ,
-            {"ANTHROPIC_API_KEY": "sk-test", "ESTADO_CUENTA_IA_FALLBACK": "0"},
+            {"GEMINI_API_KEY": "gem-test", "ESTADO_CUENTA_IA_FALLBACK": "0"},
             clear=False,
         ):
             self.assertFalse(ia_fallback_habilitado())
@@ -359,10 +407,15 @@ class AnalizarFallbackMockTests(unittest.TestCase):
     def test_sin_texto_sin_ia_mensaje_claro(self):
         with patch.dict(
             os.environ,
-            {"ANTHROPIC_API_KEY": "", "ESTADO_CUENTA_IA_FALLBACK": "0"},
+            {
+                "ANTHROPIC_API_KEY": "",
+                "GEMINI_API_KEY": "",
+                "ESTADO_CUENTA_IA_FALLBACK": "0",
+            },
             clear=False,
         ):
             os.environ.pop("ANTHROPIC_API_KEY", None)
+            os.environ.pop("GEMINI_API_KEY", None)
             with self.assertRaises(EstadoCuentaPdfError) as ctx:
                 analizar_estado_cuenta_pdf(_pdf_sin_texto())
             self.assertIn("texto seleccionable", str(ctx.exception).lower())
@@ -371,7 +424,7 @@ class AnalizarFallbackMockTests(unittest.TestCase):
         parcial = validar_y_mapear_respuesta_ia(_json_ia_1204())
         with patch.dict(
             os.environ,
-            {"ANTHROPIC_API_KEY": "sk-test", "ESTADO_CUENTA_IA_FALLBACK": "1"},
+            {"GEMINI_API_KEY": "gem-test", "ESTADO_CUENTA_IA_FALLBACK": "1"},
             clear=False,
         ):
             with patch(
@@ -391,11 +444,16 @@ class AnalizarFallbackMockTests(unittest.TestCase):
     def test_mensaje_sin_api_key_en_modulo(self):
         from estado_cuenta_ia_vision import _require_api_key
 
-        with patch.dict(os.environ, {}, clear=False):
+        with patch.dict(
+            os.environ,
+            {"PDF_IA_PROVIDER": "gemini", "GEMINI_API_KEY": "", "ANTHROPIC_API_KEY": ""},
+            clear=False,
+        ):
+            os.environ.pop("GEMINI_API_KEY", None)
             os.environ.pop("ANTHROPIC_API_KEY", None)
             with self.assertRaises(EstadoCuentaIaError) as ctx:
-                _require_api_key()
-            self.assertIn("configure ANTHROPIC_API_KEY", str(ctx.exception))
+                _require_api_key("gemini")
+            self.assertIn("configure GEMINI_API_KEY", str(ctx.exception))
 
     def test_tool_use_payload_directo(self):
         """Si Claude responde con tool_use, el input dict se usa sin json.loads."""
@@ -561,11 +619,87 @@ class SinToolChoiceTests(unittest.TestCase):
     def test_modelo_respeta_anthropic_model_env(self):
         with patch.dict(
             os.environ,
-            {"ESTADO_CUENTA_IA_MODEL": "", "ANTHROPIC_MODEL": "claude-3-5-haiku-latest"},
+            {
+                "PDF_IA_PROVIDER": "anthropic",
+                "ESTADO_CUENTA_IA_MODEL": "",
+                "ANTHROPIC_MODEL": "claude-3-5-haiku-latest",
+            },
             clear=False,
         ):
             os.environ.pop("ESTADO_CUENTA_IA_MODEL", None)
-            self.assertEqual(_modelo_default(), "claude-3-5-haiku-latest")
+            self.assertEqual(_modelo_default("anthropic"), "claude-3-5-haiku-latest")
+
+    def test_modelo_gemini_default(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PDF_IA_PROVIDER": "gemini",
+                "ESTADO_CUENTA_IA_MODEL": "",
+                "GEMINI_MODEL": "",
+            },
+            clear=False,
+        ):
+            os.environ.pop("ESTADO_CUENTA_IA_MODEL", None)
+            os.environ.pop("GEMINI_MODEL", None)
+            self.assertEqual(_modelo_default("gemini"), "gemini-2.5-flash")
+
+
+class GeminiClientMockTests(unittest.TestCase):
+    def test_llamar_gemini_pdf_inline(self):
+        bueno = {
+            "cabecera": {
+                "titular": "G",
+                "bloque": "1",
+                "apartamento": "204",
+                "codigo_cuenta": "1204",
+                "conjunto": None,
+                "nit": None,
+            },
+            "movimientos": [_mov_minimo()],
+        }
+        response = MagicMock()
+        response.text = json.dumps(bueno)
+        response.candidates = []
+
+        class FakeModels:
+            def generate_content(self, **kwargs):
+                self.last_kwargs = kwargs
+                return response
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                self.models = FakeModels()
+
+        with patch.dict(
+            os.environ,
+            {"GEMINI_API_KEY": "gem-test", "PDF_IA_PROVIDER": "gemini"},
+            clear=False,
+        ):
+            with patch("google.genai.Client", FakeClient):
+                from estado_cuenta_ia_vision import _llamar_gemini_pdf
+
+                payload = _llamar_gemini_pdf(b"%PDF-fake")
+
+        data = _parse_json_respuesta(payload)
+        self.assertEqual(data["cabecera"]["codigo_cuenta"], "1204")
+        parcial = validar_y_mapear_respuesta_ia(data)
+        self.assertEqual(parcial["rows"][0]["Concepto"], "CUOTA ADMIN")
+
+    def test_extraer_despacha_a_gemini(self):
+        bueno = {
+            "cabecera": {"titular": "G", "bloque": "1", "apartamento": "1", "codigo_cuenta": "1"},
+            "movimientos": [_mov_minimo()],
+        }
+        with patch.dict(os.environ, {"PDF_IA_PROVIDER": "gemini", "GEMINI_API_KEY": "gem"}, clear=False):
+            with patch(
+                "estado_cuenta_ia_vision._llamar_gemini_pdf",
+                return_value=json.dumps(bueno),
+            ) as mock_g:
+                with patch("estado_cuenta_ia_vision._llamar_claude_pdf") as mock_c:
+                    parcial = extraer_estado_cuenta_via_ia(b"%PDF-fake")
+        mock_g.assert_called_once()
+        mock_c.assert_not_called()
+        self.assertEqual(parcial["cabecera"]["titular"], "G")
 
 
 class ParserInline1502Tests(unittest.TestCase):
@@ -583,9 +717,12 @@ class ParserInline1502Tests(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip())
+    (
+        bool((os.environ.get("GEMINI_API_KEY") or "").strip())
+        or bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip())
+    )
     and os.environ.get("ESTADO_CUENTA_IA_SMOKE", "").strip() in ("1", "true", "yes"),
-    "Smoke opcional: export ANTHROPIC_API_KEY y ESTADO_CUENTA_IA_SMOKE=1",
+    "Smoke opcional: export GEMINI_API_KEY (o ANTHROPIC) y ESTADO_CUENTA_IA_SMOKE=1",
 )
 class SmokeIa1204Tests(unittest.TestCase):
     def test_1204_pdf_real(self):
@@ -614,6 +751,7 @@ class SmokeIa1204Tests(unittest.TestCase):
         print(
             json.dumps(
                 {
+                    "proveedor": proveedor_ia(),
                     "titular": out.get("titular"),
                     "bloque": out.get("bloque"),
                     "apartamento": out.get("apartamento"),
