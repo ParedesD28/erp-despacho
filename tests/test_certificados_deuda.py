@@ -517,7 +517,8 @@ class MatchingUnidadTests(unittest.TestCase):
         self.assertIn("conjunto=", txt)
         self.assertIn("1-201", txt)
         self.assertIn("codigo_cuenta='9401'", txt)
-        self.assertIn("no indexa", txt)
+        self.assertIn("Identificación COLON", txt)
+        self.assertIn("anti-sufijo", txt)
 
     def test_buscar_match_torre_vs_guion_con_filas_en_memoria(self):
         filas = [

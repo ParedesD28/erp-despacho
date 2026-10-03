@@ -988,7 +988,7 @@ def generar_certificado_deuda(
             raise CertificadoNoEncontradoError(
                 "No se encontró inmueble/titular en Neon. "
                 "El cruce usa inmueble_id o conjunto+unidad (torre/apto o bloque+apartamento); "
-                f"`codigo_cuenta` COLON no indexa maestros. Buscado: {criterios}. "
+                f"`codigo_cuenta` COLON se usa como señal de unidad (anti-sufijo). Buscado: {criterios}. "
                 "Verifique que el conjunto exista en conjuntos_residenciales / "
                 "inmuebles_ph.conjunto_residencial y que torre_apto en Neon "
                 "corresponda a bloque-apartamento del PDF (p.ej. '02-042' ≡ '2-42'). "
