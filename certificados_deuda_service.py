@@ -8,6 +8,7 @@ y genera Word en memoria. I/O bloqueante: el router debe usar `asyncio.to_thread
 """
 from __future__ import annotations
 
+import calendar
 import re
 import unicodedata
 from collections import OrderedDict
@@ -420,16 +421,33 @@ def _fmt_extra(valor: float) -> str:
     return _fmt_cop(valor)
 
 
-def _fmt_vencimiento(anio: int, mes: int, dia: int = 5) -> str:
-    """Formato del original: `5-jul-23`."""
+def _dia_vencimiento_efectivo(anio: int, mes: int, dia_vencimiento: int = 31) -> int:
+    """Día de vencimiento acotado al último día calendario del mes.
+
+    Default 31 → fin de mes (ene 31, feb 28/29, abr 30, …).
+    Un día explícito (p. ej. 5) se respeta si cabe en ese mes.
+    """
+    ultimo = calendar.monthrange(int(anio), int(mes))[1]
+    try:
+        d = int(dia_vencimiento)
+    except (TypeError, ValueError):
+        d = 31
+    if d <= 0:
+        d = 31
+    return max(1, min(d, ultimo))
+
+
+def _fmt_vencimiento(anio: int, mes: int, dia: int = 31) -> str:
+    """Formato Word: `31-ene-24` (fin de mes por defecto)."""
     abbr = _MESES_ABBR[mes] if 1 <= mes <= 12 else "mes"
-    return f"{int(dia)}-{abbr}-{str(anio)[-2:]}"
+    dia_eff = _dia_vencimiento_efectivo(anio, mes, dia)
+    return f"{dia_eff}-{abbr}-{str(anio)[-2:]}"
 
 
 def agrupar_capital_limpio(
     items: list[dict[str, Any]] | None,
     *,
-    dia_vencimiento: int = 5,
+    dia_vencimiento: int = 31,
     conceptos_forzar_ordinaria: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> list[FilaCertificado]:
     """
@@ -441,14 +459,19 @@ def agrupar_capital_limpio(
       principal (junto a la ordinaria); la 2ª, 3ª, … cada una en una **fila nueva**
       (mismo mes/año, ordinaria=0, saldo acumulado).
     - SALDO: acumulado fila a fila (orden cronológico).
-    - VENCIMIENTO: día fijo del mes (default 5, como el Word del usuario).
+    - VENCIMIENTO: último día calendario del mes del concepto (override con dia_vencimiento).
     - `conceptos_forzar_ordinaria`: override UI (mapear concepto → ordinaria).
     """
     forzados = normalizar_forzados_ordinaria(conceptos_forzar_ordinaria)
     buckets: "OrderedDict[tuple[int, int], dict[str, Any]]" = OrderedDict()
     sin_fecha_ord = 0.0
     sin_fecha_extras: list[float] = []
-    dia = max(1, min(28, int(dia_vencimiento or 5)))
+    try:
+        dia_pref = int(dia_vencimiento)
+    except (TypeError, ValueError):
+        dia_pref = 31
+    if dia_pref <= 0:
+        dia_pref = 31
 
     for raw in items or []:
         if not isinstance(raw, dict):
@@ -532,7 +555,7 @@ def agrupar_capital_limpio(
             anio=anio,
             ord_val=montos["ord"],
             extras=list(montos["extras"]),
-            vencimiento=_fmt_vencimiento(anio, mes, dia),
+            vencimiento=_fmt_vencimiento(anio, mes, dia_pref),
             acum_in=acum,
         )
         filas.extend(nuevas)
@@ -891,7 +914,7 @@ def generar_certificado_deuda(
     ciudad: str = "",
     representante_nombre: str = "",
     representante_cedula: str = "",
-    dia_vencimiento: int = 5,
+    dia_vencimiento: int = 31,
     permitir_datos_pdf: bool = False,
     incluir_poder: bool = True,
     fmi: str = "",
