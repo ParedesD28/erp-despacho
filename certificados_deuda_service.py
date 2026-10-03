@@ -577,8 +577,21 @@ def _safe_filename(texto: str) -> str:
     return cleaned.strip("_")[:80] or "SIN_TITULAR"
 
 
-def nombre_archivo_certificado(titular_nombre: str) -> str:
-    return f"Certificado_{_safe_filename(titular_nombre)}.docx"
+def nombre_archivo_certificado(
+    titular_nombre: str,
+    *,
+    torre_apto: str = "",
+    codigo_cuenta: str = "",
+) -> str:
+    """
+    Nombre descargable. Incluye unidad/código cuando hay señal para que dos
+    lotes o dos cuentas no se vean como el mismo Word solo por el titular.
+    """
+    base = f"Certificado_{_safe_filename(titular_nombre)}"
+    unidad_raw = str(torre_apto or "").strip() or str(codigo_cuenta or "").strip()
+    if unidad_raw:
+        return f"{base}_{_safe_filename(unidad_raw)}.docx"
+    return f"{base}.docx"
 
 
 def _formatear_propietarios_contexto(
@@ -1088,7 +1101,13 @@ def generar_certificado_deuda(
             "periodo_hasta": ctx_poder.get("periodo_hasta"),
             "fmi": ctx_poder.get("fmi") or "",
         }
-    nombre = nombre_archivo_certificado(str(datos.get("titular_nombre") or ""))
+    nombre = nombre_archivo_certificado(
+        str(datos.get("titular_nombre") or ""),
+        torre_apto=str(
+            datos.get("clave_canonica") or datos.get("torre_apto") or ""
+        ),
+        codigo_cuenta=str(datos.get("codigo_cuenta") or ""),
+    )
     meta = {
         "inmueble_id": datos.get("inmueble_id"),
         "titular_nombre": datos.get("titular_nombre"),

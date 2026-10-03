@@ -438,9 +438,12 @@ def _compatible_con_codigo_cuenta(torre_neon: str, codigo_cuenta: str) -> bool:
     Guard residual COLON: Identificación `1431` no debe aceptar Neon `431`.
 
     - Exacto vía `_unidad_coincide(neon, claves(codigo))` → OK
-    - Estructura torre-apto cuyo pegado de dígitos == código (`1-431`≡`1431`) → OK
+    - Estructura torre-apto cuyo pegado de dígitos == código (`1-431`≡`1431`,
+      `4-31`≡`431`, `14-31`≡`1431`) → OK
       (misma cuenta COLON; no reabre compacto en `_variantes_clave_unidad`)
     - Clave/token dígitos que es **sufijo propio** del código (`431`⊂`1431`) → rechazo
+    - Pegado Neon más largo que termina en el código (`14-31`→`1431` ante cta `431`)
+      → rechazo (Mirador: cuentas distintas con mismo apto `31`)
     """
     cod = _digitos_unidad(codigo_cuenta)
     if len(cod) < 3:
@@ -458,6 +461,16 @@ def _compatible_con_codigo_cuenta(torre_neon: str, codigo_cuenta: str) -> bool:
             return False
         # Segmento apto solo: neon `431` vs código `1431`
         if "-" not in kn and dig.isdigit() and dig != cod and cod.endswith(dig):
+            return False
+        # Asimétrico Mirador: neon `14-31` (pegado 1431) ante Identificación `431`
+        pegado = _pegado_digitos_clave(kn)
+        if (
+            pegado
+            and len(pegado) >= 3
+            and pegado != cod
+            and pegado.lstrip("0") != cod.lstrip("0")
+            and pegado.endswith(cod)
+        ):
             return False
     return True
 
