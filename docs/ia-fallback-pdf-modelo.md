@@ -3,7 +3,7 @@
 **Estado:** IMPLEMENTADO  
 **Repo:** [ParedesD28/erp-despacho](https://github.com/ParedesD28/erp-despacho)  
 **UI:** `/herramientas/estado-cuenta`  
-**Relacionado:** diseño original Claude (store del proyecto) (diseño original Claude)
+**Relacionado:** diseño original Claude (doc del store del proyecto)
 
 ---
 
