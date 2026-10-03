@@ -154,21 +154,59 @@ class MatchingUnidadTests(unittest.TestCase):
         self.assertEqual(repo._tupla_numerica_unidad("02-042"), (2, 42))
         self.assertEqual(repo._tupla_numerica_unidad("2-42"), (2, 42))
 
-    def test_unidad_no_match_por_sufijo_ni_substring(self):
-        """1124≠124, 1101≠101, 2≠12; tampoco compuestos torre-apto análogos."""
+    def test_unidad_no_match_por_sufijo_prefijo_ni_compacto(self):
+        """Regla general: unidades distintas no matchean por sufijo/prefijo/pegado.
+
+        #52 quitó substring en `_unidad_coincide`, pero `_variantes_clave_unidad`
+        aún pegaba torre+apto (`1-431`→`1431`). Este test cubre ambos vectores.
+        """
         casos = (
+            # Apto plano sufijo/prefijo
+            ("1431", "431"),
+            ("431", "1431"),
             ("1124", "124"),
             ("124", "1124"),
             ("1101", "101"),
             ("101", "1101"),
             ("12", "2"),
             ("2", "12"),
+            ("1001", "001"),
+            ("001", "1001"),
+            ("1001", "1"),
+            ("201", "01"),
+            ("01", "201"),
+            ("201", "1"),
+            # Compacto torre+apto ≢ apto plano (causa raíz 1431↔431)
+            ("1431", "1-431"),
+            ("1-431", "1431"),
+            ("1124", "1-124"),
+            ("1-124", "1124"),
+            ("1101", "1-101"),
+            ("1-101", "1101"),
+            ("242", "2-42"),
+            ("2-42", "242"),
+            ("101", "1-01"),
+            ("1-01", "101"),
+            # Compuestos misma torre, apto sufijo
+            ("1-1431", "1-431"),
+            ("1-431", "1-1431"),
             ("1-124", "1-24"),
             ("1-24", "1-124"),
             ("1-1101", "1-101"),
             ("1-101", "1-1101"),
             ("TORRE 1 APTO 1124", "1-124"),
             ("TORRE 1 APTO 124", "1-1124"),
+            ("TORRE 1 APTO 1431", "1-431"),
+            ("TORRE 1 APTO 431", "1-1431"),
+            # Torre letra T-A / TA
+            ("TA-1431", "TA-431"),
+            ("TA-431", "TA-1431"),
+            ("T-A-1431", "T-A-431"),
+            ("TA-1431", "431"),
+            ("431", "TA-1431"),
+            ("TA-1431", "1-431"),
+            ("TORRE TA APTO 1431", "TA-431"),
+            ("TORRE TA APTO 431", "TA-1431"),
         )
         for neon, busqueda in casos:
             with self.subTest(neon=neon, busqueda=busqueda):
@@ -181,6 +219,54 @@ class MatchingUnidadTests(unittest.TestCase):
                     repo._unidad_coincide(busqueda, repo._claves_unidad(neon)),
                     msg=f"falso positivo inverso: {busqueda!r} vs {neon!r}",
                 )
+
+    def test_unidad_match_igualdad_legitima(self):
+        """Positivos: alias de formato, ceros a la izquierda, torre letra."""
+        casos = (
+            ("1-201", "TORRE 1 APTO 201"),
+            ("1-201", "T1-201"),
+            ("T1-201", "1-201"),
+            ("02-042", "2-42"),
+            ("2-42", "02-042"),
+            ("02-042", "TORRE 02 APTO 042"),
+            ("0124", "124"),
+            ("124", "0124"),
+            ("TA-1431", "T-A-1431"),
+            ("T-A-1431", "TA-1431"),
+            ("TA-01431", "TA-1431"),
+            ("TORRE TA APTO 1431", "TA-1431"),
+            ("TA-431", "T-A-431"),
+            ("9-401", "BLOQUE 9 APTO 401"),
+        )
+        for neon, busqueda in casos:
+            with self.subTest(neon=neon, busqueda=busqueda):
+                self.assertTrue(
+                    repo._unidad_coincide(neon, repo._claves_unidad(busqueda)),
+                    msg=f"debía coincidir: {neon!r} vs {busqueda!r}",
+                )
+
+    def test_variantes_no_pegan_torre_apto_en_digitos(self):
+        """1-431 no genera clave 1431; 2-42 no genera 242."""
+        self.assertNotIn("1431", repo._variantes_clave_unidad("1-431"))
+        self.assertNotIn("1124", repo._variantes_clave_unidad("1-124"))
+        self.assertNotIn("242", repo._variantes_clave_unidad("2-42"))
+        self.assertIn("124", repo._variantes_clave_unidad("0124"))
+        self.assertIn("2-42", repo._variantes_clave_unidad("02-042"))
+
+    def test_clave_preserva_torre_solo_letras(self):
+        self.assertEqual(repo._clave_unidad("T-A-1431"), "TA-1431")
+        self.assertEqual(
+            repo._clave_unidad("", bloque="T-A", apartamento="1431"),
+            "TA-1431",
+        )
+        self.assertEqual(
+            repo.clave_canonica_unidad("", bloque="TA", apartamento="0431"),
+            "TA-431",
+        )
+        self.assertEqual(
+            repo._claves_unidad("", bloque="T-A", apartamento="431"),
+            {"TA-431"},
+        )
 
     def test_score_conjunto_ignora_ph_y_acentos(self):
         self.assertGreaterEqual(
