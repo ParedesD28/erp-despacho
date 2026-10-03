@@ -671,6 +671,17 @@
         if (prev && unicos.includes(prev)) selectEl.value = prev;
     }
 
+    function _pasaFiltroBusquedaUnidadTexto(unidadCampos, textoCampos, qRaw) {
+        const q = String(qRaw || '').trim().toLowerCase();
+        if (!q) return true;
+        // Unidad/código: igualdad exacta (evita "431" ⊂ "1431" / "1-431").
+        const unidad = (unidadCampos || []).map(x => String(x || '').toLowerCase());
+        if (unidad.includes(q)) return true;
+        // Titular/archivo/conjunto: substring.
+        const texto = (textoCampos || []).map(x => String(x || '').toLowerCase()).join(' ');
+        return texto.includes(q);
+    }
+
     function pasaFiltroCuenta(c, conjunto, q) {
         if (conjunto) {
             const nombre = String(c.conjunto || '');
@@ -679,11 +690,11 @@
             }
         }
         if (q) {
-            const hay = [
-                c.titular, c.archivo, c.bloque, c.apartamento,
-                c.codigo_cuenta, c.conjunto,
-            ].map(x => String(x || '').toLowerCase()).join(' ');
-            if (!hay.includes(q.toLowerCase())) return false;
+            if (!_pasaFiltroBusquedaUnidadTexto(
+                [c.bloque, c.apartamento, c.codigo_cuenta],
+                [c.titular, c.archivo, c.conjunto],
+                q,
+            )) return false;
         }
         return true;
     }
@@ -708,11 +719,11 @@
             }
         }
         if (q) {
-            const hay = [
-                r.titular_pdf, r.archivo, r.bloque, r.apartamento,
-                r.clave_canonica, r.codigo_cuenta, r.conjunto,
-            ].map(x => String(x || '').toLowerCase()).join(' ');
-            if (!hay.includes(q.toLowerCase())) return false;
+            if (!_pasaFiltroBusquedaUnidadTexto(
+                [r.bloque, r.apartamento, r.clave_canonica, r.codigo_cuenta, r.torre_apto_neon],
+                [r.titular_pdf, r.archivo, r.conjunto],
+                q,
+            )) return false;
         }
         return true;
     }

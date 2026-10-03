@@ -487,6 +487,41 @@ class FiltrosLoteCertificadoTests(unittest.TestCase):
         )
         self.assertEqual(idxs, [2])
 
+    def test_filtro_busqueda_no_sufijo_codigo_cuenta(self):
+        """'431' no lista filas solo por substring de codigo/clave 1431 / 1-431."""
+        preview = {
+            "resultados": [
+                {
+                    "estado": "ok",
+                    "titular_pdf": "A",
+                    "archivo": "a.pdf",
+                    "bloque": "1",
+                    "apartamento": "1431",
+                    "clave_canonica": "1-1431",
+                    "codigo_cuenta": "1431",
+                    "conjunto": "COLON",
+                },
+                {
+                    "estado": "ok",
+                    "titular_pdf": "B",
+                    "archivo": "b.pdf",
+                    "bloque": "",
+                    "apartamento": "431",
+                    "clave_canonica": "431",
+                    "codigo_cuenta": "431",
+                    "conjunto": "COLON",
+                },
+            ]
+        }
+        self.assertEqual(
+            flujo.indices_filtrados_preview(preview, busqueda="431"),
+            [1],
+        )
+        self.assertEqual(
+            flujo.indices_filtrados_preview(preview, busqueda="1431"),
+            [0],
+        )
+
     def test_generar_con_solo_match_neon_omite_fallback(self):
         def _neon(nombre):
             return {

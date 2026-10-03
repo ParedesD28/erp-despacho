@@ -419,6 +419,49 @@ def _unidad_coincide(torre_neon: str, claves_busqueda: set[str]) -> bool:
     return False
 
 
+def _digitos_unidad(texto: str) -> str:
+    """Solo dígitos de una clave/código (Identificación COLON / torre_apto)."""
+    return re.sub(r"\D+", "", str(texto or ""))
+
+
+def _pegado_digitos_clave(clave: str) -> str:
+    """Concatena dígitos por segmento: `1-431`→`1431`, `02-042`→`02042`."""
+    if not clave:
+        return ""
+    if "-" not in clave:
+        return _digitos_unidad(clave)
+    return "".join(_digitos_unidad(p) for p in clave.split("-") if p)
+
+
+def _compatible_con_codigo_cuenta(torre_neon: str, codigo_cuenta: str) -> bool:
+    """
+    Guard residual COLON: Identificación `1431` no debe aceptar Neon `431`.
+
+    - Exacto vía `_unidad_coincide(neon, claves(codigo))` → OK
+    - Estructura torre-apto cuyo pegado de dígitos == código (`1-431`≡`1431`) → OK
+      (misma cuenta COLON; no reabre compacto en `_variantes_clave_unidad`)
+    - Clave/token dígitos que es **sufijo propio** del código (`431`⊂`1431`) → rechazo
+    """
+    cod = _digitos_unidad(codigo_cuenta)
+    if len(cod) < 3:
+        return True
+    if _unidad_coincide(torre_neon, _claves_unidad(codigo_cuenta)):
+        return True
+    claves_neon = _claves_unidad(torre_neon)
+    for kn in claves_neon:
+        pegado = _pegado_digitos_clave(kn)
+        if pegado and (pegado == cod or pegado.lstrip("0") == cod.lstrip("0")):
+            return True
+    for kn in claves_neon:
+        dig = _digitos_unidad(kn)
+        if len(dig) >= 3 and dig != cod and cod.endswith(dig):
+            return False
+        # Segmento apto solo: neon `431` vs código `1431`
+        if "-" not in kn and dig.isdigit() and dig != cod and cod.endswith(dig):
+            return False
+    return True
+
+
 def _titular_coincide(fila: dict[str, Any], titular: str) -> bool:
     if not (titular or "").strip():
         return False
@@ -524,13 +567,11 @@ def _filtrar_por_conjunto(
     return [f for s, f in scored if s == best]
 
 
-def _elegir_por_unidad(
-    filas: list[dict[str, Any]],
-    claves: set[str],
+def _desambiguar_matches(
+    matches: list[dict[str, Any]],
     *,
     titular: str = "",
 ) -> Optional[dict[str, Any]]:
-    matches = [f for f in filas if _unidad_coincide(str(f.get("torre_apto") or ""), claves)]
     if not matches:
         return None
     if len(matches) == 1:
@@ -544,6 +585,59 @@ def _elegir_por_unidad(
     return _map_row(matches[0])
 
 
+def _elegir_por_unidad(
+    filas: list[dict[str, Any]],
+    claves: set[str],
+    *,
+    titular: str = "",
+    codigo_cuenta: str = "",
+) -> Optional[dict[str, Any]]:
+    """
+    Elige inmueble por claves bloque/apto y, si hay Identificación COLON,
+    por `codigo_cuenta` (sin reabrir compacto en variantes).
+
+    Preferencia cuando divergen:
+    1. Match exacto por `codigo_cuenta` (Identificación COLON / apto plano Neon)
+    2. Match bloque+apto compatible con el código (p.ej. `1-431` con cta `1431`)
+    3. Match bloque+apto sin código, o si el código no aporta señal
+    """
+    claves_cod = _claves_unidad(codigo_cuenta) if (codigo_cuenta or "").strip() else set()
+    matches_ba = [
+        f for f in filas if _unidad_coincide(str(f.get("torre_apto") or ""), claves)
+    ]
+    matches_cod = [
+        f
+        for f in filas
+        if claves_cod
+        and _unidad_coincide(str(f.get("torre_apto") or ""), claves_cod)
+    ]
+
+    if claves_cod:
+        # Rechaza sufijos propios del código (431 ante Identificación 1431).
+        matches_ba = [
+            f
+            for f in matches_ba
+            if _compatible_con_codigo_cuenta(
+                str(f.get("torre_apto") or ""), codigo_cuenta
+            )
+        ]
+        ids_cod = {int(f["inmueble_id"]) for f in matches_cod if f.get("inmueble_id") is not None}
+        inter = [
+            f
+            for f in matches_ba
+            if f.get("inmueble_id") is not None and int(f["inmueble_id"]) in ids_cod
+        ]
+        if inter:
+            return _desambiguar_matches(inter, titular=titular)
+        if matches_cod:
+            return _desambiguar_matches(matches_cod, titular=titular)
+        if matches_ba:
+            return _desambiguar_matches(matches_ba, titular=titular)
+        return None
+
+    return _desambiguar_matches(matches_ba, titular=titular)
+
+
 def buscar_por_conjunto_y_unidad(
     *,
     conjunto_id: Optional[int] = None,
@@ -552,16 +646,20 @@ def buscar_por_conjunto_y_unidad(
     bloque: str = "",
     apartamento: str = "",
     titular: str = "",
+    codigo_cuenta: str = "",
     conn=None,
 ) -> Optional[dict[str, Any]]:
     """
     Cruza conjunto (id o nombre flexible) + unidad (torre_apto / bloque+apto).
 
-    `codigo_cuenta` COLON no existe en tablas maestras Neon; no se usa aquí.
+    `codigo_cuenta` (Identificación COLON) no es columna Neon, pero se usa como
+    señal de unidad: match exacto a `torre_apto` plano y guard anti-sufijo
+    frente a aptos cortos (`1431` no cae en `431`).
     Si hay ambigüedad de unidad, `titular` (PDF) desambigua.
     """
     claves = _claves_unidad(torre_apto, bloque, apartamento)
-    if not claves:
+    claves_cod = _claves_unidad(codigo_cuenta) if (codigo_cuenta or "").strip() else set()
+    if not claves and not claves_cod:
         return None
     if not conjunto_id and not (conjunto_nombre or "").strip() and not (titular or "").strip():
         return None
@@ -583,7 +681,12 @@ def buscar_por_conjunto_y_unidad(
                     conjunto_id=conjunto_id,
                     conjunto_nombre=conjunto_nombre,
                 )
-                hallado = _elegir_por_unidad(filas, claves, titular=titular)
+                hallado = _elegir_por_unidad(
+                    filas,
+                    claves,
+                    titular=titular,
+                    codigo_cuenta=codigo_cuenta,
+                )
                 if hallado:
                     return hallado
 
@@ -608,7 +711,12 @@ def buscar_por_conjunto_y_unidad(
                     ),
                 )
                 por_titular = [dict(r) for r in cur.fetchall()]
-                return _elegir_por_unidad(por_titular, claves, titular=titular)
+                return _elegir_por_unidad(
+                    por_titular,
+                    claves,
+                    titular=titular,
+                    codigo_cuenta=codigo_cuenta,
+                )
             return None
     finally:
         if owns and conn is not None:
@@ -645,7 +753,8 @@ def describir_busqueda(
         partes.append(f"titular={titular.strip()!r}")
     if (codigo_cuenta or "").strip():
         partes.append(
-            f"codigo_cuenta={codigo_cuenta.strip()!r} (no indexa maestros Neon)"
+            f"codigo_cuenta={codigo_cuenta.strip()!r} "
+            "(Identificación COLON → señal de unidad / anti-sufijo)"
         )
     return "; ".join(partes) if partes else "(sin criterios)"
 
@@ -817,6 +926,7 @@ def resolver_datos_certificado(
     bloque: str = "",
     apartamento: str = "",
     titular: str = "",
+    codigo_cuenta: str = "",
     conn=None,
     incluir_propietarios: bool = False,
 ) -> Optional[dict[str, Any]]:
@@ -832,6 +942,7 @@ def resolver_datos_certificado(
             bloque=bloque,
             apartamento=apartamento,
             titular=titular,
+            codigo_cuenta=codigo_cuenta,
             conn=conn,
         )
     if incluir_propietarios and hallado:

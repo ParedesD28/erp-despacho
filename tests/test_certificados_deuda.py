@@ -268,6 +268,162 @@ class MatchingUnidadTests(unittest.TestCase):
             {"TA-431"},
         )
 
+    def test_codigo_cuenta_compatible_anti_sufijo_colon(self):
+        """Identificación COLON 1431: OK con 1-431/1431; no con apto plano 431."""
+        self.assertTrue(repo._compatible_con_codigo_cuenta("1-431", "1431"))
+        self.assertTrue(repo._compatible_con_codigo_cuenta("T1-431", "1431"))
+        self.assertTrue(repo._compatible_con_codigo_cuenta("1431", "1431"))
+        self.assertTrue(repo._compatible_con_codigo_cuenta("01431", "1431"))
+        self.assertFalse(repo._compatible_con_codigo_cuenta("431", "1431"))
+        self.assertFalse(repo._compatible_con_codigo_cuenta("0431", "1431"))
+        self.assertTrue(repo._compatible_con_codigo_cuenta("1-124", "1124"))
+        self.assertFalse(repo._compatible_con_codigo_cuenta("124", "1124"))
+        # Torre letra + apto: pegado no aplica; exacto por claves de código
+        self.assertFalse(repo._compatible_con_codigo_cuenta("TA-431", "1431"))
+        self.assertTrue(repo._compatible_con_codigo_cuenta("TA-1431", "TA1431"))
+
+    def test_elegir_prioriza_codigo_cuenta_sobre_sufijo_apto(self):
+        """PDF COLON: codigo=1431 bloque=1 apto=431 no debe caer en Neon 431."""
+        filas = [
+            {
+                "inmueble_id": 10,
+                "torre_apto": "431",
+                "conjunto_id": 1,
+                "conjunto_nombre": "COLON TEST",
+                "conjunto_catalogo": "COLON TEST",
+                "copropiedad_nombre": None,
+                "titular_nombre": "A",
+                "titular_cedula": "1",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+            {
+                "inmueble_id": 11,
+                "torre_apto": "1431",
+                "conjunto_id": 1,
+                "conjunto_nombre": "COLON TEST",
+                "conjunto_catalogo": "COLON TEST",
+                "copropiedad_nombre": None,
+                "titular_nombre": "B",
+                "titular_cedula": "2",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+            {
+                "inmueble_id": 12,
+                "torre_apto": "1-431",
+                "conjunto_id": 1,
+                "conjunto_nombre": "COLON TEST",
+                "conjunto_catalogo": "COLON TEST",
+                "copropiedad_nombre": None,
+                "titular_nombre": "C",
+                "titular_cedula": "3",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+        ]
+        # Solo apto 431 (+ codigo 1431): rechaza 431, toma 1431 por código
+        hallado = repo._elegir_por_unidad(
+            filas,
+            repo._claves_unidad("", bloque="", apartamento="431"),
+            codigo_cuenta="1431",
+        )
+        self.assertIsNotNone(hallado)
+        self.assertEqual(hallado["inmueble_id"], 11)
+        self.assertEqual(hallado["torre_apto"], "1431")
+
+        # Bloque+apto 1-431 + codigo 1431 + ambas filas: prioriza Identificación
+        hallado2 = repo._elegir_por_unidad(
+            filas,
+            repo._claves_unidad("", bloque="1", apartamento="431"),
+            codigo_cuenta="1431",
+        )
+        self.assertEqual(hallado2["inmueble_id"], 11)
+
+        # Sin fila plana 1431: acepta estructura 1-431 (misma cuenta COLON)
+        filas_sin_plano = [f for f in filas if f["inmueble_id"] != 11]
+        hallado3 = repo._elegir_por_unidad(
+            filas_sin_plano,
+            repo._claves_unidad("", bloque="1", apartamento="431"),
+            codigo_cuenta="1431",
+        )
+        self.assertEqual(hallado3["inmueble_id"], 12)
+
+        # 1124 / 124 compacto
+        filas_1124 = [
+            {
+                "inmueble_id": 20,
+                "torre_apto": "124",
+                "conjunto_id": 1,
+                "conjunto_nombre": "X",
+                "conjunto_catalogo": "X",
+                "copropiedad_nombre": None,
+                "titular_nombre": "Z",
+                "titular_cedula": "9",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+            {
+                "inmueble_id": 21,
+                "torre_apto": "1124",
+                "conjunto_id": 1,
+                "conjunto_nombre": "X",
+                "conjunto_catalogo": "X",
+                "copropiedad_nombre": None,
+                "titular_nombre": "Y",
+                "titular_cedula": "8",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+        ]
+        h1124 = repo._elegir_por_unidad(
+            filas_1124,
+            repo._claves_unidad("", bloque="1", apartamento="124"),
+            codigo_cuenta="1124",
+        )
+        self.assertEqual(h1124["inmueble_id"], 21)
+
+        # Torre+apto compacto texto: TORRE X APTO 1431 vs Neon 431
+        filas_ta = [
+            {
+                "inmueble_id": 30,
+                "torre_apto": "431",
+                "conjunto_id": 1,
+                "conjunto_nombre": "X",
+                "conjunto_catalogo": "X",
+                "copropiedad_nombre": None,
+                "titular_nombre": "T",
+                "titular_cedula": "7",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+            {
+                "inmueble_id": 31,
+                "torre_apto": "X-1431",
+                "conjunto_id": 1,
+                "conjunto_nombre": "X",
+                "conjunto_catalogo": "X",
+                "copropiedad_nombre": None,
+                "titular_nombre": "U",
+                "titular_cedula": "6",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+        ]
+        h_ta = repo._elegir_por_unidad(
+            filas_ta,
+            repo._claves_unidad("TORRE X APTO 1431"),
+            codigo_cuenta="1431",
+        )
+        self.assertEqual(h_ta["inmueble_id"], 31)
+        # Sin match de código ni estructura compatible → None (no 431)
+        h_bad = repo._elegir_por_unidad(
+            [filas_ta[0]],
+            repo._claves_unidad("", bloque="", apartamento="431"),
+            codigo_cuenta="1431",
+        )
+        self.assertIsNone(h_bad)
+
     def test_score_conjunto_ignora_ph_y_acentos(self):
         self.assertGreaterEqual(
             repo._score_conjunto(

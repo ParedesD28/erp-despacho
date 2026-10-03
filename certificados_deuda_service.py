@@ -948,6 +948,7 @@ def generar_certificado_deuda(
         bloque=bloque,
         apartamento=apartamento,
         titular=titular,
+        codigo_cuenta=codigo_cuenta,
         conn=conn,
         incluir_propietarios=True,
     )
