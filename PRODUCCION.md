@@ -7,7 +7,9 @@ ERP:
 - `ERP_SESSION_SECRET` — secreto aleatorio largo (mínimo 32 caracteres). Es obligatorio y no se usa como fallback ninguna otra variable.
 - `LIQUIDADOR_API_KEY`
 - `PUBLIC_BASE_URL` — URL pública del servicio ERP, por ejemplo `https://gestionjudicial.onrender.com`.
-- `ANTHROPIC_API_KEY` — opcional; habilita fallback Claude en `/herramientas/estado-cuenta` cuando el PDF no tiene texto seleccionable (Print to PDF / escaneo). Setear como secret en Render. Sin la key, esos PDF siguen fallando con mensaje claro. Ver `.env.example` y `ESTADO_CUENTA_IA_FALLBACK`.
+- `GEMINI_API_KEY` — recomendada; habilita fallback Gemini (gratis) en `/herramientas/estado-cuenta` cuando el PDF no tiene texto seleccionable (Print to PDF / escaneo). Secret en Render. Key gratis: https://aistudio.google.com/apikey. Ver `.env.example`, `PDF_IA_PROVIDER`, `ESTADO_CUENTA_IA_FALLBACK`.
+- `ANTHROPIC_API_KEY` — opcional; solo si `PDF_IA_PROVIDER=anthropic` (o sin Gemini y con esta key). Misma ruta de fallback PDF.
+- `PDF_IA_PROVIDER` — opcional; `gemini` (default) o `anthropic`.
 
 Agente:
 - `DATABASE_URL`

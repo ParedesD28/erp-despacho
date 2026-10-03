@@ -12,6 +12,7 @@ requests
 reportlab
 pypdf
 anthropic>=0.40.0
+google-genai>=1.0.0
 python-docx
 docxtpl
 pytest
