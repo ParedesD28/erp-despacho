@@ -8,6 +8,18 @@ import db
 import tasas
 
 
+def fecha_vencimiento_fin_mes(anio: int, mes: int) -> date:
+    """Último día calendario del mes/año del concepto (regla de vencimiento de cuotas).
+
+    Ejemplo: cuota de enero → 31 ene; febrero → 28/29 según año bisiesto.
+    """
+    anio_i = int(anio)
+    mes_i = int(mes)
+    if not 1 <= mes_i <= 12:
+        raise ValueError(f"Mes inválido para fecha de vencimiento: {mes}")
+    return date(anio_i, mes_i, calendar.monthrange(anio_i, mes_i)[1])
+
+
 def dedupe_expensas():
     """Elimina cuotas mensuales duplicadas de expensas_ph preservando la más reciente."""
     conn = db.get_connection()
@@ -83,10 +95,10 @@ def motor_calculo_judicial(
                             sig_anio, sig_mes = u_anio + 1, 1
                         else:
                             sig_anio, sig_mes = u_anio, u_mes + 1
-                        fecha_siguiente = date(sig_anio, sig_mes, 1)
+                        periodo_siguiente = date(sig_anio, sig_mes, 1)
                         corte_mes = date(fecha_corte.year, fecha_corte.month, 1)
 
-                        while fecha_siguiente <= corte_mes:
+                        while periodo_siguiente <= corte_mes:
                             cur.execute("""
                                 SELECT 1
                                 FROM expensas_ph
@@ -97,6 +109,7 @@ def motor_calculo_judicial(
                                 LIMIT 1
                             """, (inmueble_id, obligacion_id, obligacion_id, sig_anio, sig_mes))
                             if not cur.fetchone():
+                                f_venc = fecha_vencimiento_fin_mes(sig_anio, sig_mes)
                                 cur.execute("""
                                     INSERT INTO expensas_ph
                                         (inmueble_id, obligation_id, concepto, periodo_mes, periodo_anio,
@@ -108,13 +121,13 @@ def motor_calculo_judicial(
                                     sig_mes,
                                     sig_anio,
                                     u_valor,
-                                    fecha_siguiente.strftime("%Y-%m-%d"),
+                                    f_venc.strftime("%Y-%m-%d"),
                                 ))
                             if sig_mes == 12:
                                 sig_anio, sig_mes = sig_anio + 1, 1
                             else:
                                 sig_mes += 1
-                            fecha_siguiente = date(sig_anio, sig_mes, 1)
+                            periodo_siguiente = date(sig_anio, sig_mes, 1)
         except Exception as exc:
             print(f"[LIQUIDADOR][ALERTA] Error en auto-causacion: {exc!r}", flush=True)
         finally:

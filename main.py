@@ -2410,7 +2410,7 @@ def _guardar_cambios_liquidacion(cur, inmueble_id: int, obligacion_id: int, form
         if valor == 0:
             continue
 
-        f_vencimiento = f"{anio}-{mes:02d}-01"
+        f_vencimiento = liquidador.fecha_vencimiento_fin_mes(anio, mes).isoformat()
         cur.execute(
             """
             INSERT INTO expensas_ph
@@ -2739,7 +2739,7 @@ async def carga_masiva_excel(
                                               AND periodo_anio = %s AND periodo_mes = %s
                                         """, (valor_limpio, inmueble_id, obligacion_id, concepto, y, m))
                                         if cur.rowcount == 0:
-                                            f_vencimiento = f"{y}-{m:02d}-01"
+                                            f_vencimiento = liquidador.fecha_vencimiento_fin_mes(y, m).isoformat()
                                             cur.execute("""
                                                 INSERT INTO expensas_ph
                                                     (inmueble_id, obligation_id, concepto, periodo_mes, periodo_anio,

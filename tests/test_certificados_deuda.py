@@ -48,11 +48,12 @@ class AgruparCapitalTests(unittest.TestCase):
         self.assertEqual(filas[0].cuotas_extraordinarias, 50.0)
         self.assertEqual(filas[0].total_mes, 150.0)
         self.assertEqual(filas[0].saldo, 150.0)
-        self.assertEqual(filas[0].vencimiento, "5-feb-24")
+        self.assertEqual(filas[0].vencimiento, "29-feb-24")  # 2024 bisiesto
         self.assertEqual(filas[1].mes, "MARZO")
         self.assertEqual(filas[1].cuotas_ordinarias, 200.0)
         self.assertEqual(filas[1].cuotas_extraordinarias, 0.0)
         self.assertEqual(filas[1].saldo, 350.0)
+        self.assertEqual(filas[1].vencimiento, "31-mar-24")
 
     def test_gasto_va_a_extraordinarias(self):
         items = [
@@ -78,7 +79,26 @@ class AgruparCapitalTests(unittest.TestCase):
         ]
         filas = svc.agrupar_capital_limpio(items)
         self.assertEqual(filas[0].periodo, "MAYO 2024")
-        self.assertEqual(filas[0].vencimiento, "5-may-24")
+        self.assertEqual(filas[0].vencimiento, "31-may-24")
+
+    def test_vencimiento_fin_mes_ene_feb_bisiesto_y_override(self):
+        ene = svc.agrupar_capital_limpio(
+            [{"fecha": "2024.01.10", "concepto": "CUOTA ADMINISTRACION", "valor_a_demandar": 1.0}]
+        )
+        feb_bisiesto = svc.agrupar_capital_limpio(
+            [{"fecha": "2024.02.10", "concepto": "CUOTA ADMINISTRACION", "valor_a_demandar": 1.0}]
+        )
+        feb_comun = svc.agrupar_capital_limpio(
+            [{"fecha": "2023.02.10", "concepto": "CUOTA ADMINISTRACION", "valor_a_demandar": 1.0}]
+        )
+        override = svc.agrupar_capital_limpio(
+            [{"fecha": "2024.01.10", "concepto": "CUOTA ADMINISTRACION", "valor_a_demandar": 1.0}],
+            dia_vencimiento=5,
+        )
+        self.assertEqual(ene[0].vencimiento, "31-ene-24")
+        self.assertEqual(feb_bisiesto[0].vencimiento, "29-feb-24")
+        self.assertEqual(feb_comun[0].vencimiento, "28-feb-23")
+        self.assertEqual(override[0].vencimiento, "5-ene-24")
 
 
 class MatchingUnidadTests(unittest.TestCase):

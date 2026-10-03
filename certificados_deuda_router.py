@@ -50,10 +50,13 @@ class CertificadoDeudaRequest(BaseModel):
         description="Cédula del representante legal.",
     )
     dia_vencimiento: int = Field(
-        default=5,
+        default=31,
         ge=1,
-        le=28,
-        description="Día de vencimiento por fila (formato 5-jul-23 del Word oficial).",
+        le=31,
+        description=(
+            "Día de vencimiento por fila (formato Word, p.ej. 31-ene-24). "
+            "Default 31 = último día calendario del mes del concepto."
+        ),
     )
     titular: str = Field(
         default="",
@@ -283,7 +286,7 @@ async def procesar_certificado_unificado(
     copropiedad_nombre: str = Form(""),
     representante_nombre: str = Form(""),
     representante_cedula: str = Form(""),
-    dia_vencimiento: int = Form(5),
+    dia_vencimiento: int = Form(31),
     ciudad: str = Form(""),
     indices: str = Form(
         "",
@@ -373,7 +376,7 @@ async def procesar_certificado_unificado(
             copropiedad_nombre=copropiedad_nombre,
             representante_nombre=representante_nombre,
             representante_cedula=representante_cedula,
-            dia_vencimiento=int(dia_vencimiento or 5),
+            dia_vencimiento=int(dia_vencimiento or 31),
             ciudad=ciudad,
             indices=idxs,
             filtro_conjunto=filtro_conjunto,
