@@ -64,6 +64,41 @@ def _tokens_unidad(texto: str) -> list[str]:
     return _TOKEN_UNIDAD_RE.findall(limpio)
 
 
+def _partes_unidad(texto: str) -> list[str]:
+    """
+    Partes estructurales bloque/apto, incluyendo torre solo-letras (`T-A`, `TA`).
+
+    `T-A-1431` / `TORRE TA APTO 1431` → `['TA', '1431']`.
+    `1-201` / `TORRE 1 APTO 201` → `['1', '201']`.
+    No inventa dígitos pegados (`1`+`431` → nunca `1431` como parte).
+    """
+    limpio = _norm_texto(texto)
+    limpio = re.sub(r"\bN[O0]\.?\s*", " ", limpio)
+    limpio = _UNIT_NOISE_RE.sub(" ", limpio)
+    chunks = [
+        re.sub(r"[^A-Z0-9]+", "", c)
+        for c in re.split(r"[\s\-–—/]+", limpio)
+    ]
+    chunks = [c for c in chunks if c]
+    if not chunks:
+        return []
+
+    # Fusionar letras líderes sueltas: T, A, 1431 → TA, 1431
+    i = 0
+    letras: list[str] = []
+    while i < len(chunks) and re.fullmatch(r"[A-Z]+", chunks[i]):
+        letras.append(chunks[i])
+        i += 1
+    if letras and i < len(chunks):
+        return ["".join(letras)] + chunks[i:]
+    # Solo letras sin apto numérico (p.ej. ruido "N/A"): no es unidad.
+    if letras and i == len(chunks):
+        return []
+
+    # Sin torre letra-only: tokens con dígitos (legacy)
+    return _TOKEN_UNIDAD_RE.findall(re.sub(r"[^A-Z0-9]+", " ", limpio))
+
+
 def _strip_ceros_token(token: str) -> str:
     """Quita ceros a la izquierda de la parte numérica: 02→2, 042→42, T02→T2."""
     m = re.match(r"^([A-Z]*)(0*)(\d+)([A-Z]*)$", token)
@@ -83,17 +118,33 @@ def _clave_unidad(texto: str = "", *, bloque: str = "", apartamento: str = "") -
       - "1-201"
       - bloque=1, apartamento=201
       - "T1-201" (también genera alias numérico vía `_claves_unidad`)
+      - bloque=T-A, apartamento=1431 → `TA-1431`
     """
-    tokens = _tokens_unidad(texto)
     if bloque and apartamento:
-        tokens = _tokens_unidad(f"{bloque} {apartamento}") or [
-            _norm_key(bloque),
-            _norm_key(apartamento),
-        ]
-    elif bloque and not tokens:
+        # Bloque explícito (puede ser solo letras: T-A / TA); apto tolera N0.502
+        b = _norm_key(bloque)
+        a_toks = _partes_unidad(apartamento) or (
+            [_norm_key(apartamento)] if _norm_key(apartamento) else []
+        )
+        if b and a_toks:
+            # Si apto trae torre letra propia, descartarla (bloque ya la define).
+            if len(a_toks) > 1 and re.fullmatch(r"[A-Z]+", a_toks[0]):
+                a_toks = a_toks[1:]
+            tokens = [b] + a_toks
+        elif b:
+            tokens = [b]
+        else:
+            tokens = list(a_toks)
+    elif texto:
+        tokens = _partes_unidad(texto)
+    elif apartamento:
+        tokens = _partes_unidad(apartamento) or (
+            [_norm_key(apartamento)] if _norm_key(apartamento) else []
+        )
+    elif bloque:
         tokens = [_norm_key(bloque)]
-    elif apartamento and not tokens:
-        tokens = [_norm_key(apartamento)]
+    else:
+        tokens = []
     tokens = [t for t in tokens if t]
     return "-".join(tokens) if tokens else ""
 
@@ -166,13 +217,18 @@ def _variantes_clave_unidad(clave: str) -> set[str]:
     """
     Variantes canónicas de una clave bloque-apto.
 
-    `02-042` → también `2-42`, `02-42`, `2-042` (+ compactos dígitos).
+    `02-042` → también `2-42`, `02-42`, `2-042`.
+    `0124` → también `124` (ceros a la izquierda del mismo token).
+
+    **No** concatena torre+apto en dígitos pegados: `1-431` ≢ `1431`,
+    `2-42` ≢ `242`. Eso era la causa de falsos positivos post-#52.
     """
     if not clave:
         return set()
     out: set[str] = {clave}
     partes = clave.split("-")
-    # Alias: quitar letras líderes del primer token (T1-201 → 1-201)
+    # Alias: quitar letras líderes del primer token (T1-201 → 1-201).
+    # Torre solo-letras (TA) se conserva: sub → '' → fallback al original.
     if partes:
         first = re.sub(r"^[A-Z]+", "", partes[0]) or partes[0]
         out.add("-".join([first] + partes[1:]))
@@ -185,13 +241,16 @@ def _variantes_clave_unidad(clave: str) -> set[str]:
     for combo in product(*opciones):
         out.add("-".join(combo))
 
+    # Solo token único numérico: 0124 ≡ 124. Nunca pegar segmentos.
     for c in list(out):
-        solo_digitos = re.sub(r"\D+", "", c)
-        if len(solo_digitos) >= 3:
-            out.add(solo_digitos)
-        # Compacto también sin ceros líderes globales
-        if solo_digitos.isdigit() and solo_digitos:
-            out.add(str(int(solo_digitos)))
+        if "-" in c:
+            continue
+        if c.isdigit():
+            out.add(str(int(c)))
+            continue
+        stripped = _strip_ceros_token(c)
+        if stripped:
+            out.add(stripped)
     return {c for c in out if c}
 
 
@@ -335,11 +394,12 @@ def _map_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def _unidad_coincide(torre_neon: str, claves_busqueda: set[str]) -> bool:
     """
-    Match exacto de unidad (token/clave canónica), no substring.
+    Match exacto de unidad (token/clave canónica), no substring/prefijo/sufijo.
 
     Acepta alias de formato (`TORRE 1 APTO 201` ≡ `1-201` ≡ `T1-201`) y
-    equivalencia por ceros (`02-042` ≡ `2-42`), pero **no** sufijos ni
-    contención: `1124` ≠ `124`, `1101` ≠ `101`, `1-124` ≠ `1-24`.
+    equivalencia por ceros (`02-042` ≡ `2-42`, `0124` ≡ `124`), pero **no**:
+    - contención (`1124`≠`124`, `1431`≠`431`)
+    - dígitos pegados torre+apto (`1-431`≠`1431`, `2-42`≠`242`)
     """
     if not torre_neon or not claves_busqueda:
         return False
@@ -347,6 +407,7 @@ def _unidad_coincide(torre_neon: str, claves_busqueda: set[str]) -> bool:
     if claves_neon & claves_busqueda:
         return True
     # Comparación numérica torre/apto: 02-042 ≡ 2-42 ≡ 02-42
+    # (requiere ≥2 segmentos con dígitos; no aplica a apto plano)
     nums_busqueda = {
         t for kb in claves_busqueda if (t := _tupla_numerica_unidad(kb)) is not None
     }
