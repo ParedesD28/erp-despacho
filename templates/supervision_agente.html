@@ -2,7 +2,7 @@
 
 {% block contenido %}
 <div class="flex flex-col h-full overflow-hidden p-3 md:p-5 gap-3">
-    <!-- BARRA SUPERIOR COMPACTA CON LEYENDA CLARA -->
+    <!-- BARRA SUPERIOR -->
     <div class="bg-white rounded-2xl border border-slate-200 px-4 py-2.5 shadow-xs flex flex-wrap items-center justify-between gap-3 shrink-0">
         <div class="flex items-center gap-3">
             <div class="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shadow-xs">
@@ -10,27 +10,25 @@
             </div>
             <div>
                 <h1 class="text-base font-bold text-slate-900 leading-tight">Supervisión WhatsApp & Agente IA</h1>
-                <p class="text-[11px] text-slate-500">Monitoreo en tiempo real, auditoría y control de conversaciones</p>
+                <p class="text-[11px] text-slate-500">Monitoreo en tiempo real, agenda de contactos y control de conversaciones</p>
             </div>
         </div>
 
-        <!-- Leyenda Visual para Distinguir Mensajes -->
         <div class="hidden md:flex items-center gap-2 px-3 py-1 bg-slate-50 border border-slate-200 rounded-xl text-[11px]">
             <span class="font-bold text-slate-400 mr-1">Leyenda:</span>
-            <span class="inline-flex items-center gap-1 text-slate-700 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-white border border-slate-400"></span> Deudor (Izquierda)</span>
+            <span class="inline-flex items-center gap-1 text-slate-700 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-white border border-slate-400"></span> Deudor</span>
             <span class="text-slate-300">|</span>
-            <span class="inline-flex items-center gap-1 text-emerald-800 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-[#dcf8c6] border border-emerald-500"></span> Agente IA (Derecha)</span>
+            <span class="inline-flex items-center gap-1 text-emerald-800 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-[#dcf8c6] border border-emerald-500"></span> Agente IA</span>
             <span class="text-slate-300">|</span>
-            <span class="inline-flex items-center gap-1 text-amber-900 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-amber-200 border border-amber-500"></span> Abogado (Derecha)</span>
+            <span class="inline-flex items-center gap-1 text-amber-900 font-semibold"><span class="w-2.5 h-2.5 rounded-full bg-amber-200 border border-amber-500"></span> Abogado</span>
         </div>
 
-        <!-- Mini KPIs / Estado del Servicio -->
         <div class="flex flex-wrap items-center gap-2">
             <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium">
                 <span class="text-slate-400">Total:</span>
                 <span id="stat-total" class="font-bold">0</span>
             </div>
-            <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-medium">
+            <div id="stat-agent-wrap" class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 text-xs font-medium">
                 <span class="w-2 h-2 rounded-full bg-blue-500"></span>
                 <span>IA:</span>
                 <span id="stat-agent" class="font-bold">0</span>
@@ -40,8 +38,6 @@
                 <span>Humano:</span>
                 <span id="stat-human" class="font-bold">0</span>
             </div>
-
-            <!-- Estado Conexión Agente -->
             <div id="conexion" class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-slate-50 border-slate-200 text-slate-600 text-xs font-medium">
                 <span id="conexion-dot" class="w-2 h-2 rounded-full bg-slate-400 animate-pulse"></span>
                 <span id="conexion-text" class="font-semibold">Conectando...</span>
@@ -49,25 +45,32 @@
         </div>
     </div>
 
-    <!-- CONTENEDOR PRINCIPAL TIPO WHATSAPP WEB -->
+    <!-- AVISO IA ATENDIENDO -->
+    <div id="aviso-ia" class="hidden shrink-0 px-4 py-2.5 rounded-2xl border border-blue-200 bg-blue-50 text-blue-900 text-xs flex items-center justify-between gap-3 shadow-xs">
+        <div class="flex items-center gap-2 min-w-0">
+            <span class="relative flex h-2.5 w-2.5 shrink-0">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-600"></span>
+            </span>
+            <span id="aviso-ia-text" class="font-semibold truncate">La IA está atendiendo conversaciones.</span>
+        </div>
+        <button type="button" onclick="document.getElementById('aviso-ia').classList.add('hidden')" class="text-blue-700 hover:text-blue-900 font-bold shrink-0" title="Ocultar aviso">✕</button>
+    </div>
+
     <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-3 overflow-hidden">
-        
-        <!-- PANEL IZQUIERDO: LISTA DE CONVERSACIONES -->
+        <!-- LISTA -->
         <section class="lg:col-span-4 xl:col-span-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col h-full overflow-hidden">
-            <!-- Buscador y Refrescar -->
             <div class="p-3 border-b border-slate-100 bg-slate-50/70">
                 <div class="flex gap-2 items-center">
                     <div class="relative flex-1">
                         <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-2.5"></i>
-                        <input id="buscar" type="search" placeholder="Buscar teléfono o cédula..." class="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all shadow-xs">
+                        <input id="buscar" type="search" placeholder="Buscar nombre, teléfono o cédula..." class="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 transition-all shadow-xs">
                     </div>
                     <button onclick="cargarConversaciones()" class="p-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors shadow-xs" title="Actualizar lista">
                         <i data-lucide="refresh-cw" class="w-4 h-4"></i>
                     </button>
                 </div>
             </div>
-
-            <!-- Lista de Chats -->
             <div id="lista" class="divide-y divide-slate-100 overflow-y-auto flex-1">
                 <div class="p-10 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
                     <i data-lucide="loader-2" class="w-6 h-6 animate-spin text-emerald-500"></i>
@@ -76,41 +79,34 @@
             </div>
         </section>
 
-        <!-- PANEL DERECHO: VENTANA DE CHAT INTEGRADA (WHATSAPP WEB STYLE) -->
+        <!-- CHAT -->
         <section class="lg:col-span-8 xl:col-span-8 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col h-full overflow-hidden relative">
-            
-            <!-- Estado Vacío (Sin chat seleccionado) -->
             <div id="detalle-vacio" class="flex-1 flex flex-col items-center justify-center text-center p-8 bg-slate-50/50">
                 <div class="w-20 h-20 rounded-full bg-emerald-50 text-emerald-500 flex items-center justify-center mb-4 shadow-inner">
                     <i data-lucide="message-circle-dashed" class="w-10 h-10 opacity-70"></i>
                 </div>
                 <h3 class="text-base font-bold text-slate-800">Panel de Chat WhatsApp</h3>
-                <p class="text-xs text-slate-500 max-w-sm mt-1">Selecciona una conversación de la lista lateral para supervisar los mensajes en vivo.</p>
-                <div class="mt-4 flex items-center gap-2 text-xs text-slate-400">
-                    <i data-lucide="shield-check" class="w-4 h-4 text-emerald-500"></i>
-                    <span>Comunicaciones auditadas y seguras</span>
-                </div>
+                <p class="text-xs text-slate-500 max-w-sm mt-1">Selecciona una conversación para supervisar mensajes, imágenes y control humano/IA.</p>
             </div>
 
-            <!-- Contenedor del Chat Activo -->
             <div id="detalle" class="hidden flex-1 flex flex-col h-full overflow-hidden">
-                
-                <!-- 1. HEADER DEL CHAT FIJO ARRIBA -->
                 <header class="p-3 md:px-5 md:py-3 border-b border-slate-200 bg-white flex items-center justify-between gap-3 shrink-0 z-10 shadow-xs">
                     <div class="flex items-center gap-3 min-w-0">
-                        <div class="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
+                        <div id="detalle-avatar" class="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
                             <i data-lucide="user" class="w-5 h-5"></i>
                         </div>
                         <div class="min-w-0">
                             <div class="flex items-center gap-2 flex-wrap">
-                                <h2 id="detalle-telefono" class="text-sm md:text-base font-bold text-slate-900 truncate"></h2>
+                                <h2 id="detalle-nombre" class="text-sm md:text-base font-bold text-slate-900 truncate"></h2>
                                 <span id="detalle-modo" class="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider"></span>
+                                <button type="button" onclick="editarNombre()" class="p-1 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-50" title="Guardar nombre en agenda">
+                                    <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                                </button>
                             </div>
+                            <div id="detalle-telefono" class="text-[11px] text-slate-500 truncate"></div>
                             <div id="detalle-meta" class="text-[11px] text-slate-400 truncate mt-0.5"></div>
                         </div>
                     </div>
-
-                    <!-- Botones de Acción de Control -->
                     <div class="flex items-center gap-2 shrink-0">
                         <button id="btn-tomar" onclick="tomarControl()" class="hidden px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all shadow-xs flex items-center gap-1.5">
                             <i data-lucide="hand" class="w-3.5 h-3.5"></i>
@@ -126,7 +122,6 @@
                     </div>
                 </header>
 
-                <!-- Mini Barra Colapsable de Cartera/Expediente -->
                 <div id="barra-resumen" class="bg-slate-50 border-b border-slate-200 px-4 py-2 text-xs grid grid-cols-2 md:grid-cols-4 gap-3 shrink-0">
                     <div>
                         <span class="text-[10px] uppercase font-bold text-slate-400 block">Cédula</span>
@@ -146,14 +141,10 @@
                     </div>
                 </div>
 
-                <!-- 2. ÁREA DE MENSAJES CON SCROLL PROPIO (WHATSAPP STYLE CON BURBUJAS DE ALTO CONTRASTE) -->
-                <div id="mensajes" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-3.5 bg-[#efeae2]" style="background-image: radial-gradient(#d1d5db 0.8px, transparent 0.8px); background-size: 18px 18px;">
-                    <!-- Los mensajes se inyectan dinámicamente aquí -->
+                <div id="mensajes" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-1 bg-[#efeae2]" style="background-image: radial-gradient(#d1d5db 0.8px, transparent 0.8px); background-size: 18px 18px;">
                 </div>
 
-                <!-- 3. COMPOSITOR INFERIOR FIJO (SIEMPRE VISIBLE AL PIE) -->
                 <footer class="p-3 bg-[#f0f2f5] border-t border-slate-200 shrink-0 z-10 flex flex-col gap-1.5">
-                    <!-- Advertencia de Modo -->
                     <div id="modo-warning" class="hidden text-[11px] px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 flex items-center justify-between">
                         <span class="flex items-center gap-1.5">
                             <i data-lucide="alert-circle" class="w-3.5 h-3.5 text-amber-600"></i>
@@ -161,8 +152,6 @@
                         </span>
                         <button onclick="tomarControl()" class="underline font-bold hover:text-amber-900 ml-2">Tomar control</button>
                     </div>
-
-                    <!-- Fila de Entrada de Mensaje -->
                     <div class="flex items-center gap-2">
                         <div class="flex-1 bg-white rounded-2xl border border-slate-200 px-3.5 py-1.5 flex items-center gap-2 focus-within:ring-2 focus-within:ring-emerald-400 focus-within:border-emerald-400 shadow-xs transition-all">
                             <textarea id="texto" rows="1" placeholder="Escribe un mensaje de WhatsApp... (Enter para enviar)" class="flex-1 resize-none bg-transparent text-sm text-slate-800 outline-none max-h-28 py-1 placeholder-slate-400"></textarea>
@@ -179,20 +168,42 @@
                         <span><b>Enter</b> envía · <b>Shift+Enter</b> salto</span>
                     </div>
                 </footer>
-
             </div>
         </section>
     </div>
+</div>
+
+<!-- Lightbox imágenes -->
+<div id="lightbox" class="hidden fixed inset-0 z-[80] bg-black/80 items-center justify-center p-4" onclick="cerrarLightbox(event)">
+    <button type="button" class="absolute top-4 right-4 text-white/90 hover:text-white text-2xl font-bold" onclick="cerrarLightbox(true)" aria-label="Cerrar">✕</button>
+    <img id="lightbox-img" src="" alt="Adjunto" class="max-w-full max-h-[90vh] rounded-lg shadow-2xl object-contain" onclick="event.stopPropagation()">
+</div>
+
+<!-- Toast aviso IA -->
+<div id="toast-ia" class="hidden fixed bottom-5 right-5 z-[70] max-w-sm bg-blue-900 text-white text-xs rounded-2xl px-4 py-3 shadow-xl border border-blue-700">
+    <div class="font-bold mb-0.5">IA atendiendo</div>
+    <div id="toast-ia-text" class="text-blue-100"></div>
 </div>
 
 <script>
 let conversaciones = [];
 let actual = null;
 let resumenAbierto = true;
+let prevIaPhones = new Set(JSON.parse(sessionStorage.getItem('sup_ia_phones') || '[]'));
 const usuarioERP = {{ usuario|tojson }};
 
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+
+function iniciales(nombre, phone) {
+    const n = String(nombre || '').trim();
+    if (n) {
+        const parts = n.split(/\s+/).filter(Boolean);
+        if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+        return n.slice(0, 2).toUpperCase();
+    }
+    return String(phone || 'WA').replace(/\D/g, '').slice(-2) || 'WA';
 }
 
 function modoBadge(modo) {
@@ -220,24 +231,82 @@ async function api(url, options = {}) {
     return data;
 }
 
-function renderStats() {
+function parseFecha(fechaStr) {
+    if (!fechaStr) return null;
+    const d = new Date(fechaStr);
+    return isNaN(d.getTime()) ? null : d;
+}
+
+function formatHora(fechaStr) {
+    const d = parseFecha(fechaStr);
+    if (!d) return '';
+    return d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+}
+
+function inicioDia(d) {
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function etiquetaDia(fechaStr) {
+    const d = parseFecha(fechaStr);
+    if (!d) return '';
+    const hoy = new Date();
+    const diff = inicioDia(hoy) - inicioDia(d);
+    const unDia = 24 * 60 * 60 * 1000;
+    if (diff === 0) return 'Hoy';
+    if (diff === unDia) return 'Ayer';
+    return d.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function claveDia(fechaStr) {
+    const d = parseFecha(fechaStr);
+    if (!d) return 'sin-fecha';
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function renderStats(avisoIa) {
     const total = conversaciones.length;
     const human = conversaciones.filter(x => String(x.mode_current || x.modo || '').toUpperCase() === 'HUMANO').length;
     const agent = total - human;
     document.getElementById('stat-total').textContent = total;
     document.getElementById('stat-agent').textContent = agent;
     document.getElementById('stat-human').textContent = human;
+
+    const wrap = document.getElementById('stat-agent-wrap');
+    const banner = document.getElementById('aviso-ia');
+    const text = document.getElementById('aviso-ia-text');
+    if (agent > 0) {
+        wrap.classList.add('ring-2', 'ring-blue-300');
+        banner.classList.remove('hidden');
+        text.textContent = (avisoIa && avisoIa.mensaje) || `La IA está atendiendo ${agent} conversación(es).`;
+    } else {
+        wrap.classList.remove('ring-2', 'ring-blue-300');
+        banner.classList.add('hidden');
+    }
+
+    const iaPhones = new Set(
+        conversaciones
+            .filter(x => String(x.mode_current || x.modo || '').toUpperCase() !== 'HUMANO')
+            .map(x => String(x.phone || x.telefono || ''))
+    );
+    const nuevas = [...iaPhones].filter(p => p && !prevIaPhones.has(p));
+    if (nuevas.length && prevIaPhones.size > 0) {
+        mostrarToastIa(`${nuevas.length} conversación(es) nueva(s) bajo atención de la IA.`);
+    }
+    prevIaPhones = iaPhones;
+    sessionStorage.setItem('sup_ia_phones', JSON.stringify([...iaPhones]));
 }
 
-function formatHora(fechaStr) {
-    if (!fechaStr) return '';
-    try {
-        const d = new Date(fechaStr);
-        if (!isNaN(d.getTime())) {
-            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
-    } catch (_) {}
-    return String(fechaStr).slice(-8, -3) || '';
+function mostrarToastIa(msg) {
+    const t = document.getElementById('toast-ia');
+    document.getElementById('toast-ia-text').textContent = msg;
+    t.classList.remove('hidden');
+    clearTimeout(window._toastIaTimer);
+    window._toastIaTimer = setTimeout(() => t.classList.add('hidden'), 6000);
+}
+
+function displayNombre(c) {
+    return c.display_name || c.nombre || c.name || c.phone || c.telefono || '';
 }
 
 function renderLista() {
@@ -248,24 +317,31 @@ function renderLista() {
     }
     box.innerHTML = conversaciones.map(c => {
         const phone = c.phone || c.telefono || c.numero || '';
+        const nombre = displayNombre(c);
         const cedula = c.identification || c.identificacion || c.cedula || '';
         const mode = c.mode_current || c.modo || 'AGENTE';
         const selected = actual && String(actual.phone || actual.telefono || '') === String(phone);
         const lastMsg = c.last_message || c.ultimo_mensaje || 'Sin mensajes recientes';
         const hora = formatHora(c.last_activity || c.ultima_actividad);
+        const ia = String(mode).toUpperCase() !== 'HUMANO';
+        const titulo = nombre && nombre !== phone ? nombre : phone;
+        const sub = nombre && nombre !== phone ? phone : (cedula ? `CC: ${cedula}` : 'Sin cédula');
 
         return `
         <button onclick="seleccionar('${escapeHtml(String(phone))}')" class="w-full text-left p-3 hover:bg-slate-50 transition-colors flex items-center gap-3 ${selected ? 'bg-emerald-50/70 border-r-4 border-emerald-600' : ''}">
-            <div class="w-10 h-10 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-xs shrink-0">
-                ${phone.slice(-3) || 'WA'}
+            <div class="relative shrink-0">
+                <div class="w-10 h-10 rounded-full ${ia ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-800'} flex items-center justify-center font-bold text-xs">
+                    ${escapeHtml(iniciales(nombre, phone))}
+                </div>
+                ${ia ? '<span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-blue-500 border-2 border-white" title="IA atendiendo"></span>' : ''}
             </div>
             <div class="min-w-0 flex-1">
                 <div class="flex items-center justify-between gap-1">
-                    <span class="font-bold text-xs text-slate-900 truncate">${escapeHtml(phone)}</span>
+                    <span class="font-bold text-xs text-slate-900 truncate">${escapeHtml(titulo)}</span>
                     <span class="text-[10px] text-slate-400 shrink-0">${escapeHtml(hora)}</span>
                 </div>
                 <div class="flex items-center justify-between gap-1 mt-0.5">
-                    <span class="text-[11px] text-slate-500 truncate">CC: ${escapeHtml(cedula || 'No detectada')}</span>
+                    <span class="text-[11px] text-slate-500 truncate">${escapeHtml(sub)}</span>
                     ${modoBadge(mode)}
                 </div>
                 <p class="text-[11px] text-slate-400 truncate mt-1">${escapeHtml(lastMsg)}</p>
@@ -280,13 +356,18 @@ async function cargarConversaciones() {
         const buscar = encodeURIComponent(document.getElementById('buscar').value.trim());
         const data = await api(`/supervision-agente/api/conversaciones?limit=200&buscar=${buscar}`);
         conversaciones = normalizarLista(data);
-        
+
         document.getElementById('conexion').className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-emerald-50 border-emerald-200 text-emerald-700 text-xs font-medium';
         document.getElementById('conexion-dot').className = 'w-2 h-2 rounded-full bg-emerald-500';
         document.getElementById('conexion-text').textContent = 'Conectado';
-        
-        renderStats();
+
+        renderStats(data.aviso_ia);
         renderLista();
+        if (actual) {
+            const phone = actual.phone || actual.telefono;
+            const refreshed = conversaciones.find(x => String(x.phone || x.telefono) === String(phone));
+            if (refreshed) actual = refreshed;
+        }
     } catch (e) {
         document.getElementById('conexion').className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-rose-50 border-rose-200 text-rose-700 text-xs font-medium';
         document.getElementById('conexion-dot').className = 'w-2 h-2 rounded-full bg-rose-500';
@@ -295,31 +376,57 @@ async function cargarConversaciones() {
     }
 }
 
+async function editarNombre() {
+    const telefono = telefonoActual();
+    if (!telefono) return;
+    const actualNombre = actual ? (actual.nombre || actual.name || '') : '';
+    const nombre = prompt('Nombre para este número (agenda WhatsApp):', actualNombre || '');
+    if (nombre === null) return;
+    const limpio = nombre.trim();
+    if (!limpio) {
+        alert('El nombre no puede estar vacío.');
+        return;
+    }
+    try {
+        await api('/supervision-agente/api/agenda', {
+            method: 'POST',
+            body: JSON.stringify({ telefono, nombre: limpio })
+        });
+        await cargarConversaciones();
+        await seleccionar(telefono);
+    } catch (e) {
+        alert(e.message);
+    }
+}
+
 async function seleccionar(phone) {
     try {
         const c = conversaciones.find(x => String(x.phone || x.telefono || x.numero || '') === String(phone)) || {phone};
         actual = c;
         renderLista();
-        
+
         document.getElementById('detalle-vacio').classList.add('hidden');
         document.getElementById('detalle').classList.remove('hidden');
-        
+
         const telefono = c.phone || c.telefono || c.numero || phone;
-        document.getElementById('detalle-telefono').textContent = telefono;
-        
+        const nombre = displayNombre(c);
+        document.getElementById('detalle-nombre').textContent = (nombre && nombre !== telefono) ? nombre : telefono;
+        document.getElementById('detalle-telefono').textContent = (nombre && nombre !== telefono) ? telefono : (c.identificacion ? `CC ${c.identificacion}` : 'Sin nombre en agenda — clic en lápiz para guardar');
+        document.getElementById('detalle-avatar').textContent = iniciales(nombre, telefono);
+
         const modo = String(c.mode_current || c.modo || 'AGENTE').toUpperCase();
         const badge = document.getElementById('detalle-modo');
         badge.textContent = modo;
-        badge.className = modo === 'HUMANO' 
-            ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200' 
+        badge.className = modo === 'HUMANO'
+            ? 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200'
             : 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200';
-        
+
         document.getElementById('detalle-meta').textContent = `Iniciado: ${c.started_at || c.inicio || '-'} · Actualizado: ${c.last_activity || c.ultima_actividad || '-'}`;
         document.getElementById('d-cedula').textContent = c.identification || c.identificacion || c.cedula || 'No detectada';
         document.getElementById('d-deuda').textContent = c.debt_state || c.estado_deuda || 'Sin mora activa';
         document.getElementById('d-liquidacion').textContent = c.liquidation_state || c.estado_liquidacion || 'Sin liquidación';
-        document.getElementById('d-ultima').textContent = c.last_activity || c.ultima_actividad || '-';
-        
+        document.getElementById('d-ultima').textContent = formatHora(c.last_activity || c.ultima_actividad) || (c.last_activity || c.ultima_actividad || '-');
+
         const isHumano = modo === 'HUMANO';
         document.getElementById('btn-tomar').classList.toggle('hidden', isHumano);
         document.getElementById('btn-devolver').classList.toggle('hidden', !isHumano);
@@ -327,64 +434,123 @@ async function seleccionar(phone) {
 
         await cargarMensajes(telefono);
         if (window.lucide) lucide.createIcons();
-    } catch (e) { 
-        alert(e.message); 
+    } catch (e) {
+        alert(e.message);
     }
 }
 
-/**
- * DETERMINACIÓN PRECISA Y RIGUROSA DEL EMISOR DEL MENSAJE:
- * - DEUDOR (Inbound / Cliente) -> Izquierda, Burbuja Blanca.
- * - AGENTE (Outbound / Bot IA) -> Derecha, Burbuja Verde WhatsApp (#dcf8c6).
- * - HUMANO (Outbound / Abogado) -> Derecha, Burbuja Ámbar (#fef3c7).
- * - SISTEMA (Eventos internos) -> Centro, Píldora Gris.
- */
 function clasificarEmisor(m) {
     const role = String(m.role || m.rol || '').toUpperCase().trim();
     const direction = String(m.direction || m.direccion || m.type || m.tipo || '').toUpperCase().trim();
     const author = String(m.author || m.autor || m.sender || m.remitente || m.from || '').toUpperCase().trim();
     const content = String(m.content || m.contenido || m.mensaje || '').trim();
     const fromMe = m.from_me !== undefined ? m.from_me : (m.fromMe !== undefined ? m.fromMe : m.is_from_me);
+    const tipoMsg = String(m.tipo_mensaje || '').toLowerCase();
 
-    // 1. Mensajes internos del sistema
-    if (author === 'SISTEMA' || author === 'SYSTEM' || role === 'SYSTEM' || role === 'SISTEMA' || 
-        content.startsWith('[SISTEMA') || content.startsWith('[SYSTEM') || content.startsWith('[PROMPT') || content.startsWith('[INTERNAL')) {
+    if (author === 'SISTEMA' || author === 'SYSTEM' || role === 'SYSTEM' || role === 'SISTEMA' ||
+        content.startsWith('[SISTEMA') || content.startsWith('[SYSTEM') || content.startsWith('[PROMPT') || content.startsWith('[INTERNAL') ||
+        tipoMsg === 'estado_deuda') {
         return 'SISTEMA';
     }
-
-    // 2. Mensajes manuales enviados por el Abogado (Humano)
-    if (author === 'HUMANO' || author === 'HUMAN' || author === 'ABOGADO' || author === 'SUPERVISOR' || 
-        role === 'HUMANO' || role === 'HUMAN' || m.human === true || (m.usuario_humano && direction !== 'IN' && direction !== 'INBOUND')) {
+    if (author === 'HUMANO' || author === 'HUMAN' || author === 'ABOGADO' || author === 'SUPERVISOR' ||
+        role === 'HUMANO' || role === 'HUMAN' || m.human === true || (m.usuario_humano && direction !== 'IN' && direction !== 'INBOUND' && direction !== 'ENTRANTE')) {
         return 'HUMANO';
     }
-
-    // 3. Mensajes del Deudor (Entrantes / Inbound / User)
     const esInboundDirection = ['IN', 'INBOUND', 'INCOMING', 'ENTRANTE', 'ENTRADA', 'RECEIVED'].includes(direction);
     const esUserRole = ['USER', 'CLIENTE', 'CLIENT', 'DEUDOR', 'DEBTOR', 'CUSTOMER', 'CONTACT'].includes(role);
     const esUserAuthor = ['USER', 'CLIENTE', 'CLIENT', 'DEUDOR', 'DEBTOR', 'CUSTOMER', 'CONTACT'].includes(author);
     const esPhoneAuthor = actual && String(actual.phone || actual.telefono || '').replace(/\D/g, '') === author.replace(/\D/g, '') && author.length > 5;
-
     if (esInboundDirection || esUserRole || esUserAuthor || esPhoneAuthor || fromMe === false) {
         return 'DEUDOR';
     }
-
-    // 4. Mensajes del Agente IA (Salientes / Outbound / Assistant)
     const esOutboundDirection = ['OUT', 'OUTBOUND', 'SALIENTE', 'OUTGOING', 'SENT'].includes(direction);
     const esAssistantRole = ['ASSISTANT', 'BOT', 'AGENT', 'AGENTE', 'IA', 'AI'].includes(role);
     const esAgentAuthor = ['AGENTE', 'AGENT', 'BOT', 'IA', 'AI', 'ASSISTANT'].includes(author);
-
     if (esOutboundDirection || esAssistantRole || esAgentAuthor || fromMe === true) {
         return 'AGENTE';
     }
-
-    // 5. Si no se puede determinar por metadatos, analizamos el contenido:
-    // Por ejemplo, los PDFs o avisos enviados por el bot suelen decir "[Documento PDF enviado]"
-    if (content.includes('[Documento PDF enviado]') || content.includes('liquidación') && content.includes('propuesta')) {
+    if (content.includes('[Documento PDF enviado]') || (content.includes('liquidación') && content.includes('propuesta'))) {
         return 'AGENTE';
     }
-
-    // Por descarte seguro: si el mensaje proviene del contacto, se trata del Deudor
     return 'DEUDOR';
+}
+
+function abrirLightbox(url) {
+    if (!url) return;
+    const box = document.getElementById('lightbox');
+    document.getElementById('lightbox-img').src = url;
+    box.classList.remove('hidden');
+    box.classList.add('flex');
+}
+
+function cerrarLightbox(ev) {
+    if (ev !== true && ev && ev.target && ev.target.id !== 'lightbox') return;
+    const box = document.getElementById('lightbox');
+    box.classList.add('hidden');
+    box.classList.remove('flex');
+    document.getElementById('lightbox-img').src = '';
+}
+
+function renderAdjuntos(adjuntos) {
+    if (!Array.isArray(adjuntos) || !adjuntos.length) return '';
+    return adjuntos.map(a => {
+        const tipo = a.tipo || '';
+        if (tipo === 'image' && a.url) {
+            return `
+            <div class="mt-2">
+                <button type="button" onclick="abrirLightbox('${escapeHtml(a.url)}')" class="block group text-left">
+                    <img src="${escapeHtml(a.url)}" alt="Imagen" class="max-w-[220px] max-h-[220px] rounded-lg border border-black/10 object-cover shadow-sm group-hover:opacity-95 cursor-zoom-in" loading="lazy" onerror="this.parentElement.innerHTML='<span class=\\'text-[11px] text-rose-600\\'>No se pudo cargar la imagen</span>'">
+                    <span class="text-[10px] text-slate-500 mt-0.5 inline-block">Clic para ampliar</span>
+                </button>
+            </div>`;
+        }
+        if (tipo === 'image_placeholder') {
+            return `
+            <div class="mt-2 flex items-center gap-2 rounded-xl bg-slate-100/80 border border-slate-200 px-3 py-2 text-[11px] text-slate-700">
+                <i data-lucide="image" class="w-4 h-4 text-slate-500"></i>
+                <div>
+                    <div class="font-semibold">${escapeHtml(a.caption || 'Imagen recibida')}</div>
+                    <div class="text-slate-500">Vista previa pendiente: el bot aún no guarda la URL/media_id.</div>
+                </div>
+            </div>`;
+        }
+        if ((tipo === 'document' || tipo === 'file') && a.url) {
+            const esPdf = (a.mime || '').includes('pdf') || String(a.url).toLowerCase().includes('.pdf');
+            return `
+            <div class="mt-2">
+                <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener noreferrer"
+                   class="inline-flex items-center gap-2 rounded-xl bg-white/70 border border-slate-200 px-3 py-2 text-[11px] font-semibold text-slate-800 hover:bg-white">
+                    <i data-lucide="${esPdf ? 'file-text' : 'paperclip'}" class="w-4 h-4"></i>
+                    <span>${escapeHtml(a.caption || (esPdf ? 'Abrir PDF' : 'Abrir adjunto'))}</span>
+                </a>
+            </div>`;
+        }
+        if (tipo === 'document_placeholder') {
+            return `
+            <div class="mt-2 inline-flex items-center gap-2 rounded-xl bg-white/70 border border-slate-200 px-3 py-2 text-[11px] text-slate-700">
+                <i data-lucide="file" class="w-4 h-4"></i>
+                <span>${escapeHtml(a.caption || 'Documento')}</span>
+            </div>`;
+        }
+        return '';
+    }).join('');
+}
+
+function linkifySeguro(textoEscapado) {
+    // texto ya escapado; reinyectar solo URLs http(s) como enlaces
+    return textoEscapado.replace(
+        /(https?:\/\/[^\s&lt;]+)/g,
+        '<a href="$1" target="_blank" rel="noopener noreferrer" class="underline break-all">$1</a>'
+    );
+}
+
+function separadorDiaHtml(etiqueta) {
+    return `
+    <div class="flex justify-center my-3 sticky top-1 z-[1]">
+        <div class="bg-[#e1f2fb] text-slate-700 text-[11px] font-semibold px-3 py-1 rounded-lg shadow-xs border border-sky-100 capitalize">
+            ${escapeHtml(etiqueta)}
+        </div>
+    </div>`;
 }
 
 async function cargarMensajes(phone) {
@@ -392,24 +558,36 @@ async function cargarMensajes(phone) {
     try {
         const data = await api(`/supervision-agente/api/conversaciones/${encodeURIComponent(phone)}/mensajes?limit=1000`);
         const mensajes = data.mensajes || data.messages || data.data || [];
-        
+
         if (!mensajes.length) {
             box.innerHTML = '<div class="flex items-center justify-center h-full text-slate-400 text-xs">Sin mensajes registrados en esta conversación.</div>';
             return;
         }
 
-        const nombreDeudor = actual ? (actual.name || actual.nombre || actual.identification || actual.cedula || 'Deudor') : 'Deudor';
+        const nombreDeudor = actual
+            ? (actual.nombre || actual.name || data.nombre_contacto || actual.identification || actual.cedula || 'Deudor')
+            : (data.nombre_contacto || 'Deudor');
 
-        box.innerHTML = mensajes.map(m => {
+        let html = '';
+        let ultimoDia = null;
+
+        for (const m of mensajes) {
+            const fechaRef = m.created_at || m.fecha;
+            const diaKey = claveDia(fechaRef);
+            if (diaKey !== ultimoDia) {
+                const etiq = etiquetaDia(fechaRef) || 'Sin fecha';
+                html += separadorDiaHtml(etiq);
+                ultimoDia = diaKey;
+            }
+
             const emisor = clasificarEmisor(m);
-            const hora = formatHora(m.created_at || m.fecha);
-            const content = escapeHtml(m.content || m.contenido || m.mensaje || '');
+            const hora = formatHora(fechaRef);
+            const rawContent = m.content || m.contenido || m.mensaje || '';
+            const content = linkifySeguro(escapeHtml(rawContent));
+            const adjHtml = renderAdjuntos(m.adjuntos || []);
 
-            // ==========================================
-            // CASO 1: SISTEMA INTERNO (Píldora centrada)
-            // ==========================================
             if (emisor === 'SISTEMA') {
-                return `
+                html += `
                 <div class="flex justify-center my-3">
                     <div class="max-w-[90%] md:max-w-[80%] bg-slate-200/90 text-slate-700 text-[11px] rounded-xl px-4 py-2 shadow-xs border border-slate-300/60 leading-relaxed font-mono">
                         <div class="flex items-center gap-1 font-bold text-slate-600 mb-0.5">
@@ -417,129 +595,112 @@ async function cargarMensajes(phone) {
                             <span>REGISTRO DEL SISTEMA</span>
                         </div>
                         <div class="whitespace-pre-wrap">${content}</div>
+                        ${adjHtml}
+                        ${hora ? `<div class="text-[10px] text-slate-500 text-right mt-1">${escapeHtml(hora)}</div>` : ''}
                     </div>
                 </div>`;
+                continue;
             }
 
-            // ==========================================
-            // CASO 2: DEUDOR / CLIENTE (IZQUIERDA, BLANCA)
-            // ==========================================
             if (emisor === 'DEUDOR') {
-                return `
+                html += `
                 <div class="flex justify-start my-1">
-                    <div class="max-w-[85%] md:max-w-[72%] bg-white text-slate-800 rounded-2xl rounded-tl-xs px-4 py-2.5 shadow-xs border border-slate-200 relative">
-                        <!-- Etiqueta clara de Deudor -->
+                    <div class="max-w-[85%] md:max-w-[72%] bg-white text-slate-800 rounded-2xl rounded-tl-xs px-3.5 py-2 shadow-xs border border-slate-200 relative">
                         <div class="flex items-center gap-1.5 mb-1 pb-0.5 border-b border-slate-100">
                             <span class="w-2 h-2 rounded-full bg-slate-400"></span>
                             <span class="text-[11px] font-bold text-slate-700">Deudor (${escapeHtml(nombreDeudor)})</span>
                         </div>
-                        <!-- Contenido -->
-                        <div class="text-xs md:text-sm whitespace-pre-wrap text-slate-900 leading-relaxed font-normal">${content}</div>
-                        <!-- Hora -->
-                        <div class="text-[10px] text-slate-400 text-right mt-1">
+                        ${rawContent && !String(rawContent).startsWith('[Imagen') ? `<div class="text-xs md:text-sm whitespace-pre-wrap text-slate-900 leading-relaxed font-normal">${content}</div>` : ''}
+                        ${adjHtml}
+                        <div class="text-[10px] text-slate-400 text-right mt-1 leading-none">
                             <span>${escapeHtml(hora)}</span>
                         </div>
                     </div>
                 </div>`;
+                continue;
             }
 
-            // ==========================================
-            // CASO 3: CONTROL HUMANO / ABOGADO (DERECHA, ÁMBAR)
-            // ==========================================
             if (emisor === 'HUMANO') {
-                return `
+                html += `
                 <div class="flex justify-end my-1">
-                    <div class="max-w-[85%] md:max-w-[72%] bg-amber-100 text-amber-950 rounded-2xl rounded-tr-xs px-4 py-2.5 shadow-xs border border-amber-300/80 relative">
-                        <!-- Etiqueta clara de Abogado -->
+                    <div class="max-w-[85%] md:max-w-[72%] bg-amber-100 text-amber-950 rounded-2xl rounded-tr-xs px-3.5 py-2 shadow-xs border border-amber-300/80 relative">
                         <div class="flex items-center justify-between gap-3 mb-1 pb-0.5 border-b border-amber-200/70">
-                            <span class="text-[11px] font-bold text-amber-900 flex items-center gap-1">
-                                <span>⚖️</span>
-                                <span>Tú (Control Humano / Abogado)</span>
-                            </span>
+                            <span class="text-[11px] font-bold text-amber-900">Tú (Control Humano / Abogado)</span>
                         </div>
-                        <!-- Contenido -->
                         <div class="text-xs md:text-sm whitespace-pre-wrap text-amber-950 leading-relaxed">${content}</div>
-                        <!-- Hora y check -->
-                        <div class="text-[10px] text-amber-800/80 text-right mt-1 flex items-center justify-end gap-1">
+                        ${adjHtml}
+                        <div class="text-[10px] text-amber-800/80 text-right mt-1 flex items-center justify-end gap-1 leading-none">
                             <span>${escapeHtml(hora)}</span>
                             <i data-lucide="check-check" class="w-3.5 h-3.5 text-amber-700"></i>
                         </div>
                     </div>
                 </div>`;
+                continue;
             }
 
-            // ==========================================
-            // CASO 4: AGENTE IA / BOT (DERECHA, VERDE WHATSAPP)
-            // ==========================================
-            return `
+            html += `
             <div class="flex justify-end my-1">
-                <div class="max-w-[85%] md:max-w-[72%] bg-[#dcf8c6] text-emerald-950 rounded-2xl rounded-tr-xs px-4 py-2.5 shadow-xs border border-emerald-300/70 relative">
-                    <!-- Etiqueta clara de Agente IA -->
+                <div class="max-w-[85%] md:max-w-[72%] bg-[#dcf8c6] text-emerald-950 rounded-2xl rounded-tr-xs px-3.5 py-2 shadow-xs border border-emerald-300/70 relative">
                     <div class="flex items-center justify-between gap-3 mb-1 pb-0.5 border-b border-emerald-200/70">
-                        <span class="text-[11px] font-bold text-emerald-800 flex items-center gap-1">
-                            <span>🤖</span>
-                            <span>Agente IA (Cobranzas)</span>
-                        </span>
+                        <span class="text-[11px] font-bold text-emerald-800">Agente IA (Cobranzas)</span>
                     </div>
-                    <!-- Contenido -->
                     <div class="text-xs md:text-sm whitespace-pre-wrap text-emerald-950 leading-relaxed">${content}</div>
-                    <!-- Hora y check -->
-                    <div class="text-[10px] text-emerald-700/80 text-right mt-1 flex items-center justify-end gap-1">
+                    ${adjHtml}
+                    <div class="text-[10px] text-emerald-700/80 text-right mt-1 flex items-center justify-end gap-1 leading-none">
                         <span>${escapeHtml(hora)}</span>
                         <i data-lucide="check-check" class="w-3.5 h-3.5 text-emerald-600"></i>
                     </div>
                 </div>
             </div>`;
-        }).join('');
+        }
 
-        // Scrollear automáticamente hacia el final para ver los últimos mensajes
+        box.innerHTML = html;
         box.scrollTop = box.scrollHeight;
         if (window.lucide) lucide.createIcons();
-    } catch (e) { 
-        box.innerHTML = `<div class="text-center text-rose-500 text-xs py-10">${escapeHtml(e.message)}</div>`; 
+    } catch (e) {
+        box.innerHTML = `<div class="text-center text-rose-500 text-xs py-10">${escapeHtml(e.message)}</div>`;
     }
 }
 
-function telefonoActual() { 
-    return actual && (actual.phone || actual.telefono || actual.numero); 
+function telefonoActual() {
+    return actual && (actual.phone || actual.telefono || actual.numero);
 }
 
 async function tomarControl() {
-    const telefono = telefonoActual(); 
+    const telefono = telefonoActual();
     if (!telefono) return;
-    if (!confirm(`¿Tomar control manual de ${telefono}?
-La IA pausará sus respuestas automáticas hasta que la reactives.`)) return;
-    try { 
+    if (!confirm(`¿Tomar control manual de ${telefono}?\nLa IA pausará sus respuestas automáticas hasta que la reactives.`)) return;
+    try {
         await api('/supervision-agente/api/tomar-control', {
-            method:'POST', 
+            method:'POST',
             body: JSON.stringify({telefono, usuario: usuarioERP})
-        }); 
-        await cargarConversaciones(); 
-        await seleccionar(telefono); 
-    } catch (e) { 
-        alert(e.message); 
+        });
+        await cargarConversaciones();
+        await seleccionar(telefono);
+    } catch (e) {
+        alert(e.message);
     }
 }
 
 async function devolverAgente() {
-    const telefono = telefonoActual(); 
+    const telefono = telefonoActual();
     if (!telefono) return;
-    if (!confirm(`¿Devolver la conversación de ${telefono} al agente IA?
-La IA reanudará la atención automática.`)) return;
-    try { 
+    if (!confirm(`¿Devolver la conversación de ${telefono} al agente IA?\nLa IA reanudará la atención automática.`)) return;
+    try {
         await api('/supervision-agente/api/devolver-agente', {
-            method:'POST', 
+            method:'POST',
             body: JSON.stringify({telefono, usuario: usuarioERP})
-        }); 
-        await cargarConversaciones(); 
-        await seleccionar(telefono); 
-    } catch (e) { 
-        alert(e.message); 
+        });
+        mostrarToastIa(`IA retomó la atención de ${telefono}`);
+        await cargarConversaciones();
+        await seleccionar(telefono);
+    } catch (e) {
+        alert(e.message);
     }
 }
 
 async function enviarMensaje() {
-    const telefono = telefonoActual(); 
+    const telefono = telefonoActual();
     const input = document.getElementById('texto');
     const texto = input.value.trim();
     if (!telefono || !texto) return;
@@ -550,15 +711,15 @@ async function enviarMensaje() {
 
     try {
         await api('/supervision-agente/api/mensaje', {
-            method:'POST', 
+            method:'POST',
             body: JSON.stringify({telefono, mensaje: texto, usuario: usuarioERP})
         });
         input.value = '';
         input.style.height = 'auto';
         await cargarMensajes(telefono);
         await cargarConversaciones();
-    } catch (e) { 
-        alert('Error enviando mensaje: ' + e.message); 
+    } catch (e) {
+        alert('Error enviando mensaje: ' + e.message);
     } finally {
         btn.disabled = false;
         btn.classList.remove('opacity-50');
@@ -566,7 +727,6 @@ async function enviarMensaje() {
     }
 }
 
-// Escuchador de teclado: Enter para enviar, Shift+Enter para salto de línea
 const inputTexto = document.getElementById('texto');
 inputTexto.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -574,15 +734,15 @@ inputTexto.addEventListener('keydown', function(e) {
         enviarMensaje();
     }
 });
-
-// Auto-ajuste de altura del textarea (hasta 4 renglones)
 inputTexto.addEventListener('input', function() {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 110) + 'px';
 });
-
-document.getElementById('buscar').addEventListener('keydown', e => { 
-    if (e.key === 'Enter') cargarConversaciones(); 
+document.getElementById('buscar').addEventListener('keydown', e => {
+    if (e.key === 'Enter') cargarConversaciones();
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') cerrarLightbox(true);
 });
 
 cargarConversaciones();
