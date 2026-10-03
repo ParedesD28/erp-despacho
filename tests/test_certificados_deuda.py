@@ -281,6 +281,62 @@ class MatchingUnidadTests(unittest.TestCase):
         # Torre letra + apto: pegado no aplica; exacto por claves de código
         self.assertFalse(repo._compatible_con_codigo_cuenta("TA-431", "1431"))
         self.assertTrue(repo._compatible_con_codigo_cuenta("TA-1431", "TA1431"))
+        # Mirador: codigo = torre||apto → 431≡4-31, 1431≡14-31; no cruzar
+        self.assertTrue(repo._compatible_con_codigo_cuenta("4-31", "431"))
+        self.assertTrue(repo._compatible_con_codigo_cuenta("14-31", "1431"))
+        self.assertFalse(repo._compatible_con_codigo_cuenta("14-31", "431"))
+        self.assertFalse(repo._compatible_con_codigo_cuenta("4-31", "1431"))
+        self.assertFalse(repo._compatible_con_codigo_cuenta("1-431", "431"))
+
+    def test_elegir_mirador_431_vs_1431_torre_apto(self):
+        """Cartera Mirador: tercero 431→4-31 (Jaramillo); 1431→14-31 (Vidal)."""
+        filas = [
+            {
+                "inmueble_id": 1,
+                "torre_apto": "4-31",
+                "conjunto_id": 35,
+                "conjunto_nombre": "MIRADOR DE LLANO GRANDE PH",
+                "conjunto_catalogo": "MIRADOR DE LLANO GRANDE PH",
+                "copropiedad_nombre": None,
+                "titular_nombre": "JARAMILLO GOMEZ JHON EDISON",
+                "titular_cedula": "1088244598",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+            {
+                "inmueble_id": 2,
+                "torre_apto": "14-31",
+                "conjunto_id": 35,
+                "conjunto_nombre": "MIRADOR DE LLANO GRANDE PH",
+                "conjunto_catalogo": "MIRADOR DE LLANO GRANDE PH",
+                "copropiedad_nombre": None,
+                "titular_nombre": "VIDAL TORO KELLY VANESSA",
+                "titular_cedula": "1089746525",
+                "contacto_nombre": None,
+                "contacto_cedula": None,
+            },
+        ]
+        h431 = repo._elegir_por_unidad(
+            filas,
+            repo._claves_unidad("", bloque="4", apartamento="31"),
+            titular="JARAMILLO GOMEZ JHON EDISON",
+            codigo_cuenta="431",
+        )
+        self.assertEqual(h431["inmueble_id"], 1)
+        h1431 = repo._elegir_por_unidad(
+            filas,
+            repo._claves_unidad("", bloque="14", apartamento="31"),
+            titular="VIDAL TORO KELLY VANESSA",
+            codigo_cuenta="1431",
+        )
+        self.assertEqual(h1431["inmueble_id"], 2)
+        # Bloque/apto de Vidal + Identificación de Jaramillo → no cruzar
+        h_cross = repo._elegir_por_unidad(
+            filas,
+            repo._claves_unidad("", bloque="14", apartamento="31"),
+            codigo_cuenta="431",
+        )
+        self.assertIsNone(h_cross)
 
     def test_elegir_prioriza_codigo_cuenta_sobre_sufijo_apto(self):
         """PDF COLON: codigo=1431 bloque=1 apto=431 no debe caer en Neon 431."""
@@ -863,6 +919,18 @@ class GeneracionWordTests(unittest.TestCase):
             svc.nombre_archivo_certificado("ANA PÉREZ GOMEZ"),
             "Certificado_ANA_PÉREZ_GOMEZ.docx",
         )
+        self.assertEqual(
+            svc.nombre_archivo_certificado(
+                "JHON EDISON JARAMILLO GOMEZ", torre_apto="4-31"
+            ),
+            "Certificado_JHON_EDISON_JARAMILLO_GOMEZ_4-31.docx",
+        )
+        self.assertEqual(
+            svc.nombre_archivo_certificado(
+                "VIDAL TORO KELLY VANESSA", codigo_cuenta="1431"
+            ),
+            "Certificado_VIDAL_TORO_KELLY_VANESSA_1431.docx",
+        )
 
     def test_generar_falla_si_neon_no_encuentra(self):
         with patch(
@@ -935,7 +1003,7 @@ class GeneracionWordTests(unittest.TestCase):
                 representante_nombre="RL",
                 representante_cedula="99",
             )
-        self.assertEqual(nombre, "Certificado_JUAN_LOPEZ.docx")
+        self.assertEqual(nombre, "Certificado_JUAN_LOPEZ_2-202.docx")
         self.assertEqual(meta["inmueble_id"], 7)
         self.assertEqual(meta["filas"], 1)
         self.assertEqual(meta["plantilla"], "CERTIFICADO_DE_DEUDA.docx")
@@ -1192,7 +1260,7 @@ class PoderConCertificadoTests(unittest.TestCase):
                 representante_nombre="RL",
                 representante_cedula="99",
             )
-        self.assertEqual(nombre, "Certificado_JUAN_LOPEZ.docx")
+        self.assertEqual(nombre, "Certificado_JUAN_LOPEZ_2-202.docx")
         self.assertTrue(meta["incluir_poder"])
         self.assertEqual(meta["plantilla_poder"], "PODER.docx")
         with zipfile.ZipFile(BytesIO(buf.getvalue())) as zf:
