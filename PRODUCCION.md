@@ -7,9 +7,14 @@ ERP:
 - `ERP_SESSION_SECRET` — secreto aleatorio largo (mínimo 32 caracteres). Es obligatorio y no se usa como fallback ninguna otra variable.
 - `LIQUIDADOR_API_KEY`
 - `PUBLIC_BASE_URL` — URL pública del servicio ERP, por ejemplo `https://gestionjudicial.onrender.com`.
-- `GEMINI_API_KEY` — recomendada; habilita fallback Gemini (gratis) en `/herramientas/estado-cuenta` cuando el PDF no tiene texto seleccionable (Print to PDF / escaneo). Secret en Render. Key gratis: https://aistudio.google.com/apikey. Ver `.env.example`, `PDF_IA_PROVIDER`, `ESTADO_CUENTA_IA_FALLBACK`.
-- `ANTHROPIC_API_KEY` — opcional; solo si `PDF_IA_PROVIDER=anthropic` (o sin Gemini y con esta key). Misma ruta de fallback PDF.
-- `PDF_IA_PROVIDER` — opcional; `gemini` (default) o `anthropic`.
+- `GEMINI_API_KEY` — recomendada; primer proveedor gratis del pool PDF (visión nativa) en `/herramientas/estado-cuenta` cuando no hay texto seleccionable. Key: https://aistudio.google.com/apikey.
+- `GROQ_API_KEY` — opcional gratis; visión por imágenes (PDF→JPEG). https://console.groq.com/
+- `OPENROUTER_API_KEY` — opcional gratis; router `openrouter/free` con visión. https://openrouter.ai/
+- `DEEPSEEK_API_KEY` — opcional barata (NO free tier). https://platform.deepseek.com/
+- `ANTHROPIC_API_KEY` — opcional; Claude al final del pool. Misma ruta de fallback PDF.
+- `PDF_IA_PROVIDERS` — opcional; cascada comma, ej. `gemini,groq,openrouter,deepseek,anthropic`. Sin setear: auto con las keys presentes (Claude último).
+- `PDF_IA_PROVIDER` — opcional; fuerza UN proveedor (compat). Preferir `PDF_IA_PROVIDERS`.
+- Ver `.env.example`, `ESTADO_CUENTA_IA_FALLBACK`, docs `ia-pool-modelos-gratuitos.md`.
 
 Agente:
 - `DATABASE_URL`

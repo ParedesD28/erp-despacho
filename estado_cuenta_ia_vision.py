@@ -1,9 +1,12 @@
 """
 Fallback IA (visión/PDF) para estados de cuenta sin texto nativo.
 
-Proveedores:
-  - gemini (default / gratis generoso): Google Gemini Flash multimodal
-  - anthropic (opcional): Claude vía document PDF
+Pool / cascada configurable (Claude al final):
+  - gemini (default, gratis): PDF nativo vía Google Gemini Flash
+  - groq (gratis): visión por imágenes (PDF→JPEG); modelo qwen/qwen3.8-27b
+  - openrouter (gratis): router free con visión por imágenes
+  - deepseek (barato, NO free): visión por imágenes (deepseek-flash)
+  - anthropic (último): Claude con document PDF
 
 Solo se usa cuando pypdf no encuentra texto seleccionable suficiente.
 Bolsa Global / mora NO se calculan aquí: la IA solo estructura cabecera +
@@ -12,52 +15,144 @@ movimientos; el motor determinista opera después sobre ese JSON.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import re
 import threading
 from typing import Any
 
+import requests
+
 # Un PDF imagen a la vez: no tumba lotes de nativos COLON en paralelo.
 _IA_SEMAPHORE = threading.Semaphore(1)
 _IA_TIMEOUT_S = max(30, min(int(os.environ.get("ESTADO_CUENTA_IA_TIMEOUT_S", "120")), 300))
 
 _PROVEEDOR_GEMINI = "gemini"
+_PROVEEDOR_GROQ = "groq"
+_PROVEEDOR_OPENROUTER = "openrouter"
+_PROVEEDOR_DEEPSEEK = "deepseek"
 _PROVEEDOR_ANTHROPIC = "anthropic"
+
+_PROVEEDORES_VALIDOS = frozenset(
+    {
+        _PROVEEDOR_GEMINI,
+        _PROVEEDOR_GROQ,
+        _PROVEEDOR_OPENROUTER,
+        _PROVEEDOR_DEEPSEEK,
+        _PROVEEDOR_ANTHROPIC,
+    }
+)
+
+# Orden default: gratis primero, Claude último.
+_POOL_DEFAULT = (
+    _PROVEEDOR_GEMINI,
+    _PROVEEDOR_GROQ,
+    _PROVEEDOR_OPENROUTER,
+    _PROVEEDOR_DEEPSEEK,
+    _PROVEEDOR_ANTHROPIC,
+)
+
 _MODELO_GEMINI_DEFAULT = "gemini-2.5-flash"
+_MODELO_GROQ_DEFAULT = "qwen/qwen3.8-27b"
+_MODELO_OPENROUTER_DEFAULT = "openrouter/free"
+_MODELO_DEEPSEEK_DEFAULT = "deepseek-flash"
 _MODELO_ANTHROPIC_DEFAULT = "claude-sonnet-5-5"
 
+_GROQ_MAX_IMAGES = 3  # límite documentado de Groq vision
+_PDF_MAX_PAGES_VISION = max(2, min(int(os.environ.get("PDF_IA_MAX_PAGES", "12")), 24))
+_PDF_RENDER_SCALE = float(os.environ.get("PDF_IA_RENDER_SCALE", "1.5") or "1.5")
 
-def proveedor_ia() -> str:
+_ALIAS_PROVEEDOR = {
+    "gemini": _PROVEEDOR_GEMINI,
+    "google": _PROVEEDOR_GEMINI,
+    "google-genai": _PROVEEDOR_GEMINI,
+    "groq": _PROVEEDOR_GROQ,
+    "openrouter": _PROVEEDOR_OPENROUTER,
+    "or": _PROVEEDOR_OPENROUTER,
+    "deepseek": _PROVEEDOR_DEEPSEEK,
+    "anthropic": _PROVEEDOR_ANTHROPIC,
+    "claude": _PROVEEDOR_ANTHROPIC,
+}
+
+
+def _normalizar_nombre_proveedor(raw: str) -> str | None:
+    key = (raw or "").strip().lower()
+    if not key:
+        return None
+    return _ALIAS_PROVEEDOR.get(key)
+
+
+def _parse_lista_proveedores(raw: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in (raw or "").split(","):
+        nombre = _normalizar_nombre_proveedor(part)
+        if not nombre or nombre in seen:
+            continue
+        seen.add(nombre)
+        out.append(nombre)
+    return out
+
+
+def proveedores_ia() -> list[str]:
     """
-    PDF_IA_PROVIDER / ESTADO_CUENTA_IA_PROVIDER → gemini|anthropic.
-    Sin override: Gemini si hay GEMINI_API_KEY; si no, Anthropic si hay key;
-    si ninguna key, default gemini (mensaje de error apunta al gratis).
+    Cascada de proveedores a probar en orden.
+
+    Prioridad:
+      1) PDF_IA_PROVIDERS / ESTADO_CUENTA_IA_PROVIDERS (lista comma)
+      2) PDF_IA_PROVIDER / ESTADO_CUENTA_IA_PROVIDER (uno solo)
+      3) Pool default filtrado a los que tienen API key
+         (si ninguno tiene key → pool default completo; el error apunta a Gemini)
     """
-    raw = (
+    multi = (
+        os.environ.get("PDF_IA_PROVIDERS")
+        or os.environ.get("ESTADO_CUENTA_IA_PROVIDERS")
+        or ""
+    ).strip()
+    if multi:
+        parsed = _parse_lista_proveedores(multi)
+        if parsed:
+            return parsed
+
+    single = (
         os.environ.get("PDF_IA_PROVIDER")
         or os.environ.get("ESTADO_CUENTA_IA_PROVIDER")
         or ""
-    ).strip().lower()
-    if raw in ("gemini", "google", "google-genai"):
-        return _PROVEEDOR_GEMINI
-    if raw in ("anthropic", "claude"):
-        return _PROVEEDOR_ANTHROPIC
-    if (os.environ.get("GEMINI_API_KEY") or "").strip():
-        return _PROVEEDOR_GEMINI
-    if (os.environ.get("ANTHROPIC_API_KEY") or "").strip():
-        return _PROVEEDOR_ANTHROPIC
-    return _PROVEEDOR_GEMINI
+    ).strip()
+    if single:
+        nombre = _normalizar_nombre_proveedor(single)
+        if nombre:
+            return [nombre]
+
+    con_key = [p for p in _POOL_DEFAULT if _api_key_opcional(p)]
+    return list(con_key) if con_key else list(_POOL_DEFAULT)
+
+
+def proveedor_ia() -> str:
+    """Primer proveedor de la cascada (compat con código previo)."""
+    pool = proveedores_ia()
+    return pool[0] if pool else _PROVEEDOR_GEMINI
 
 
 def _modelo_default(provider: str | None = None) -> str:
-    """ESTADO_CUENTA_IA_MODEL → (GEMINI_MODEL|ANTHROPIC_MODEL) → default del proveedor."""
+    """
+    Modelo del proveedor.
+    ESTADO_CUENTA_IA_MODEL solo aplica si la cascada tiene un único proveedor
+    (evita enviar gemini-2.5-flash a Groq/DeepSeek en pool multi-key).
+    """
     prov = provider or proveedor_ia()
     explicit = (os.environ.get("ESTADO_CUENTA_IA_MODEL") or "").strip()
-    if explicit:
+    if explicit and len(proveedores_ia()) == 1:
         return explicit
     if prov == _PROVEEDOR_GEMINI:
         return (os.environ.get("GEMINI_MODEL") or "").strip() or _MODELO_GEMINI_DEFAULT
+    if prov == _PROVEEDOR_GROQ:
+        return (os.environ.get("GROQ_MODEL") or "").strip() or _MODELO_GROQ_DEFAULT
+    if prov == _PROVEEDOR_OPENROUTER:
+        return (os.environ.get("OPENROUTER_MODEL") or "").strip() or _MODELO_OPENROUTER_DEFAULT
+    if prov == _PROVEEDOR_DEEPSEEK:
+        return (os.environ.get("DEEPSEEK_MODEL") or "").strip() or _MODELO_DEEPSEEK_DEFAULT
     return (os.environ.get("ANTHROPIC_MODEL") or "").strip() or _MODELO_ANTHROPIC_DEFAULT
 
 
@@ -193,16 +288,24 @@ def _api_key_opcional(provider: str | None = None) -> str:
     prov = provider or proveedor_ia()
     if prov == _PROVEEDOR_GEMINI:
         return (os.environ.get("GEMINI_API_KEY") or "").strip()
-    return (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    if prov == _PROVEEDOR_GROQ:
+        return (os.environ.get("GROQ_API_KEY") or "").strip()
+    if prov == _PROVEEDOR_OPENROUTER:
+        return (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+    if prov == _PROVEEDOR_DEEPSEEK:
+        return (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    if prov == _PROVEEDOR_ANTHROPIC:
+        return (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    return ""
 
 
 def ia_fallback_habilitado() -> bool:
     """
-    Default: ON si el proveedor resuelto tiene API key.
+    Default: ON si algún proveedor de la cascada tiene API key.
     Override: ESTADO_CUENTA_IA_FALLBACK=0|1|true|false.
     """
     flag = (os.environ.get("ESTADO_CUENTA_IA_FALLBACK") or "").strip().lower()
-    tiene_key = bool(_api_key_opcional())
+    tiene_key = any(_api_key_opcional(p) for p in proveedores_ia())
     if flag in ("0", "false", "no", "off"):
         return False
     if flag in ("1", "true", "yes", "on"):
@@ -215,15 +318,29 @@ def _require_api_key(provider: str | None = None) -> str:
     key = _api_key_opcional(prov)
     if key:
         return key
-    if prov == _PROVEEDOR_GEMINI:
-        raise EstadoCuentaIaError(
+    mensajes = {
+        _PROVEEDOR_GEMINI: (
             "configure GEMINI_API_KEY (variable de entorno; no hardcodear en código). "
-            "Ver docs/ia-fallback-pdf-modelo.md. "
-            "Opcional: PDF_IA_PROVIDER=anthropic + ANTHROPIC_API_KEY."
-        )
-    raise EstadoCuentaIaError(
-        "configure ANTHROPIC_API_KEY (variable de entorno; no hardcodear en código)."
-    )
+            "Ver docs/ia-pool-modelos-gratuitos.md o ia-fallback-pdf-modelo.md. "
+            "Pool: PDF_IA_PROVIDERS=gemini,groq,openrouter,deepseek,anthropic."
+        ),
+        _PROVEEDOR_GROQ: (
+            "configure GROQ_API_KEY (gratis en https://console.groq.com/). "
+            "Groq no acepta PDF nativo: el ERP convierte páginas a JPEG."
+        ),
+        _PROVEEDOR_OPENROUTER: (
+            "configure OPENROUTER_API_KEY (free router en https://openrouter.ai/). "
+            "Modelo default openrouter/free (visión por imágenes)."
+        ),
+        _PROVEEDOR_DEEPSEEK: (
+            "configure DEEPSEEK_API_KEY (API de pago barata; no es free tier). "
+            "https://platform.deepseek.com/"
+        ),
+        _PROVEEDOR_ANTHROPIC: (
+            "configure ANTHROPIC_API_KEY (variable de entorno; no hardcodear en código)."
+        ),
+    }
+    raise EstadoCuentaIaError(mensajes.get(prov, f"configure API key para {prov}"))
 
 
 def _escapar_comillas_interiores(raw: str) -> str:
@@ -469,39 +586,31 @@ def _mapear_error_api(exc: Exception, modelo: str, provider: str) -> EstadoCuent
     nombre = type(exc).__name__
     msg = str(exc)
     msg_l = msg.lower()
-    if provider == _PROVEEDOR_GEMINI:
-        if (
-            "api key" in msg_l
-            or "api_key" in msg_l
-            or "unauthenticated" in msg_l
-            or "401" in msg
-            or nombre in ("UnauthenticatedError", "PermissionDeniedError")
-        ):
-            return EstadoCuentaIaError(
-                "GEMINI_API_KEY inválida o rechazada por Google. "
-                "Revise el secret en Render / entorno."
-            )
-        if "404" in msg or "not found" in msg_l or ("model" in msg_l and "invalid" in msg_l):
-            return EstadoCuentaIaError(
-                f"Modelo Gemini no disponible ({modelo}). "
-                "Ajuste ESTADO_CUENTA_IA_MODEL o GEMINI_MODEL."
-            )
-        if "resource_exhausted" in msg_l or "429" in msg or "quota" in msg_l:
-            return EstadoCuentaIaError(
-                "Cuota/rate-limit de Gemini agotada (free tier). "
-                "Reintente más tarde o revise límites en AI Studio."
-            )
-        return None
 
-    if "authentication" in msg_l or nombre == "AuthenticationError":
+    if "authentication" in msg_l or "api key" in msg_l or "api_key" in msg_l or "401" in msg:
+        key_names = {
+            _PROVEEDOR_GEMINI: "GEMINI_API_KEY",
+            _PROVEEDOR_GROQ: "GROQ_API_KEY",
+            _PROVEEDOR_OPENROUTER: "OPENROUTER_API_KEY",
+            _PROVEEDOR_DEEPSEEK: "DEEPSEEK_API_KEY",
+            _PROVEEDOR_ANTHROPIC: "ANTHROPIC_API_KEY",
+        }
         return EstadoCuentaIaError(
-            "ANTHROPIC_API_KEY inválida o rechazada por Anthropic. "
+            f"{key_names.get(provider, 'API_KEY')} inválida o rechazada ({provider}). "
             "Revise el secret en Render / entorno."
         )
-    if "not_found" in msg_l or ("model" in msg_l and "404" in msg):
+    if "resource_exhausted" in msg_l or "429" in msg or "quota" in msg_l or "rate limit" in msg_l:
         return EstadoCuentaIaError(
-            f"Modelo Claude no disponible ({modelo}). "
-            "Ajuste ESTADO_CUENTA_IA_MODEL o ANTHROPIC_MODEL."
+            f"Cuota/rate-limit de {provider} agotada. Reintente más tarde o use otro proveedor del pool."
+        )
+    if "404" in msg or "not found" in msg_l or ("model" in msg_l and "invalid" in msg_l):
+        return EstadoCuentaIaError(
+            f"Modelo {provider} no disponible ({modelo}). "
+            "Ajuste ESTADO_CUENTA_IA_MODEL o la variable de modelo del proveedor."
+        )
+    if nombre in ("UnauthenticatedError", "PermissionDeniedError", "AuthenticationError"):
+        return EstadoCuentaIaError(
+            f"Autenticación fallida en {provider}. Revise la API key en Render."
         )
     return None
 
@@ -541,6 +650,200 @@ def _construir_kwargs_mensaje(
     if include_output_config:
         kwargs["output_config"] = {"effort": "medium"}
     return kwargs
+
+
+def _pdf_paginas_jpeg_b64(
+    pdf_bytes: bytes,
+    *,
+    scale: float | None = None,
+    max_pages: int | None = None,
+) -> list[str]:
+    """Renderiza páginas del PDF a JPEG base64 (para proveedores sin PDF nativo)."""
+    try:
+        import pypdfium2 as pdfium
+    except ImportError as exc:
+        raise EstadoCuentaIaError(
+            "Falta el paquete pypdfium2 (PDF→imagen para Groq/OpenRouter/DeepSeek)."
+        ) from exc
+    try:
+        from PIL import Image  # noqa: F401
+    except ImportError as exc:
+        raise EstadoCuentaIaError(
+            "Falta el paquete Pillow (JPEG para visión Groq/OpenRouter/DeepSeek)."
+        ) from exc
+
+    scale_f = float(scale if scale is not None else _PDF_RENDER_SCALE)
+    scale_f = max(0.8, min(scale_f, 2.5))
+    limite = int(max_pages if max_pages is not None else _PDF_MAX_PAGES_VISION)
+    limite = max(1, min(limite, 24))
+
+    try:
+        doc = pdfium.PdfDocument(pdf_bytes)
+    except Exception as exc:
+        raise EstadoCuentaIaError(f"No se pudo abrir PDF para render: {exc}") from exc
+
+    out: list[str] = []
+    n = min(len(doc), limite)
+    for i in range(n):
+        page = doc[i]
+        bitmap = page.render(scale=scale_f)
+        pil = bitmap.to_pil()
+        if pil.mode != "RGB":
+            pil = pil.convert("RGB")
+        buf = io.BytesIO()
+        pil.save(buf, format="JPEG", quality=72, optimize=True)
+        out.append(base64.standard_b64encode(buf.getvalue()).decode("ascii"))
+    if not out:
+        raise EstadoCuentaIaError("El PDF no tiene páginas renderizables para visión.")
+    return out
+
+
+def _merge_payloads_ia(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Une cabecera (primer valor no vacío) + concatenación de movimientos."""
+    cabecera: dict[str, Any] = {}
+    movimientos: list[Any] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        cab = part.get("cabecera")
+        if isinstance(cab, dict):
+            for k, v in cab.items():
+                if v is not None and v != "" and not cabecera.get(k):
+                    cabecera[k] = v
+        movs = part.get("movimientos")
+        if isinstance(movs, list):
+            movimientos.extend(movs)
+    return {"cabecera": cabecera, "movimientos": movimientos}
+
+
+def _user_text_extraccion(*, retry_json: bool, chunk_note: str = "") -> str:
+    if retry_json:
+        return _RETRY_USER
+    base = (
+        "Extrae cabecera y movimientos del estado de cuenta. "
+        "Responde ÚNICAMENTE con el objeto JSON completo "
+        "(cabecera + movimientos), sin markdown ni texto adicional."
+    )
+    if chunk_note:
+        return f"{base} {chunk_note}"
+    return base
+
+
+def _llamar_openai_compatible_vision(
+    *,
+    provider: str,
+    api_key: str,
+    base_url: str,
+    model: str,
+    images_b64: list[str],
+    retry_json: bool = False,
+    response_format_json: bool = True,
+    max_images_per_request: int = 10,
+    extra_headers: dict[str, str] | None = None,
+    chunk_note: str = "",
+) -> str:
+    """
+    Chat Completions OpenAI-compatible con imágenes JPEG base64.
+    Si hay más imágenes que el tope, trocea y fusiona JSON.
+    """
+    if not images_b64:
+        raise EstadoCuentaIaError(f"{provider}: sin imágenes para visión.")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+
+    chunks: list[list[str]] = []
+    step = max(1, int(max_images_per_request))
+    for i in range(0, len(images_b64), step):
+        chunks.append(images_b64[i : i + step])
+
+    payloads: list[dict[str, Any]] = []
+    with _IA_SEMAPHORE:
+        for idx, chunk in enumerate(chunks):
+            note = chunk_note
+            if len(chunks) > 1:
+                note = (
+                    f"Páginas {idx * step + 1}-{idx * step + len(chunk)} de "
+                    f"{len(images_b64)}. "
+                    "Si la cabecera no aparece en este lote, use nulls; "
+                    "incluya todos los movimientos visibles."
+                )
+            content: list[dict[str, Any]] = [
+                {"type": "text", "text": _user_text_extraccion(retry_json=retry_json, chunk_note=note)}
+            ]
+            for b64 in chunk:
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    }
+                )
+            body: dict[str, Any] = {
+                "model": model,
+                "temperature": 0,
+                "max_tokens": _MAX_TOKENS,
+                "messages": [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": content},
+                ],
+            }
+            if response_format_json:
+                body["response_format"] = {"type": "json_object"}
+
+            try:
+                resp = requests.post(
+                    f"{base_url.rstrip('/')}/chat/completions",
+                    headers=headers,
+                    json=body,
+                    timeout=_IA_TIMEOUT_S,
+                )
+            except requests.RequestException as exc:
+                mapped = _mapear_error_api(exc, model, provider)
+                if mapped:
+                    raise mapped from exc
+                raise EstadoCuentaIaError(f"{provider} red: {exc}") from exc
+
+            if resp.status_code >= 400:
+                exc = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:500]}")
+                mapped = _mapear_error_api(exc, model, provider)
+                if mapped:
+                    raise mapped from exc
+                raise EstadoCuentaIaError(f"{provider}: {exc}") from exc
+
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                raise EstadoCuentaIaError(f"{provider}: respuesta no JSON") from exc
+
+            texto = ""
+            try:
+                texto = (
+                    ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
+                    or ""
+                )
+            except (IndexError, AttributeError, TypeError):
+                texto = ""
+            if isinstance(texto, list):
+                # Algunos proveedores devuelven content como lista de partes
+                partes = []
+                for part in texto:
+                    if isinstance(part, dict) and part.get("text"):
+                        partes.append(str(part["text"]))
+                    elif isinstance(part, str):
+                        partes.append(part)
+                texto = "\n".join(partes)
+            texto = (texto or "").strip()
+            if not texto:
+                raise EstadoCuentaIaError(f"{provider} devolvió respuesta vacía.")
+            payloads.append(_parse_json_respuesta(texto))
+
+    if len(payloads) == 1:
+        return json.dumps(payloads[0], ensure_ascii=False)
+    return json.dumps(_merge_payloads_ia(payloads), ensure_ascii=False)
 
 
 def _llamar_claude_pdf(
@@ -697,32 +1000,111 @@ def _llamar_gemini_pdf(
     return texto
 
 
-def _llamar_proveedor_pdf(
+def _llamar_groq_pdf(
     pdf_bytes: bytes,
     *,
     model: str | None = None,
     retry_json: bool = False,
-) -> dict[str, Any] | str:
-    """Despacha al proveedor configurado (gemini|anthropic)."""
-    prov = proveedor_ia()
-    if prov == _PROVEEDOR_GEMINI:
-        return _llamar_gemini_pdf(pdf_bytes, model=model, retry_json=retry_json)
-    if prov == _PROVEEDOR_ANTHROPIC:
-        return _llamar_claude_pdf(pdf_bytes, model=model, retry_json=retry_json)
-    raise EstadoCuentaIaError(
-        f"PDF_IA_PROVIDER desconocido: {prov!r}. Use gemini o anthropic."
+) -> str:
+    """Groq visión: PDF→JPEG (máx. 3 imgs/request) + chat.completions."""
+    api_key = _require_api_key(_PROVEEDOR_GROQ)
+    modelo = model or _modelo_default(_PROVEEDOR_GROQ)
+    images = _pdf_paginas_jpeg_b64(pdf_bytes)
+    return _llamar_openai_compatible_vision(
+        provider=_PROVEEDOR_GROQ,
+        api_key=api_key,
+        base_url="https://api.groq.com/openai/v1",
+        model=modelo,
+        images_b64=images,
+        retry_json=retry_json,
+        response_format_json=True,
+        max_images_per_request=_GROQ_MAX_IMAGES,
     )
 
 
-def extraer_estado_cuenta_via_ia(pdf_bytes: bytes, *, model: str | None = None) -> dict[str, Any]:
-    """
-    Llama al proveedor IA, valida JSON y retorna estructura parcial compatible
-    con analizar_estado_cuenta_pdf (cabecera, rows, métricas base).
-    """
-    if not pdf_bytes:
-        raise EstadoCuentaIaError("PDF vacío para fallback IA.")
+def _llamar_openrouter_pdf(
+    pdf_bytes: bytes,
+    *,
+    model: str | None = None,
+    retry_json: bool = False,
+) -> str:
+    """OpenRouter free router: PDF→JPEG + chat.completions."""
+    api_key = _require_api_key(_PROVEEDOR_OPENROUTER)
+    modelo = model or _modelo_default(_PROVEEDOR_OPENROUTER)
+    images = _pdf_paginas_jpeg_b64(pdf_bytes)
+    return _llamar_openai_compatible_vision(
+        provider=_PROVEEDOR_OPENROUTER,
+        api_key=api_key,
+        base_url="https://openrouter.ai/api/v1",
+        model=modelo,
+        images_b64=images,
+        retry_json=retry_json,
+        response_format_json=True,
+        max_images_per_request=8,
+        extra_headers={
+            "HTTP-Referer": (os.environ.get("PUBLIC_BASE_URL") or "https://github.com/ParedesD28/erp-despacho"),
+            "X-Title": "erp-despacho-estado-cuenta",
+        },
+    )
 
-    payload = _llamar_proveedor_pdf(pdf_bytes, model=model, retry_json=False)
+
+def _llamar_deepseek_pdf(
+    pdf_bytes: bytes,
+    *,
+    model: str | None = None,
+    retry_json: bool = False,
+) -> str:
+    """DeepSeek visión (barato, no free): PDF→JPEG + chat.completions."""
+    api_key = _require_api_key(_PROVEEDOR_DEEPSEEK)
+    modelo = model or _modelo_default(_PROVEEDOR_DEEPSEEK)
+    images = _pdf_paginas_jpeg_b64(pdf_bytes)
+    return _llamar_openai_compatible_vision(
+        provider=_PROVEEDOR_DEEPSEEK,
+        api_key=api_key,
+        base_url="https://api.deepseek.com",
+        model=modelo,
+        images_b64=images,
+        retry_json=retry_json,
+        response_format_json=True,
+        max_images_per_request=10,
+    )
+
+
+def _llamar_proveedor_pdf(
+    pdf_bytes: bytes,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    retry_json: bool = False,
+) -> dict[str, Any] | str:
+    """Despacha a un proveedor concreto (gemini|groq|openrouter|deepseek|anthropic)."""
+    prov = provider or proveedor_ia()
+    if prov == _PROVEEDOR_GEMINI:
+        return _llamar_gemini_pdf(pdf_bytes, model=model, retry_json=retry_json)
+    if prov == _PROVEEDOR_GROQ:
+        return _llamar_groq_pdf(pdf_bytes, model=model, retry_json=retry_json)
+    if prov == _PROVEEDOR_OPENROUTER:
+        return _llamar_openrouter_pdf(pdf_bytes, model=model, retry_json=retry_json)
+    if prov == _PROVEEDOR_DEEPSEEK:
+        return _llamar_deepseek_pdf(pdf_bytes, model=model, retry_json=retry_json)
+    if prov == _PROVEEDOR_ANTHROPIC:
+        return _llamar_claude_pdf(pdf_bytes, model=model, retry_json=retry_json)
+    raise EstadoCuentaIaError(
+        f"PDF_IA_PROVIDER desconocido: {prov!r}. "
+        "Use gemini, groq, openrouter, deepseek o anthropic."
+    )
+
+
+def _extraer_con_proveedor(
+    pdf_bytes: bytes,
+    *,
+    provider: str,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Una pasada completa (call + parse + retry JSON + validar) para un proveedor."""
+    payload = _llamar_proveedor_pdf(
+        pdf_bytes, provider=provider, model=model, retry_json=False
+    )
     try:
         if isinstance(payload, dict):
             data = payload
@@ -734,9 +1116,46 @@ def extraer_estado_cuenta_via_ia(pdf_bytes: bytes, *, model: str | None = None) 
         # Reintento solo si falló el parseo JSON (comillas/truncado), no validación de filas.
         if "json" not in msg and "vacía" not in msg and "parseable" not in msg:
             raise
-        payload2 = _llamar_proveedor_pdf(pdf_bytes, model=model, retry_json=True)
+        payload2 = _llamar_proveedor_pdf(
+            pdf_bytes, provider=provider, model=model, retry_json=True
+        )
         if isinstance(payload2, dict):
             data2 = payload2
         else:
             data2 = _parse_json_respuesta(payload2)
         return validar_y_mapear_respuesta_ia(data2)
+
+
+def extraer_estado_cuenta_via_ia(pdf_bytes: bytes, *, model: str | None = None) -> dict[str, Any]:
+    """
+    Cascada de proveedores IA: prueba en orden, Claude al final del default.
+    Misma estructura parcial que el parser COLON (cabecera, rows, métricas).
+    """
+    if not pdf_bytes:
+        raise EstadoCuentaIaError("PDF vacío para fallback IA.")
+
+    pool = [p for p in proveedores_ia() if _api_key_opcional(p)]
+    if not pool:
+        raise EstadoCuentaIaError(
+            "configure al menos una API key del pool "
+            "(GEMINI_API_KEY recomendada; también GROQ_API_KEY, OPENROUTER_API_KEY, "
+            "DEEPSEEK_API_KEY o ANTHROPIC_API_KEY). "
+            "Ver docs/ia-pool-modelos-gratuitos.md."
+        )
+
+    errores: list[str] = []
+    for prov in pool:
+        try:
+            parcial = _extraer_con_proveedor(pdf_bytes, provider=prov, model=model)
+            # Señal ligera para logs/UI sin romper contrato.
+            parcial["proveedor_ia"] = prov
+            return parcial
+        except EstadoCuentaIaError as exc:
+            errores.append(f"{prov}: {exc}")
+        except Exception as exc:  # noqa: BLE001 — failover a siguiente proveedor
+            errores.append(f"{prov}: {type(exc).__name__}: {exc}")
+
+    detalle = " | ".join(errores[:6])
+    raise EstadoCuentaIaError(
+        f"Todos los proveedores IA del pool fallaron ({len(errores)}). {detalle}"
+    )

@@ -1,4 +1,4 @@
-"""Tests del fallback IA (Gemini default / Claude opcional) para PDF sin texto nativo."""
+"""Tests del fallback IA (pool gratis + Claude last) para PDF sin texto nativo."""
 from __future__ import annotations
 
 import json
@@ -17,9 +17,40 @@ from estado_cuenta_ia_vision import (
     extraer_estado_cuenta_via_ia,
     ia_fallback_habilitado,
     proveedor_ia,
+    proveedores_ia,
     reparar_json_ligero,
     validar_y_mapear_respuesta_ia,
 )
+
+_CLEAR_IA_ENV = {
+    "ANTHROPIC_API_KEY": "",
+    "GEMINI_API_KEY": "",
+    "GROQ_API_KEY": "",
+    "OPENROUTER_API_KEY": "",
+    "DEEPSEEK_API_KEY": "",
+    "PDF_IA_PROVIDER": "",
+    "PDF_IA_PROVIDERS": "",
+    "ESTADO_CUENTA_IA_PROVIDER": "",
+    "ESTADO_CUENTA_IA_PROVIDERS": "",
+    "ESTADO_CUENTA_IA_FALLBACK": "",
+    "ESTADO_CUENTA_IA_MODEL": "",
+}
+
+
+def _pop_ia_keys() -> None:
+    for k in (
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GROQ_API_KEY",
+        "OPENROUTER_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "PDF_IA_PROVIDER",
+        "PDF_IA_PROVIDERS",
+        "ESTADO_CUENTA_IA_PROVIDER",
+        "ESTADO_CUENTA_IA_PROVIDERS",
+        "ESTADO_CUENTA_IA_MODEL",
+    ):
+        os.environ.pop(k, None)
 from estado_cuenta_pdf_service import EstadoCuentaPdfError, analizar_estado_cuenta_pdf
 
 _SAMPLES = Path(
@@ -321,64 +352,44 @@ class ParseJsonRobustoTests(unittest.TestCase):
         }
         calls = {"n": 0}
 
-        def fake_call(pdf_bytes, *, model=None, retry_json=False):
+        def fake_call(pdf_bytes, *, provider=None, model=None, retry_json=False):
             calls["n"] += 1
             if calls["n"] == 1:
                 return '{"cabecera": {, "movimientos": []'  # basura
             return bueno
 
-        with patch("estado_cuenta_ia_vision._llamar_proveedor_pdf", side_effect=fake_call):
-            parcial = extraer_estado_cuenta_via_ia(b"%PDF-fake")
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "gem-test", "PDF_IA_PROVIDER": "gemini"}, clear=False):
+            with patch("estado_cuenta_ia_vision._llamar_proveedor_pdf", side_effect=fake_call):
+                parcial = extraer_estado_cuenta_via_ia(b"%PDF-fake")
         self.assertEqual(calls["n"], 2)
         self.assertEqual(parcial["rows"][0]["Concepto"], "CUOTA ADMIN")
 
 
 class FlagIaTests(unittest.TestCase):
     def test_default_off_sin_key(self):
-        with patch.dict(
-            os.environ,
-            {
-                "ANTHROPIC_API_KEY": "",
-                "GEMINI_API_KEY": "",
-                "PDF_IA_PROVIDER": "",
-                "ESTADO_CUENTA_IA_FALLBACK": "",
-            },
-            clear=False,
-        ):
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-            os.environ.pop("GEMINI_API_KEY", None)
-            os.environ.pop("PDF_IA_PROVIDER", None)
+        with patch.dict(os.environ, _CLEAR_IA_ENV, clear=False):
+            _pop_ia_keys()
             self.assertFalse(ia_fallback_habilitado())
 
     def test_on_con_gemini_key(self):
         with patch.dict(
             os.environ,
-            {
-                "GEMINI_API_KEY": "gem-test",
-                "ANTHROPIC_API_KEY": "",
-                "PDF_IA_PROVIDER": "",
-                "ESTADO_CUENTA_IA_FALLBACK": "",
-            },
+            {**_CLEAR_IA_ENV, "GEMINI_API_KEY": "gem-test"},
             clear=False,
         ):
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-            os.environ.pop("PDF_IA_PROVIDER", None)
+            _pop_ia_keys()
+            os.environ["GEMINI_API_KEY"] = "gem-test"
             self.assertEqual(proveedor_ia(), "gemini")
             self.assertTrue(ia_fallback_habilitado())
 
     def test_on_con_anthropic_sin_gemini(self):
         with patch.dict(
             os.environ,
-            {
-                "GEMINI_API_KEY": "",
-                "ANTHROPIC_API_KEY": "sk-test",
-                "PDF_IA_PROVIDER": "",
-                "ESTADO_CUENTA_IA_FALLBACK": "",
-            },
+            {**_CLEAR_IA_ENV, "ANTHROPIC_API_KEY": "sk-test"},
             clear=False,
         ):
-            os.environ.pop("GEMINI_API_KEY", None)
-            os.environ.pop("PDF_IA_PROVIDER", None)
+            _pop_ia_keys()
+            os.environ["ANTHROPIC_API_KEY"] = "sk-test"
             self.assertEqual(proveedor_ia(), "anthropic")
             self.assertTrue(ia_fallback_habilitado())
 
@@ -386,6 +397,7 @@ class FlagIaTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
+                **_CLEAR_IA_ENV,
                 "PDF_IA_PROVIDER": "anthropic",
                 "ANTHROPIC_API_KEY": "sk-test",
                 "GEMINI_API_KEY": "gem-test",
@@ -393,6 +405,66 @@ class FlagIaTests(unittest.TestCase):
             clear=False,
         ):
             self.assertEqual(proveedor_ia(), "anthropic")
+
+    def test_pool_claude_ultimo(self):
+        with patch.dict(
+            os.environ,
+            {
+                **_CLEAR_IA_ENV,
+                "GEMINI_API_KEY": "g",
+                "GROQ_API_KEY": "q",
+                "ANTHROPIC_API_KEY": "a",
+            },
+            clear=False,
+        ):
+            pool = proveedores_ia()
+            self.assertEqual(pool[0], "gemini")
+            self.assertIn("groq", pool)
+            self.assertEqual(pool[-1], "anthropic")
+
+    def test_pdf_ia_providers_orden(self):
+        with patch.dict(
+            os.environ,
+            {
+                **_CLEAR_IA_ENV,
+                "PDF_IA_PROVIDERS": "groq,gemini,anthropic",
+                "GROQ_API_KEY": "q",
+                "GEMINI_API_KEY": "g",
+                "ANTHROPIC_API_KEY": "a",
+            },
+            clear=False,
+        ):
+            self.assertEqual(proveedores_ia(), ["groq", "gemini", "anthropic"])
+
+    def test_cascada_failover_al_siguiente(self):
+        bueno = {
+            "cabecera": {"titular": "T", "bloque": "1", "apartamento": "1", "codigo_cuenta": "1"},
+            "movimientos": [_mov_minimo()],
+        }
+        calls: list[str] = []
+
+        def fake_call(pdf_bytes, *, provider=None, model=None, retry_json=False):
+            calls.append(provider or "?")
+            if provider == "gemini":
+                raise EstadoCuentaIaError("Cuota/rate-limit de gemini agotada.")
+            return json.dumps(bueno)
+
+        with patch.dict(
+            os.environ,
+            {
+                **_CLEAR_IA_ENV,
+                "PDF_IA_PROVIDERS": "gemini,groq,anthropic",
+                "GEMINI_API_KEY": "g",
+                "GROQ_API_KEY": "q",
+                "ANTHROPIC_API_KEY": "a",
+            },
+            clear=False,
+        ):
+            with patch("estado_cuenta_ia_vision._llamar_proveedor_pdf", side_effect=fake_call):
+                parcial = extraer_estado_cuenta_via_ia(b"%PDF-fake")
+        self.assertEqual(calls, ["gemini", "groq"])
+        self.assertEqual(parcial.get("proveedor_ia"), "groq")
+        self.assertEqual(parcial["cabecera"]["titular"], "T")
 
     def test_force_off(self):
         with patch.dict(
@@ -407,15 +479,11 @@ class AnalizarFallbackMockTests(unittest.TestCase):
     def test_sin_texto_sin_ia_mensaje_claro(self):
         with patch.dict(
             os.environ,
-            {
-                "ANTHROPIC_API_KEY": "",
-                "GEMINI_API_KEY": "",
-                "ESTADO_CUENTA_IA_FALLBACK": "0",
-            },
+            {**_CLEAR_IA_ENV, "ESTADO_CUENTA_IA_FALLBACK": "0"},
             clear=False,
         ):
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-            os.environ.pop("GEMINI_API_KEY", None)
+            _pop_ia_keys()
+            os.environ["ESTADO_CUENTA_IA_FALLBACK"] = "0"
             with self.assertRaises(EstadoCuentaPdfError) as ctx:
                 analizar_estado_cuenta_pdf(_pdf_sin_texto())
             self.assertIn("texto seleccionable", str(ctx.exception).lower())
@@ -424,7 +492,7 @@ class AnalizarFallbackMockTests(unittest.TestCase):
         parcial = validar_y_mapear_respuesta_ia(_json_ia_1204())
         with patch.dict(
             os.environ,
-            {"GEMINI_API_KEY": "gem-test", "ESTADO_CUENTA_IA_FALLBACK": "1"},
+            {**_CLEAR_IA_ENV, "GEMINI_API_KEY": "gem-test", "ESTADO_CUENTA_IA_FALLBACK": "1"},
             clear=False,
         ):
             with patch(
@@ -446,11 +514,11 @@ class AnalizarFallbackMockTests(unittest.TestCase):
 
         with patch.dict(
             os.environ,
-            {"PDF_IA_PROVIDER": "gemini", "GEMINI_API_KEY": "", "ANTHROPIC_API_KEY": ""},
+            {**_CLEAR_IA_ENV, "PDF_IA_PROVIDER": "gemini"},
             clear=False,
         ):
-            os.environ.pop("GEMINI_API_KEY", None)
-            os.environ.pop("ANTHROPIC_API_KEY", None)
+            _pop_ia_keys()
+            os.environ["PDF_IA_PROVIDER"] = "gemini"
             with self.assertRaises(EstadoCuentaIaError) as ctx:
                 _require_api_key("gemini")
             self.assertIn("configure GEMINI_API_KEY", str(ctx.exception))
@@ -643,6 +711,34 @@ class SinToolChoiceTests(unittest.TestCase):
             os.environ.pop("GEMINI_MODEL", None)
             self.assertEqual(_modelo_default("gemini"), "gemini-2.5-flash")
 
+    def test_modelo_groq_default(self):
+        with patch.dict(
+            os.environ,
+            {
+                **_CLEAR_IA_ENV,
+                "PDF_IA_PROVIDER": "groq",
+                "GROQ_MODEL": "",
+            },
+            clear=False,
+        ):
+            os.environ.pop("GROQ_MODEL", None)
+            os.environ.pop("ESTADO_CUENTA_IA_MODEL", None)
+            self.assertEqual(_modelo_default("groq"), "qwen/qwen3.8-27b")
+
+    def test_modelo_deepseek_default(self):
+        with patch.dict(
+            os.environ,
+            {
+                **_CLEAR_IA_ENV,
+                "PDF_IA_PROVIDER": "deepseek",
+                "DEEPSEEK_MODEL": "",
+            },
+            clear=False,
+        ):
+            os.environ.pop("DEEPSEEK_MODEL", None)
+            os.environ.pop("ESTADO_CUENTA_IA_MODEL", None)
+            self.assertEqual(_modelo_default("deepseek"), "deepseek-flash")
+
 
 class GeminiClientMockTests(unittest.TestCase):
     def test_llamar_gemini_pdf_inline(self):
@@ -690,7 +786,11 @@ class GeminiClientMockTests(unittest.TestCase):
             "cabecera": {"titular": "G", "bloque": "1", "apartamento": "1", "codigo_cuenta": "1"},
             "movimientos": [_mov_minimo()],
         }
-        with patch.dict(os.environ, {"PDF_IA_PROVIDER": "gemini", "GEMINI_API_KEY": "gem"}, clear=False):
+        with patch.dict(
+            os.environ,
+            {**_CLEAR_IA_ENV, "PDF_IA_PROVIDER": "gemini", "GEMINI_API_KEY": "gem"},
+            clear=False,
+        ):
             with patch(
                 "estado_cuenta_ia_vision._llamar_gemini_pdf",
                 return_value=json.dumps(bueno),
@@ -700,6 +800,64 @@ class GeminiClientMockTests(unittest.TestCase):
         mock_g.assert_called_once()
         mock_c.assert_not_called()
         self.assertEqual(parcial["cabecera"]["titular"], "G")
+        self.assertEqual(parcial.get("proveedor_ia"), "gemini")
+
+
+class GroqOpenRouterMockTests(unittest.TestCase):
+    def test_llamar_groq_usa_imagenes_y_api(self):
+        bueno = {
+            "cabecera": {"titular": "Q", "bloque": "1", "apartamento": "1", "codigo_cuenta": "1"},
+            "movimientos": [_mov_minimo()],
+        }
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"choices": [{"message": {"content": json.dumps(bueno)}}]}
+
+        with patch.dict(
+            os.environ,
+            {**_CLEAR_IA_ENV, "PDF_IA_PROVIDER": "groq", "GROQ_API_KEY": "gsk-test"},
+            clear=False,
+        ):
+            with patch(
+                "estado_cuenta_ia_vision._pdf_paginas_jpeg_b64",
+                return_value=["aaa", "bbb", "ccc", "ddd"],
+            ):
+                with patch("estado_cuenta_ia_vision.requests.post", return_value=FakeResp()) as mock_post:
+                    from estado_cuenta_ia_vision import _llamar_groq_pdf
+
+                    payload = _llamar_groq_pdf(b"%PDF-fake")
+        # 4 páginas / máx 3 por request → 2 llamadas
+        self.assertEqual(mock_post.call_count, 2)
+        data = _parse_json_respuesta(payload)
+        self.assertEqual(data["cabecera"]["titular"], "Q")
+
+    def test_merge_payloads_ia(self):
+        from estado_cuenta_ia_vision import _merge_payloads_ia
+
+        merged = _merge_payloads_ia(
+            [
+                {
+                    "cabecera": {"titular": "A", "bloque": None, "apartamento": "1"},
+                    "movimientos": [_mov_minimo()],
+                },
+                {
+                    "cabecera": {"titular": None, "bloque": "2", "apartamento": None},
+                    "movimientos": [
+                        {
+                            **_mov_minimo(),
+                            "numero": "0000999",
+                            "concepto": "INTERES ADMIN",
+                        }
+                    ],
+                },
+            ]
+        )
+        self.assertEqual(merged["cabecera"]["titular"], "A")
+        self.assertEqual(merged["cabecera"]["bloque"], "2")
+        self.assertEqual(len(merged["movimientos"]), 2)
 
 
 class ParserInline1502Tests(unittest.TestCase):
@@ -719,10 +877,13 @@ class ParserInline1502Tests(unittest.TestCase):
 @unittest.skipUnless(
     (
         bool((os.environ.get("GEMINI_API_KEY") or "").strip())
+        or bool((os.environ.get("GROQ_API_KEY") or "").strip())
+        or bool((os.environ.get("OPENROUTER_API_KEY") or "").strip())
+        or bool((os.environ.get("DEEPSEEK_API_KEY") or "").strip())
         or bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip())
     )
     and os.environ.get("ESTADO_CUENTA_IA_SMOKE", "").strip() in ("1", "true", "yes"),
-    "Smoke opcional: export GEMINI_API_KEY (o ANTHROPIC) y ESTADO_CUENTA_IA_SMOKE=1",
+    "Smoke opcional: export GEMINI/GROQ/OPENROUTER/DEEPSEEK/ANTHROPIC + ESTADO_CUENTA_IA_SMOKE=1",
 )
 class SmokeIa1204Tests(unittest.TestCase):
     def test_1204_pdf_real(self):
