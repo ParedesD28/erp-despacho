@@ -334,6 +334,13 @@ def _map_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _unidad_coincide(torre_neon: str, claves_busqueda: set[str]) -> bool:
+    """
+    Match exacto de unidad (token/clave canónica), no substring.
+
+    Acepta alias de formato (`TORRE 1 APTO 201` ≡ `1-201` ≡ `T1-201`) y
+    equivalencia por ceros (`02-042` ≡ `2-42`), pero **no** sufijos ni
+    contención: `1124` ≠ `124`, `1101` ≠ `101`, `1-124` ≠ `1-24`.
+    """
     if not torre_neon or not claves_busqueda:
         return False
     claves_neon = _claves_unidad(torre_neon)
@@ -348,13 +355,6 @@ def _unidad_coincide(torre_neon: str, claves_busqueda: set[str]) -> bool:
     }
     if nums_busqueda and nums_neon and (nums_busqueda & nums_neon):
         return True
-    # Contención solo entre claves con estructura bloque-apto (evita falsos + con "1")
-    for kn in claves_neon:
-        if "-" not in kn and not kn.isdigit():
-            continue
-        for kb in claves_busqueda:
-            if len(kn) >= 3 and len(kb) >= 3 and (kn in kb or kb in kn):
-                return True
     return False
 
 
