@@ -35,7 +35,7 @@ class CertificadoDeudaRequest(BaseModel):
     apartamento: str = ""
     codigo_cuenta: str = Field(
         default="",
-        description="Referencia COLON del PDF; Neon no indexa codigo_cuenta en maestros.",
+        description="Identificación COLON del PDF; señal de unidad / anti-sufijo en el cruce Neon.",
     )
     ciudad: str = Field(
         default="",

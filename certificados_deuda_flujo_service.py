@@ -74,20 +74,23 @@ def indices_filtrados_preview(
             if conj not in nombre and nombre != conj:
                 continue
         if q:
-            haystack = " ".join(
-                str(r.get(k) or "")
+            # Unidad/código: igualdad exacta (evita "431" ⊂ "1-431" / "1431").
+            # Texto libre: substring sobre titular/archivo/conjunto.
+            unidad_vals = [
+                str(r.get(k) or "").casefold()
                 for k in (
-                    "titular_pdf",
-                    "titular",
-                    "archivo",
                     "bloque",
                     "apartamento",
                     "clave_canonica",
                     "codigo_cuenta",
-                    "conjunto",
+                    "torre_apto_neon",
                 )
+            ]
+            texto = " ".join(
+                str(r.get(k) or "")
+                for k in ("titular_pdf", "titular", "archivo", "conjunto")
             ).casefold()
-            if q not in haystack:
+            if q not in unidad_vals and q not in texto:
                 continue
         out.append(i)
     return out
@@ -203,6 +206,7 @@ def _lookup_cuenta(
         bloque=meta["bloque"],
         apartamento=meta["apartamento"],
         titular=meta["titular_pdf"],
+        codigo_cuenta=meta["codigo_cuenta"],
         incluir_propietarios=True,
     )
 
