@@ -154,6 +154,34 @@ class MatchingUnidadTests(unittest.TestCase):
         self.assertEqual(repo._tupla_numerica_unidad("02-042"), (2, 42))
         self.assertEqual(repo._tupla_numerica_unidad("2-42"), (2, 42))
 
+    def test_unidad_no_match_por_sufijo_ni_substring(self):
+        """1124≠124, 1101≠101, 2≠12; tampoco compuestos torre-apto análogos."""
+        casos = (
+            ("1124", "124"),
+            ("124", "1124"),
+            ("1101", "101"),
+            ("101", "1101"),
+            ("12", "2"),
+            ("2", "12"),
+            ("1-124", "1-24"),
+            ("1-24", "1-124"),
+            ("1-1101", "1-101"),
+            ("1-101", "1-1101"),
+            ("TORRE 1 APTO 1124", "1-124"),
+            ("TORRE 1 APTO 124", "1-1124"),
+        )
+        for neon, busqueda in casos:
+            with self.subTest(neon=neon, busqueda=busqueda):
+                claves = repo._claves_unidad(busqueda)
+                self.assertFalse(
+                    repo._unidad_coincide(neon, claves),
+                    msg=f"falso positivo: {neon!r} vs {busqueda!r}",
+                )
+                self.assertFalse(
+                    repo._unidad_coincide(busqueda, repo._claves_unidad(neon)),
+                    msg=f"falso positivo inverso: {busqueda!r} vs {neon!r}",
+                )
+
     def test_score_conjunto_ignora_ph_y_acentos(self):
         self.assertGreaterEqual(
             repo._score_conjunto(
