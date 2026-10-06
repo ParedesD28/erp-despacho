@@ -1627,10 +1627,100 @@ def crm(
         conn.release()
 
 
+def _crm_identificacion_vinculada(
+    cur,
+    *,
+    ident: str,
+    obligacion_id: int | None,
+    radicado: str | None,
+    inmueble_id: int | None,
+) -> bool:
+    """True si la cédula/NIT es deudor, demandado del expediente o titular del inmueble.
+
+    La UI de CRM puede ofrecer titulares desde `inmueble_propietarios` o, como
+    respaldo, demandados de `proceso_partes`; no basta validar solo
+    `obligacion_partes(rol=DEUDOR)`.
+    """
+    digits = "REGEXP_REPLACE(COALESCE(c.identificacion::text,''),'[^0-9]','','g')"
+    needle = "REGEXP_REPLACE(%s,'[^0-9]','','g')"
+
+    if obligacion_id:
+        cur.execute(
+            f"""
+            SELECT 1
+            FROM obligacion_partes op
+            JOIN contactos c ON c.id=op.contacto_id
+            WHERE op.obligacion_id=%s
+              AND op.rol='DEUDOR'
+              AND {digits} = {needle}
+            LIMIT 1
+            """,
+            (int(obligacion_id), ident),
+        )
+        if cur.fetchone():
+            return True
+
+    if radicado and expedientes_service._table_exists(cur, "proceso_partes"):
+        cur.execute(
+            f"""
+            SELECT 1
+            FROM proceso_partes pp
+            JOIN contactos c ON c.id=pp.contacto_id
+            WHERE pp.radicado_interno=%s
+              AND UPPER(pp.rol)='DEMANDADO'
+              AND {digits} = {needle}
+            LIMIT 1
+            """,
+            (radicado, ident),
+        )
+        if cur.fetchone():
+            return True
+
+    if inmueble_id and expedientes_service._table_exists(cur, "inmueble_propietarios"):
+        cur.execute(
+            f"""
+            SELECT 1
+            FROM inmueble_propietarios ip
+            JOIN contactos c ON c.id=ip.contacto_id
+            WHERE ip.inmueble_id=%s
+              AND {digits} = {needle}
+            LIMIT 1
+            """,
+            (int(inmueble_id), ident),
+        )
+        if cur.fetchone():
+            return True
+
+    return False
+
+
+def _crm_redirect_params(
+    *,
+    radicado_interno: str | None = None,
+    conjunto_id: int | None = None,
+    mensaje: str | None = None,
+    error: str | None = None,
+) -> dict:
+    params: dict = {}
+    if mensaje:
+        params["mensaje"] = mensaje
+    if error:
+        params["error"] = error
+    if radicado_interno:
+        params["radicado_interno"] = str(radicado_interno).strip()
+    if conjunto_id is not None:
+        try:
+            params["conjunto_id"] = int(conjunto_id)
+        except (TypeError, ValueError):
+            pass
+    return params
+
+
 @app.post("/crm/guardar")
 def crm_guardar(
     request: Request,
     radicado_interno: str | None = Form(None),
+    conjunto_id: int | None = Form(None),
     inmueble_id: int | None = Form(None),
     obligacion_id: int | None = Form(None),
     tipo_contacto: str = Form(...),
@@ -1641,7 +1731,10 @@ def crm_guardar(
     conn = db.get_connection()
     try:
         with conn:
-            with conn.cursor() as cur:
+            # RealDictCursor obligatorio: abajo se lee por nombre de columna.
+            # Con cursor por defecto fetchone() es tupla → TypeError al indexar
+            # con "obligacion_id"/"inmueble_id" y el guardado siempre fallaba.
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 radicado = str(radicado_interno or "").strip() or None
                 ident = str(identificacion_deudor or "").strip() or None
 
@@ -1681,29 +1774,24 @@ def crm_guardar(
                             WHERE obligacion_id=%s AND radicado_interno=%s
                             LIMIT 1
                             """,
-                            (int(obligacion_id),radicado),
+                            (int(obligacion_id), radicado),
                         )
                         if not cur.fetchone():
                             raise ValueError("La obligación no pertenece al expediente indicado.")
-                    if inmueble_id is None and ob["inmueble_id"] is not None:
+                    if inmueble_id is None and ob.get("inmueble_id") is not None:
                         inmueble_id = int(ob["inmueble_id"])
 
-                    if ident:
-                        cur.execute(
-                            """
-                            SELECT 1
-                            FROM obligacion_partes op
-                            JOIN contactos c ON c.id=op.contacto_id
-                            WHERE op.obligacion_id=%s
-                              AND op.rol='DEUDOR'
-                              AND REGEXP_REPLACE(COALESCE(c.identificacion::text,''),'[^0-9]','','g')
-                                  = REGEXP_REPLACE(%s,'[^0-9]','','g')
-                            LIMIT 1
-                            """,
-                            (int(obligacion_id),ident),
+                    if ident and not _crm_identificacion_vinculada(
+                        cur,
+                        ident=ident,
+                        obligacion_id=int(obligacion_id),
+                        radicado=radicado,
+                        inmueble_id=inmueble_id,
+                    ):
+                        raise ValueError(
+                            "La identificación no corresponde a un deudor, "
+                            "demandado o titular de esta cuenta."
                         )
-                        if not cur.fetchone():
-                            raise ValueError("La identificación no pertenece a un deudor de la obligación.")
 
                 cur.execute(
                     """
@@ -1731,16 +1819,29 @@ def crm_guardar(
                     ),
                 )
 
-        params = {"mensaje": "Gestión registrada"}
-        if radicado_interno:
-            params["radicado_interno"] = radicado_interno
-        return _redirect("/crm", **params)
+        return _redirect(
+            "/crm",
+            **_crm_redirect_params(
+                radicado_interno=radicado_interno,
+                conjunto_id=conjunto_id,
+                mensaje="Gestión registrada",
+            ),
+        )
     except Exception as exc:
         print(f"[CRM] Error guardando gestion: {exc!r}", flush=True)
-        params = {"error": "No fue posible guardar la gestión"}
-        if radicado_interno:
-            params["radicado_interno"] = radicado_interno
-        return _redirect("/crm", **params)
+        error_msg = (
+            str(exc).strip()
+            if isinstance(exc, ValueError) and str(exc).strip()
+            else "No fue posible guardar la gestión"
+        )
+        return _redirect(
+            "/crm",
+            **_crm_redirect_params(
+                radicado_interno=radicado_interno,
+                conjunto_id=conjunto_id,
+                error=error_msg,
+            ),
+        )
     finally:
         conn.release()
 
