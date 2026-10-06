@@ -112,7 +112,9 @@
                 {% if cuenta_actual %}
                 <form method="POST" action="/crm/guardar" class="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <input type="hidden" name="radicado_interno" value="{{ cuenta_actual.radicado_interno }}">
-                    <input type="hidden" name="inmueble_id" value="{{ cuenta_actual.inmueble_id or '' }}">
+                    {% if conjunto_id %}<input type="hidden" name="conjunto_id" value="{{ conjunto_id }}">{% endif %}
+                    {% if cuenta_actual.inmueble_id %}<input type="hidden" name="inmueble_id" value="{{ cuenta_actual.inmueble_id }}">{% endif %}
+                    {% if cuenta_actual.obligacion_id %}<input type="hidden" name="obligacion_id" value="{{ cuenta_actual.obligacion_id }}">{% endif %}
 
                     <div>
                         <label class="block text-xs font-bold text-slate-600 uppercase mb-1">Contacto atendido</label>
