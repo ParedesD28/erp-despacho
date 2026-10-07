@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 def listar_tipos_proceso(cur, activos: bool = True) -> list[dict]:
     sql = """
@@ -74,7 +76,12 @@ def listar_conjuntos(cur, activos: bool = True) -> list[dict]:
     sql = """
         SELECT c.id, c.nombre, c.contacto_id,
                ct.identificacion AS nit, ct.nombre AS persona_juridica,
-               ct.telefono, ct.email, ct.direccion, ct.ciudad
+               ct.telefono, ct.email, ct.direccion, ct.ciudad,
+               (
+                   SELECT COUNT(*)::int
+                   FROM inmuebles_ph i
+                   WHERE i.conjunto_id = c.id
+               ) AS unidades_count
         FROM conjuntos_residenciales c
         LEFT JOIN contactos ct ON ct.id=c.contacto_id
     """
@@ -100,3 +107,49 @@ def obtener_conjunto(cur, conjunto_id: int) -> dict | None:
     )
     row = cur.fetchone()
     return dict(row) if row else None
+
+
+def listar_unidades_conjunto(cur, conjunto_id: int) -> list[dict[str, Any]]:
+    """Unidades `inmuebles_ph` del conjunto, con torre/apto y demandados.
+
+    Reutiliza el enriquecimiento del portal PH (propietarios / partes DEMANDADO).
+    """
+    import portal_ph_service as ph
+
+    cid = int(conjunto_id)
+    if not ph._table_exists(cur, "inmuebles_ph"):
+        return []
+
+    cur.execute(
+        """
+        SELECT i.id, i.torre_apto, i.conjunto_id,
+               c.nombre AS conjunto_nombre
+        FROM inmuebles_ph i
+        JOIN conjuntos_residenciales c ON c.id = i.conjunto_id
+        WHERE i.conjunto_id=%s
+        """,
+        (cid,),
+    )
+    filas = [dict(r) for r in cur.fetchall() or []]
+    ids = [int(f["id"]) for f in filas]
+    dem_map = ph._demandados_por_inmueble(cur, ids)
+    cartera_map = ph._cartera_por_inmueble(cur, ids)
+    unidades: list[dict[str, Any]] = []
+    for f in filas:
+        torre = str(f.get("torre_apto") or "").strip()
+        dems = dem_map.get(int(f["id"]), [])
+        enriched = ph._enriquecer_unidad(
+            torre,
+            dems,
+            cartera_map.get(int(f["id"]), ""),
+        )
+        enriched.update(
+            {
+                "inmueble_id": int(f["id"]),
+                "conjunto_id": int(f["conjunto_id"]),
+                "conjunto_nombre": f.get("conjunto_nombre") or "",
+            }
+        )
+        unidades.append(enriched)
+    unidades.sort(key=lambda u: ph.sort_key_unidad(u.get("torre_apto") or ""))
+    return unidades
