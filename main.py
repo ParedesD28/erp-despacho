@@ -72,6 +72,7 @@ import bolsa_global_estado_cuenta_service
 import permisos
 import usuarios_service
 import usuarios_router
+import portal_ph_router
 
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
@@ -99,6 +100,7 @@ app.include_router(sms_router.router)
 app.include_router(cartas_cobro_router.router)
 app.include_router(certificados_deuda_router.router)
 app.include_router(usuarios_router.router)
+app.include_router(portal_ph_router.router)
 
 # Configuración global de observabilidad y captura de excepciones
 observability.install_exception_handling(app)
@@ -162,7 +164,8 @@ async def production_security_middleware(request: Request, call_next):
                     status_code=401,
                 )
 
-            response = RedirectResponse(url="/dashboard", status_code=303)
+            destino = permisos.home_path_para_perfil(usuario.get("perfil_codigo"))
+            response = RedirectResponse(url=destino, status_code=303)
             set_session_cookie(response, str(usuario["id"]))
             _json_log("INFO", "login_success", perfil=usuario.get("perfil_codigo") or "ADMIN")
             return response
@@ -194,7 +197,10 @@ async def production_security_middleware(request: Request, call_next):
             )
             if path.startswith("/api/") or path.startswith("/sms/api/") or path.startswith("/sms/wizard/"):
                 return JSONResponse({"error": "No autorizado"}, status_code=403)
-            return _redirect("/dashboard", error="No tienes permiso para esa pantalla")
+            home = permisos.home_path_para_perfil(
+                getattr(request.state, "perfil_codigo", None)
+            )
+            return _redirect(home, error="No tienes permiso para esa pantalla")
 
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -304,8 +310,11 @@ def sumar_dias_habiles(fecha_inicial: date, dias: int) -> date:
 # RUTAS BÁSICAS / VISTAS DE NAVEGACIÓN
 # ==============================================================================
 @app.get("/", include_in_schema=False)
-def root_compat():
-    return RedirectResponse(url="/dashboard", status_code=303)
+def root_compat(request: Request):
+    destino = permisos.home_path_para_perfil(
+        getattr(request.state, "perfil_codigo", None)
+    )
+    return RedirectResponse(url=destino, status_code=303)
 
 
 @app.get("/health")

@@ -172,6 +172,13 @@ def ensure_perfiles_schema(conn=None) -> dict[str, Any]:
                 )
         if not external:
             conn.commit()
+        # Tabla de vínculo portal PH (idempotente; no falla el login si falta).
+        try:
+            import portal_ph_service
+
+            portal_ph_service.ensure_usuario_conjuntos_schema(conn=conn if external else None)
+        except Exception:
+            pass
         return resultado
     except Exception:
         if not external:

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block contenido %}
+<div class="p-6 md:p-8 max-w-5xl mx-auto space-y-6">
+  <header class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Portal propiedad horizontal</p>
+      <h1 class="text-2xl font-black text-slate-900">Unidades</h1>
+      <p class="text-sm text-slate-600 mt-1">Torre / apartamento y demandados de los conjuntos habilitados para tu cuenta.</p>
+    </div>
+  </header>
+
+  {% if not conjuntos %}
+  <section class="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-amber-900 text-sm">
+    No tienes conjuntos habilitados. Contacta al administrador del despacho para que vincule tu usuario a uno o más conjuntos.
+  </section>
+  {% else %}
+  <form method="GET" action="/portal-ph" class="bg-white border border-slate-200 rounded-2xl shadow-sm p-4 flex flex-wrap items-end gap-4">
+    <div class="flex-1 min-w-[220px]">
+      <label class="block text-xs font-bold text-slate-600 uppercase mb-1" for="conjunto_id">Conjunto</label>
+      <select name="conjunto_id" id="conjunto_id" class="w-full px-3 py-2.5 rounded-lg border border-slate-200 bg-slate-50"
+              onchange="this.form.submit()">
+        {% for c in conjuntos %}
+        <option value="{{ c.id }}" {% if conjunto_id and c.id == conjunto_id %}selected{% endif %}>{{ c.nombre }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="px-4 py-2.5 rounded-lg bg-slate-900 text-white text-sm font-bold hover:bg-slate-800">
+      Filtrar
+    </button>
+  </form>
+
+  <section class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+    <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+      <h2 class="text-lg font-bold text-slate-900">Listado</h2>
+      <span class="text-xs text-slate-500">{{ unidades|length }} unidad(es) · orden numérico</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th class="px-6 py-3 font-semibold w-40">Torre / apto</th>
+            <th class="px-6 py-3 font-semibold">Demandados</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for u in unidades %}
+          <tr class="bg-white hover:bg-slate-50/80">
+            <td class="px-6 py-3 font-mono font-bold text-slate-900">{{ u.torre_apto }}</td>
+            <td class="px-6 py-3 text-slate-800 uppercase">{{ u.demandados_texto }}</td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="2" class="px-6 py-10 text-center text-slate-500">
+              No hay unidades registradas para este conjunto.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

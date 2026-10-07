@@ -24,7 +24,7 @@ class PermisosUnitTests(unittest.TestCase):
     def test_perfiles_humanos_completos(self):
         self.assertEqual(
             set(permisos.PERFILES_HUMANOS),
-            {"ADMIN", "ABOGADO", "AUXILIAR_COBRO", "CONSULTA"},
+            {"ADMIN", "ABOGADO", "AUXILIAR_COBRO", "CONSULTA", "CLIENTE_PH"},
         )
 
     def test_admin_tiene_todo_incluido_usuarios(self):

@@ -33,6 +33,9 @@
  {% if 'nav.expedientes' in perms or perms|length == 0 %}
  <a href="/expedientes" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/expedientes' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="folder-open" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Expedientes</span></a>
  {% endif %}
+ {% if 'nav.portal_ph' in perms %}
+ <a href="/portal-ph" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if path.startswith('/portal-ph') %}bg-teal-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="building" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Unidades PH</span></a>
+ {% endif %}
  {% if ver_cobro or perms|length == 0 %}
  <div id="nav-cobro" class="space-y-1" data-open="{% if cobro_activo %}true{% else %}false{% endif %}">
   <button type="button" id="nav-cobro-toggle" aria-controls="nav-cobro-hijos" aria-expanded="{% if cobro_activo %}true{% else %}false{% endif %}" class="relative z-30 w-full flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if cobro_activo %}bg-slate-800 text-white{% else %}hover:bg-slate-800 hover:text-white{% endif %}">
