@@ -88,8 +88,29 @@ class ListarUnidadesPortalTests(unittest.TestCase):
                 ]
             elif "FROM inmueble_propietarios" in normalized:
                 cur._fetchall = [
-                    {"inmueble_id": 1, "nombre": "DEUDOR UNO", "es_principal": True},
-                    {"inmueble_id": 2, "nombre": "DEUDOR DOS", "es_principal": True},
+                    {
+                        "inmueble_id": 1,
+                        "nombre": "DEUDOR UNO",
+                        "identificacion": "100",
+                        "es_principal": True,
+                    },
+                    {
+                        "inmueble_id": 1,
+                        "nombre": "COPROPIETARIO",
+                        "identificacion": "200",
+                        "es_principal": False,
+                    },
+                    {
+                        "inmueble_id": 2,
+                        "nombre": "DEUDOR DOS",
+                        "identificacion": "300",
+                        "es_principal": True,
+                    },
+                ]
+            elif "DISTINCT ON (p.inmueble_id)" in normalized and "tipo_cartera" in normalized:
+                cur._fetchall = [
+                    {"inmueble_id": 1, "tipo_cartera": "JURIDICO"},
+                    {"inmueble_id": 2, "tipo_cartera": "PREJURIDICO"},
                 ]
             else:
                 cur._fetchall = []
@@ -113,7 +134,11 @@ class ListarUnidadesPortalTests(unittest.TestCase):
         self.assertEqual(len(data["unidades"]), 2)
         self.assertEqual(data["unidades"][0]["torre_apto"], "2-42")
         self.assertEqual(data["unidades"][1]["torre_apto"], "10-1")
-        self.assertEqual(data["unidades"][0]["demandados"], ["DEUDOR UNO"])
+        self.assertEqual(data["unidades"][0]["demandado_principal"]["nombre"], "DEUDOR UNO")
+        self.assertEqual(data["unidades"][0]["demandado_principal"]["cedula"], "100")
+        self.assertEqual(data["unidades"][0]["demandados_extra_count"], 1)
+        self.assertEqual(data["unidades"][0]["tipo_cartera"], "JURIDICO")
+        self.assertEqual(data["unidades"][1]["tipo_cartera"], "PREJURIDICO")
 
     def test_conjunto_no_habilitado_cae_al_primero(self):
         with patch.object(
@@ -160,12 +185,53 @@ class ListarUnidadesPortalTests(unittest.TestCase):
         self.assertEqual(calls["inmuebles"], 1)
 
 
+class BusquedaPortalTests(unittest.TestCase):
+    def test_filtra_por_nombre_cedula_y_nomenclatura(self):
+        unidades = [
+            {
+                "torre_apto": "2-42",
+                "demandados": [
+                    {"nombre": "ANA PEREZ", "cedula": "52000000"},
+                    {"nombre": "OTRO", "cedula": "111"},
+                ],
+            },
+            {
+                "torre_apto": "9-401",
+                "demandados": [{"nombre": "JUAN", "cedula": "900"}],
+            },
+        ]
+        self.assertEqual(
+            len(portal_ph_service.filtrar_unidades_por_busqueda(unidades, "2-42")),
+            1,
+        )
+        self.assertEqual(
+            portal_ph_service.filtrar_unidades_por_busqueda(unidades, "ana")[0][
+                "torre_apto"
+            ],
+            "2-42",
+        )
+        self.assertEqual(
+            portal_ph_service.filtrar_unidades_por_busqueda(unidades, "52000000")[0][
+                "torre_apto"
+            ],
+            "2-42",
+        )
+        self.assertEqual(
+            portal_ph_service.filtrar_unidades_por_busqueda(unidades, "no-existe"),
+            [],
+        )
+
+
 class UiPortalClienteTests(unittest.TestCase):
     def test_template_portal_tiene_columnas_clave(self):
         html = (ROOT / "templates" / "portal_ph.html").read_text(encoding="utf-8")
         self.assertIn("Torre / apto", html)
-        self.assertIn("Demandados", html)
+        self.assertIn("Cuentas asignadas para cobro", html)
         self.assertIn('name="conjunto_id"', html)
+        self.assertIn('name="q"', html)
+        self.assertIn("DEMANDADO", html)
+        self.assertIn("Jurídico", html)
+        self.assertIn("Prejurídico", html)
         self.assertIn("/portal-ph", html)
 
     def test_admin_usuarios_vincula_conjuntos(self):

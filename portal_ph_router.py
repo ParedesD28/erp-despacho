@@ -23,11 +23,12 @@ def _render(name: str, context: dict, status_code: int = 200):
 
 
 @router.get("/portal-ph", include_in_schema=False)
-def portal_ph(request: Request, conjunto_id: str = ""):
+def portal_ph(request: Request, conjunto_id: str = "", q: str = ""):
     user_id = getattr(request.state, "user_id", None)
     data = portal_ph_service.listar_unidades_portal(
         user_id,
         conjunto_id=conjunto_id or None,
+        q=q or "",
     )
     return _render(
         "portal_ph.html",
@@ -35,6 +36,7 @@ def portal_ph(request: Request, conjunto_id: str = ""):
             "request": request,
             "conjuntos": data["conjuntos"],
             "conjunto_id": data["conjunto_id"],
+            "q": data.get("q") or "",
             "unidades": data["unidades"],
         },
     )
