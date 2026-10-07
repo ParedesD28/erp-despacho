@@ -287,6 +287,26 @@ def calcular_totales_cartera(
                   AND UPPER(COALESCE(o.estado, 'ACTIVA')) NOT IN (
                         'CANCELADA', 'ANULADA', 'PAGADA', 'INACTIVO', 'INACTIVA'
                   )
+                  AND NOT EXISTS (
+                        SELECT 1
+                        FROM proceso_obligaciones po_inact
+                        JOIN procesos p_inact
+                          ON p_inact.radicado_interno = po_inact.radicado_interno
+                        WHERE po_inact.obligacion_id = o.id
+                          AND UPPER(COALESCE(p_inact.estado, 'ACTIVO')) = 'INACTIVO'
+                  )
+                  AND NOT EXISTS (
+                        SELECT 1
+                        FROM procesos p_inm
+                        WHERE p_inm.inmueble_id = o.inmueble_id
+                          AND UPPER(COALESCE(p_inm.estado, 'ACTIVO')) = 'INACTIVO'
+                          AND NOT EXISTS (
+                                SELECT 1
+                                FROM procesos p_act
+                                WHERE p_act.inmueble_id = o.inmueble_id
+                                  AND UPPER(COALESCE(p_act.estado, 'ACTIVO')) <> 'INACTIVO'
+                          )
+                  )
                 ORDER BY o.inmueble_id, o.id DESC
                 """
             )

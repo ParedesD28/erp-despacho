@@ -205,9 +205,13 @@ class Fase11ContractsTests(unittest.TestCase):
         source = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn('"/expediente/estado"', source)
         self.assertIn('accion == "INACTIVAR" and len(motivo) < 5', source)
+        self.assertIn("_ensure_proceso_inactivaciones", source)
         template = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8")
         self.assertIn('name="motivo"', template)
         self.assertIn('minlength="5"', template)
+        self.assertIn("function abrirModal(", template)
+        self.assertIn("abrirModal('modal-inactivar')", template)
+        self.assertIn("cerrarModal('modal-inactivar')", template)
 
     def test_expedientes_filtro_estado(self):
         source = (ROOT / "expedientes_service.py").read_text(encoding="utf-8")

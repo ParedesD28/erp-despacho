@@ -121,6 +121,7 @@ const contactosAgenda={{ contactos|tojson }};
 function abrirEditor(){document.getElementById('editor-expediente').classList.remove('hidden');cambiarModoEdicion(document.getElementById('tipo-cartera-editor')?.value||'{{ tipo }}');document.body.classList.add('overflow-hidden')}
 function cerrarEditor(){document.getElementById('editor-expediente').classList.add('hidden');document.body.classList.remove('overflow-hidden')}
 function abrirAgenda(){document.getElementById('agenda-modal').classList.remove('hidden');document.body.classList.add('overflow-hidden');mostrarAgenda('acuerdo')}
+function abrirModal(id){const e=document.getElementById(id);if(!e)return;e.classList.remove('hidden');document.body.classList.add('overflow-hidden')}
 function cerrarModal(id){const e=document.getElementById(id);if(e)e.classList.add('hidden');document.body.classList.remove('overflow-hidden')}
 function mostrarAgenda(t){['acuerdo','termino','otro'].forEach(x=>document.getElementById('agenda-'+x)?.classList.toggle('hidden',x!==t))}
 function cambiarModoEdicion(tipo){const juridico=String(tipo).toUpperCase()==='JURIDICO';['bloque-procesal','bloque-financiero'].forEach(id=>{const e=document.getElementById(id);if(e)e.classList.toggle('opacity-50',!juridico)});const rama=document.getElementById('radicado-rama-editor');const juzgado=document.querySelector('[name="juzgado"]');if(rama){rama.disabled=!juridico;if(!juridico)rama.value=''}if(juzgado){juzgado.disabled=!juridico;if(!juridico)juzgado.value=''}}
@@ -129,6 +130,6 @@ function actualizarPreviewClaveEditor(){const b=stripCerosTokenEditor(document.g
 actualizarPreviewClaveEditor();
 function seleccionarContactoAgenda(valor){const id=String(valor||'').split(' - ')[0].trim();const p=contactosAgenda.find(x=>String(x.identificacion||'')===id)||contactosAgenda.find(x=>String(x.nombre||'').toLowerCase()===String(valor||'').toLowerCase());if(!p){document.getElementById('acuerdo-id-persona').value='';document.getElementById('acuerdo-persona-confirmada').textContent='';return}document.getElementById('acuerdo-id-persona').value=p.identificacion||'';document.getElementById('acuerdo-nombre-persona').value=p.nombre||'';document.getElementById('acuerdo-telefono-persona').value=p.telefono||'';document.getElementById('acuerdo-persona-confirmada').textContent=`Persona vinculada: ${p.nombre||''} · ${p.identificacion||''}`}
 function agregarMedida(){const w=document.getElementById('medidas-list');const r=document.createElement('div');r.className='flex gap-2 mb-2';r.innerHTML='<input name="medida" class="flex-1 border rounded-xl p-3"><button type="button" onclick="this.parentElement.remove()" class="px-3 rounded-xl border text-red-600">Quitar</button>';w.appendChild(r)}
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){cerrarEditor();cerrarModal('act-modal');cerrarModal('agenda-modal')}})
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){cerrarEditor();cerrarModal('modal-inactivar');cerrarModal('act-modal');cerrarModal('agenda-modal')}})
 </script>
 {% endblock %}
