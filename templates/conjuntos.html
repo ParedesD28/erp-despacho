@@ -57,15 +57,23 @@
             </div>
             <div class="divide-y divide-slate-100">
                 {% for c in conjuntos %}
-                <div class="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div>
-                        <div class="font-bold text-slate-900">{{ c.nombre }}</div>
-                        <div class="text-xs text-slate-500 mt-1">NIT: {{ c.nit or 'Pendiente' }} · {{ c.ciudad or 'Sin ciudad' }}</div>
-                        <div class="text-xs mt-1 {% if c.contacto_id %}text-emerald-600{% else %}text-amber-600{% endif %}">
-                            {% if c.contacto_id %}Persona jurídica configurada automáticamente como contacto del conjunto.{% else %}Falta configurar la persona jurídica para automatizar el demandante.{% endif %}
+                <div class="p-5 {% if conjunto_actual and conjunto_actual.id == c.id %}bg-teal-50/40{% endif %}">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <div class="font-bold text-slate-900">{{ c.nombre }}</div>
+                            <div class="text-xs text-slate-500 mt-1">NIT: {{ c.nit or 'Pendiente' }} · {{ c.ciudad or 'Sin ciudad' }}</div>
+                            <div class="text-xs mt-1 {% if c.contacto_id %}text-emerald-600{% else %}text-amber-600{% endif %}">
+                                {% if c.contacto_id %}Persona jurídica configurada automáticamente como contacto del conjunto.{% else %}Falta configurar la persona jurídica para automatizar el demandante.{% endif %}
+                            </div>
+                            <div class="text-xs text-slate-500 mt-1">
+                                {{ c.unidades_count or 0 }} unidad(es) asociada(s)
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <a href="/conjuntos?id={{ c.id }}#unidades-asociadas" class="px-3 py-2 rounded-lg border border-teal-300 text-sm font-semibold text-teal-800 hover:bg-teal-50">Ver unidades</a>
+                            <a href="/conjuntos?id={{ c.id }}" class="px-3 py-2 rounded-lg border border-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50">Editar</a>
                         </div>
                     </div>
-                    <a href="/conjuntos?id={{ c.id }}" class="px-3 py-2 rounded-lg border border-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50">Editar</a>
                 </div>
                 {% else %}
                 <div class="p-8 text-center text-slate-500">No hay conjuntos configurados.</div>
@@ -73,6 +81,68 @@
             </div>
         </div>
     </div>
+
+    {% if conjunto_actual %}
+    <section id="unidades-asociadas" class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden scroll-mt-6">
+        <div class="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+                <h2 class="font-bold text-slate-900">Unidades asociadas</h2>
+                <p class="text-xs text-slate-500 mt-0.5">{{ conjunto_actual.nombre }} · torre/apto y demandados</p>
+            </div>
+            <span class="text-xs font-semibold text-slate-500">{{ unidades|length }} unidad(es)</span>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                        <th class="px-5 py-3 font-bold">Torre / apto</th>
+                        <th class="px-5 py-3 font-bold">Demandado(s)</th>
+                        <th class="px-5 py-3 font-bold">Cartera</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for u in unidades %}
+                    <tr class="align-top">
+                        <td class="px-5 py-3 font-mono font-bold text-slate-900 whitespace-nowrap">{{ u.torre_apto }}</td>
+                        <td class="px-5 py-3 text-slate-700">
+                            {% if u.demandados %}
+                            <ul class="space-y-1">
+                                {% for d in u.demandados %}
+                                <li>
+                                    <span class="font-semibold uppercase">{{ d.nombre or 'Sin nombre' }}</span>
+                                    <span class="text-xs font-mono text-slate-500">
+                                        {% if d.cedula %}· CC {{ d.cedula }}{% endif %}
+                                        {% if d.es_principal %}· principal{% endif %}
+                                    </span>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            {% else %}
+                            <span class="text-slate-400">Sin demandados</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-5 py-3 whitespace-nowrap">
+                            {% if u.tipo_cartera == 'JURIDICO' %}
+                            <span class="text-xs font-bold text-indigo-800">Jurídico</span>
+                            {% elif u.tipo_cartera == 'PREJURIDICO' %}
+                            <span class="text-xs font-bold text-amber-800">Prejurídico</span>
+                            {% else %}
+                            <span class="text-xs text-slate-400">Sin cartera</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="3" class="px-5 py-10 text-center text-slate-500">
+                            No hay unidades registradas para este conjunto en <code class="text-xs">inmuebles_ph</code>.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
 
     <div class="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-900">
         <strong>Automatización:</strong> al crear un proceso de <strong>Cuotas de administración</strong>, el usuario seleccionará el conjunto y el sistema utilizará automáticamente la persona jurídica asociada como demandante. El administrador de la propiedad horizontal no forma parte de este modelo.

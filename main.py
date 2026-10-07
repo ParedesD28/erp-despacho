@@ -618,9 +618,19 @@ def conjuntos(request: Request, id: int | None = None):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             conjuntos = catalogos_service.listar_conjuntos(cur, activos=True)
             conjunto_actual = catalogos_service.obtener_conjunto(cur, id) if id else None
+            unidades = (
+                catalogos_service.listar_unidades_conjunto(cur, int(id))
+                if id and conjunto_actual
+                else []
+            )
         return render_template(
             "conjuntos.html",
-            {"request": request, "conjuntos": conjuntos, "conjunto_actual": conjunto_actual},
+            {
+                "request": request,
+                "conjuntos": conjuntos,
+                "conjunto_actual": conjunto_actual,
+                "unidades": unidades,
+            },
         )
     finally:
         conn.release()
