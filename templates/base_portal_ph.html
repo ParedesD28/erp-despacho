@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Portal PH · Cuentas de cobro</title>
+  <script src="https://cdn.jsdelivr.net/npm/tailwindcss-cdn@3.4.10/tailwindcss.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js" defer></script>
+  <style>
+    .safe-top { padding-top: max(0.75rem, env(safe-area-inset-top, 0px)); }
+    .safe-bottom { padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px)); }
+    .safe-x {
+      padding-left: max(1rem, env(safe-area-inset-left, 0px));
+      padding-right: max(1rem, env(safe-area-inset-right, 0px));
+    }
+    .tap { min-height: 44px; min-width: 44px; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 font-sans min-h-screen antialiased">
+  {% set path = request.url.path if request is defined else '' %}
+  {% set user_nombre = request.state.user_nombre if request is defined and request.state is defined and request.state.user_nombre is defined else '' %}
+
+  <!-- Top bar móvil / escritorio -->
+  <header class="sticky top-0 z-40 bg-slate-900 text-white shadow-lg safe-top">
+    <div class="safe-x max-w-3xl mx-auto flex items-center justify-between gap-3 py-3">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="w-10 h-10 rounded-xl bg-teal-500/20 border border-teal-400/30 flex items-center justify-center flex-shrink-0">
+          <i data-lucide="building" class="w-5 h-5 text-teal-300"></i>
+        </div>
+        <div class="min-w-0">
+          <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Portal PH</div>
+          <div class="text-sm font-bold truncate">{{ user_nombre or 'Cliente' }}</div>
+        </div>
+      </div>
+      <a href="/logout"
+         class="tap inline-flex items-center justify-center gap-2 px-3 rounded-xl bg-white/10 hover:bg-white/15 active:bg-white/20 text-sm font-semibold border border-white/10">
+        <i data-lucide="log-out" class="w-4 h-4"></i>
+        <span class="hidden sm:inline">Salir</span>
+      </a>
+    </div>
+  </header>
+
+  <main class="safe-x max-w-3xl mx-auto w-full pb-24 pt-4">
+    {% if request and request.query_params.mensaje %}
+    <div id="toast-success" class="mb-4 flex items-center gap-3 p-3 text-emerald-800 bg-emerald-50 rounded-xl border border-emerald-200 shadow-sm">
+      <i data-lucide="check-circle" class="w-5 h-5 text-emerald-500 flex-shrink-0"></i>
+      <div class="text-sm font-bold">{{ request.query_params.mensaje }}</div>
+    </div>
+    {% endif %}
+    {% if request and request.query_params.error %}
+    <div id="toast-error" class="mb-4 flex items-center gap-3 p-3 text-red-800 bg-red-50 rounded-xl border border-red-200 shadow-sm">
+      <i data-lucide="alert-triangle" class="w-5 h-5 text-red-500 flex-shrink-0"></i>
+      <div class="text-sm font-bold">{{ request.query_params.error }}</div>
+    </div>
+    {% endif %}
+    {% block contenido %}{% endblock %}
+  </main>
+
+  <!-- Bottom nav (pulgar) -->
+  <nav class="fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-4px_20px_rgba(15,23,42,0.06)] safe-bottom"
+       aria-label="Navegación portal">
+    <div class="max-w-3xl mx-auto grid grid-cols-2 gap-1 px-2 pt-1">
+      <a href="/portal-ph"
+         class="tap flex flex-col items-center justify-center gap-0.5 rounded-xl py-2 {% if path.startswith('/portal-ph') %}text-teal-700 bg-teal-50{% else %}text-slate-500{% endif %}">
+        <i data-lucide="building" class="w-5 h-5"></i>
+        <span class="text-[11px] font-bold">Unidades</span>
+      </a>
+      <a href="/logout"
+         class="tap flex flex-col items-center justify-center gap-0.5 rounded-xl py-2 text-red-600">
+        <i data-lucide="log-out" class="w-5 h-5"></i>
+        <span class="text-[11px] font-bold">Salir</span>
+      </a>
+    </div>
+  </nav>
+
+  <script>
+  function initIcons() {
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+      window.lucide.createIcons();
+    }
+  }
+  document.addEventListener('DOMContentLoaded', initIcons);
+  window.addEventListener('load', initIcons);
+  setTimeout(initIcons, 100);
+  setTimeout(() => {
+    const a = document.getElementById('toast-success'); if (a) { a.style.opacity='0'; setTimeout(()=>a.remove(),500); }
+    const b = document.getElementById('toast-error'); if (b) { b.style.opacity='0'; setTimeout(()=>b.remove(),500); }
+  }, 3500);
+  </script>
+</body>
+</html>

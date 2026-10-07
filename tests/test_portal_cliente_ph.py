@@ -225,6 +225,7 @@ class BusquedaPortalTests(unittest.TestCase):
 class UiPortalClienteTests(unittest.TestCase):
     def test_template_portal_tiene_columnas_clave(self):
         html = (ROOT / "templates" / "portal_ph.html").read_text(encoding="utf-8")
+        self.assertIn("base_portal_ph.html", html)
         self.assertIn("Torre / apto", html)
         self.assertIn("Cuentas asignadas para cobro", html)
         self.assertIn('name="conjunto_id"', html)
@@ -233,6 +234,15 @@ class UiPortalClienteTests(unittest.TestCase):
         self.assertIn("Jurídico", html)
         self.assertIn("Prejurídico", html)
         self.assertIn("/portal-ph", html)
+
+    def test_shell_movil_sin_sidebar_erp(self):
+        shell = (ROOT / "templates" / "base_portal_ph.html").read_text(encoding="utf-8")
+        self.assertIn("viewport-fit=cover", shell)
+        self.assertIn("safe-area-inset", shell)
+        self.assertIn("Navegación portal", shell)
+        self.assertIn("/logout", shell)
+        self.assertNotIn("hover:w-64", shell)
+        self.assertNotIn("Radicar Proceso", shell)
 
     def test_admin_usuarios_vincula_conjuntos(self):
         html = (ROOT / "templates" / "admin_usuarios.html").read_text(encoding="utf-8")
