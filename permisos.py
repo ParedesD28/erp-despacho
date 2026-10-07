@@ -12,12 +12,14 @@ PERFIL_ADMIN = "ADMIN"
 PERFIL_ABOGADO = "ABOGADO"
 PERFIL_AUXILIAR = "AUXILIAR_COBRO"
 PERFIL_CONSULTA = "CONSULTA"
+PERFIL_CLIENTE_PH = "CLIENTE_PH"
 
 PERFILES_HUMANOS = (
     PERFIL_ADMIN,
     PERFIL_ABOGADO,
     PERFIL_AUXILIAR,
     PERFIL_CONSULTA,
+    PERFIL_CLIENTE_PH,
 )
 
 PERFIL_NOMBRES = {
@@ -25,6 +27,7 @@ PERFIL_NOMBRES = {
     PERFIL_ABOGADO: "Abogado",
     PERFIL_AUXILIAR: "Auxiliar de cobro",
     PERFIL_CONSULTA: "Solo consulta",
+    PERFIL_CLIENTE_PH: "Cliente PH",
 }
 
 PERFIL_DESCRIPCIONES = {
@@ -32,6 +35,7 @@ PERFIL_DESCRIPCIONES = {
     PERFIL_ABOGADO: "Expedientes, cartera, cobro completo, acuerdos, cartas y SMS.",
     PERFIL_AUXILIAR: "Seguimiento diario de cobro (CRM, SMS, cartas, vencimientos); sin borrar lo crítico ni administrar usuarios.",
     PERFIL_CONSULTA: "Ver cartera e informes; no editar ni enviar SMS/cartas.",
+    PERFIL_CLIENTE_PH: "Portal PH: solo unidades (torre/apto + demandados) de los conjuntos que el Admin le habilite.",
 }
 
 # Permisos atómicos
@@ -48,6 +52,7 @@ NAV_CONTACTOS = "nav.contactos"
 NAV_CONJUNTOS = "nav.conjuntos"
 NAV_PROCESOS = "nav.procesos"
 NAV_ADMIN_USUARIOS = "nav.admin_usuarios"
+NAV_PORTAL_PH = "nav.portal_ph"
 
 ACCION_EDITAR = "accion.editar"
 ACCION_BORRAR = "accion.borrar"
@@ -118,6 +123,7 @@ PERMISOS_POR_PERFIL: dict[str, frozenset[str]] = {
             NAV_CONJUNTOS,
         }
     ),
+    PERFIL_CLIENTE_PH: frozenset({NAV_PORTAL_PH}),
 }
 
 
@@ -159,6 +165,7 @@ def puede_ver_cobro(permisos: Optional[Iterable[str]]) -> bool:
 # Rutas públicas (/api/bot/, /sms/api/, /login, /static/) se excluyen antes.
 _ROUTE_RULES: tuple[tuple[str, str], ...] = (
     ("/admin/usuarios", NAV_ADMIN_USUARIOS),
+    ("/portal-ph", NAV_PORTAL_PH),
     ("/supervision-agente", NAV_COBRO_SUPERVISION),
     ("/cartas-cobro", NAV_COBRO_CARTAS),
     ("/sms", NAV_COBRO_SMS),
@@ -175,6 +182,13 @@ _ROUTE_RULES: tuple[tuple[str, str], ...] = (
     ("/procesos", NAV_PROCESOS),
     ("/dashboard", NAV_DASHBOARD),
 )
+
+
+def home_path_para_perfil(codigo: Optional[str]) -> str:
+    """Destino post-login / al denegar acceso según perfil."""
+    if normalizar_perfil(codigo) == PERFIL_CLIENTE_PH:
+        return "/portal-ph"
+    return "/dashboard"
 
 # Acciones fuertes por método+ruta exacta o prefijo.
 _WRITE_RULES: tuple[tuple[str, str, str], ...] = (
