@@ -341,8 +341,14 @@ def vista_dashboard(request: Request):
     
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # 1. Total Procesos Activos
-            cur.execute("SELECT COUNT(*) AS total FROM procesos WHERE COALESCE(estado, 'Activo') ILIKE 'Activo'")
+            # 1. Total Procesos Activos (excluye INACTIVO)
+            cur.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM procesos
+                WHERE UPPER(COALESCE(estado, 'ACTIVO')) <> 'INACTIVO'
+                """
+            )
             row_p = cur.fetchone()
             total_procesos = row_p["total"] if row_p else 0
 
@@ -351,52 +357,98 @@ def vista_dashboard(request: Request):
             row_i = cur.fetchone()
             total_inmuebles = row_i["total"] if row_i else 0
 
-            # 3. Acuerdos de Pago
+            # 3. Acuerdos de Pago (excluye cuentas/procesos inactivos)
             hoy = date.today()
             acuerdos_hoy = []
             acuerdos_vencidos = []
             acuerdos_proximos = []
             monto_acuerdos_vigentes = 0.0
+            excluye_proceso_inactivo = """
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM proceso_obligaciones po_inact
+                    JOIN procesos p_inact ON p_inact.radicado_interno = po_inact.radicado_interno
+                    WHERE po_inact.obligacion_id = a.obligacion_id
+                      AND UPPER(COALESCE(p_inact.estado, 'ACTIVO')) = 'INACTIVO'
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM procesos p_inm
+                    WHERE a.inmueble_id IS NOT NULL
+                      AND p_inm.inmueble_id = a.inmueble_id
+                      AND UPPER(COALESCE(p_inm.estado, 'ACTIVO')) = 'INACTIVO'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM procesos p_act
+                          WHERE p_act.inmueble_id = a.inmueble_id
+                            AND UPPER(COALESCE(p_act.estado, 'ACTIVO')) <> 'INACTIVO'
+                      )
+                )
+            """
 
             if expedientes_service._table_exists(cur, "acuerdos_pago"):
-                cur.execute("""
+                cur.execute(f"""
                     SELECT a.*, i.conjunto_residencial, i.torre_apto
                     FROM acuerdos_pago a
                     LEFT JOIN inmuebles_ph i ON a.inmueble_id = i.id
                     WHERE a.fecha_compromiso = %s AND a.estado = 'PENDIENTE'
+                    {excluye_proceso_inactivo}
                     ORDER BY a.valor_acordado DESC
                 """, (hoy,))
                 acuerdos_hoy = [dict(r) for r in cur.fetchall()]
 
-                cur.execute("""
+                cur.execute(f"""
                     SELECT a.*, i.conjunto_residencial, i.torre_apto
                     FROM acuerdos_pago a
                     LEFT JOIN inmuebles_ph i ON a.inmueble_id = i.id
                     WHERE a.fecha_compromiso < %s AND a.estado = 'PENDIENTE'
+                    {excluye_proceso_inactivo}
                     ORDER BY a.fecha_compromiso DESC LIMIT 20
                 """, (hoy,))
                 acuerdos_vencidos = [dict(r) for r in cur.fetchall()]
 
-                cur.execute("""
+                cur.execute(f"""
                     SELECT a.*, i.conjunto_residencial, i.torre_apto
                     FROM acuerdos_pago a
                     LEFT JOIN inmuebles_ph i ON a.inmueble_id = i.id
                     WHERE a.fecha_compromiso > %s AND a.fecha_compromiso <= %s + INTERVAL '7 days' AND a.estado = 'PENDIENTE'
+                    {excluye_proceso_inactivo}
                     ORDER BY a.fecha_compromiso ASC LIMIT 20
                 """, (hoy, hoy))
                 acuerdos_proximos = [dict(r) for r in cur.fetchall()]
 
-                cur.execute("SELECT COALESCE(SUM(valor_acordado), 0) AS suma FROM acuerdos_pago WHERE estado = 'PENDIENTE'")
+                cur.execute(f"""
+                    SELECT COALESCE(SUM(valor_acordado), 0) AS suma
+                    FROM acuerdos_pago a
+                    WHERE a.estado = 'PENDIENTE'
+                    {excluye_proceso_inactivo}
+                """)
                 row_s = cur.fetchone()
                 monto_acuerdos_vigentes = float(row_s["suma"]) if row_s else 0.0
 
-            # 4. Términos Judiciales Próximos
+            # 4. Términos Judiciales Próximos (excluye procesos inactivos)
             terminos_proximos = []
             if expedientes_service._table_exists(cur, "vencimientos"):
                 cur.execute("""
-                    SELECT * FROM vencimientos
-                    WHERE completado = FALSE AND COALESCE(tipo, 'PROCESAL') = 'PROCESAL'
-                    ORDER BY fecha_vencimiento ASC LIMIT 10
+                    SELECT v.*
+                    FROM vencimientos v
+                    WHERE v.completado = FALSE
+                      AND COALESCE(v.tipo, 'PROCESAL') = 'PROCESAL'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM proceso_obligaciones po_inact
+                          JOIN procesos p_inact ON p_inact.radicado_interno = po_inact.radicado_interno
+                          WHERE po_inact.obligacion_id = v.obligacion_id
+                            AND UPPER(COALESCE(p_inact.estado, 'ACTIVO')) = 'INACTIVO'
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM procesos p_rad
+                          WHERE v.radicado_interno IS NOT NULL
+                            AND p_rad.radicado_interno = v.radicado_interno
+                            AND UPPER(COALESCE(p_rad.estado, 'ACTIVO')) = 'INACTIVO'
+                      )
+                    ORDER BY v.fecha_vencimiento ASC LIMIT 10
                 """)
                 terminos_proximos = [dict(r) for r in cur.fetchall()]
 
@@ -1140,6 +1192,33 @@ async def guardar_expediente_estructurado(request: Request):
         conn.release()
 
 
+def _ensure_proceso_inactivaciones(cur) -> None:
+    """Garantiza historial auditable de inactivación (migración 20260919_fase15)."""
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS proceso_inactivaciones (
+            id BIGSERIAL PRIMARY KEY,
+            radicado_interno TEXT NOT NULL,
+            accion TEXT NOT NULL CHECK (accion IN ('INACTIVAR','ACTIVAR')),
+            motivo TEXT,
+            usuario TEXT,
+            fecha TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT chk_proceso_inactivacion_motivo
+                CHECK (
+                    accion = 'ACTIVAR'
+                    OR length(trim(COALESCE(motivo,''))) >= 5
+                )
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_proceso_inactivaciones_radicado_fecha
+            ON proceso_inactivaciones (radicado_interno, fecha DESC)
+        """
+    )
+
+
 @app.post("/expediente/estado", include_in_schema=False)
 def cambiar_estado_expediente(
     request: Request,
@@ -1160,6 +1239,12 @@ def cambiar_estado_expediente(
     try:
         with conn:
             with conn.cursor() as cur:
+                _ensure_proceso_inactivaciones(cur)
+                cols = expedientes_service._cols(cur, "procesos")
+                if "estado" not in cols:
+                    cur.execute(
+                        "ALTER TABLE procesos ADD COLUMN IF NOT EXISTS estado TEXT DEFAULT 'Activo'"
+                    )
                 cur.execute("SELECT estado FROM procesos WHERE radicado_interno=%s FOR UPDATE", (radicado,))
                 actual = cur.fetchone()
                 if not actual:
@@ -1171,9 +1256,6 @@ def cambiar_estado_expediente(
                     return _redirect(f"/expediente/{radicado}", mensaje="El+expediente+ya+estaba+inactivo")
                 if accion == "ACTIVAR" and str(estado_actual).upper() != "INACTIVO":
                     return _redirect(f"/expediente/{radicado}", mensaje="El+expediente+ya+estaba+activo")
-
-                if not expedientes_service._table_exists(cur, "proceso_inactivaciones"):
-                    raise RuntimeError("La migracion de historial de inactivacion aun no esta aplicada")
 
                 cur.execute(
                     "UPDATE procesos SET estado=%s WHERE radicado_interno=%s",
@@ -1188,10 +1270,12 @@ def cambiar_estado_expediente(
                     """,
                     (radicado, accion, motivo or None, usuario),
                 )
-        return _redirect(
-            f"/expediente/{radicado}",
-            mensaje=("Expediente+inactivado" if accion == "INACTIVAR" else "Expediente+activado"),
+        msg = (
+            "Expediente+inactivado.+Ya+no+pesa+en+estadisticas+ni+cartera+activa."
+            if accion == "INACTIVAR"
+            else "Expediente+activado.+Vuelve+a+contar+en+estadisticas."
         )
+        return _redirect(f"/expediente/{radicado}", mensaje=msg)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1971,7 +2055,13 @@ def informes(request: Request):
     conn = db.get_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT COUNT(*) AS n FROM procesos")
+            cur.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM procesos
+                WHERE UPPER(COALESCE(estado, 'ACTIVO')) <> 'INACTIVO'
+                """
+            )
             total = int(cur.fetchone()["n"])
             cur.execute("SELECT COUNT(*) AS n FROM contactos")
             total_contactos = int(cur.fetchone()["n"])
