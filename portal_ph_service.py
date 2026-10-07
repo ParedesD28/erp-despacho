@@ -210,14 +210,44 @@ def sort_key_unidad(torre_apto: str) -> tuple:
     )
 
 
-def _demandados_por_inmueble(cur, inmueble_ids: list[int]) -> dict[int, list[str]]:
-    out: dict[int, list[str]] = {i: [] for i in inmueble_ids}
+def _append_demandado(
+    bag: dict[int, list[dict]],
+    inmueble_id: int,
+    nombre: str,
+    cedula: str,
+    *,
+    es_principal: bool = False,
+) -> None:
+    nombre = str(nombre or "").strip()
+    cedula = str(cedula or "").strip()
+    if not nombre and not cedula:
+        return
+    lista = bag.setdefault(inmueble_id, [])
+    clave = (nombre.upper(), cedula)
+    for item in lista:
+        if (item["nombre"].upper(), item["cedula"]) == clave:
+            if es_principal and not item.get("es_principal"):
+                item["es_principal"] = True
+            return
+    lista.append(
+        {
+            "nombre": nombre,
+            "cedula": cedula,
+            "es_principal": bool(es_principal),
+        }
+    )
+
+
+def _demandados_por_inmueble(cur, inmueble_ids: list[int]) -> dict[int, list[dict]]:
+    """Demandados con nombre + cédula; principal primero."""
+    out: dict[int, list[dict]] = {i: [] for i in inmueble_ids}
     if not inmueble_ids:
         return out
     if _table_exists(cur, "inmueble_propietarios") and _table_exists(cur, "contactos"):
         cur.execute(
             """
-            SELECT ip.inmueble_id, ct.nombre, COALESCE(ip.es_principal, FALSE) AS es_principal
+            SELECT ip.inmueble_id, ct.nombre, ct.identificacion,
+                   COALESCE(ip.es_principal, FALSE) AS es_principal
             FROM inmueble_propietarios ip
             JOIN contactos ct ON ct.id = ip.contacto_id
             WHERE ip.inmueble_id = ANY(%s)
@@ -228,47 +258,140 @@ def _demandados_por_inmueble(cur, inmueble_ids: list[int]) -> dict[int, list[str
             (inmueble_ids,),
         )
         for r in cur.fetchall() or []:
-            iid = int(_celda(r, "inmueble_id", 0))
-            nombre = str(_celda(r, "nombre", 1) or "").strip()
-            if nombre and nombre not in out[iid]:
-                out[iid].append(nombre)
+            _append_demandado(
+                out,
+                int(_celda(r, "inmueble_id", 0)),
+                str(_celda(r, "nombre", 1) or ""),
+                str(_celda(r, "identificacion", 2) or ""),
+                es_principal=bool(_celda(r, "es_principal", 3, False)),
+            )
 
-    # Fallback: demandados del proceso activo ligado al inmueble
     faltan = [i for i, noms in out.items() if not noms]
     if faltan and _table_exists(cur, "procesos") and _table_exists(cur, "proceso_partes"):
         cur.execute(
             """
             SELECT DISTINCT ON (p.inmueble_id, c.id)
-                   p.inmueble_id, c.nombre
+                   p.inmueble_id, c.nombre, c.identificacion,
+                   COALESCE(pp.es_principal, FALSE) AS es_principal
             FROM procesos p
             JOIN proceso_partes pp ON pp.radicado_interno = p.radicado_interno
             JOIN contactos c ON c.id = pp.contacto_id
             WHERE p.inmueble_id = ANY(%s)
               AND UPPER(COALESCE(pp.rol, '')) = 'DEMANDADO'
               AND UPPER(COALESCE(p.estado, 'ACTIVO')) <> 'INACTIVO'
-            ORDER BY p.inmueble_id, c.id, c.nombre
+            ORDER BY p.inmueble_id, c.id,
+                     COALESCE(pp.es_principal, FALSE) DESC,
+                     c.nombre
             """,
             (faltan,),
         )
         for r in cur.fetchall() or []:
-            iid = int(_celda(r, "inmueble_id", 0))
-            nombre = str(_celda(r, "nombre", 1) or "").strip()
-            if nombre and nombre not in out[iid]:
-                out[iid].append(nombre)
+            _append_demandado(
+                out,
+                int(_celda(r, "inmueble_id", 0)),
+                str(_celda(r, "nombre", 1) or ""),
+                str(_celda(r, "identificacion", 2) or ""),
+                es_principal=bool(_celda(r, "es_principal", 3, False)),
+            )
+
+    for iid, lista in out.items():
+        lista.sort(
+            key=lambda d: (0 if d.get("es_principal") else 1, (d.get("nombre") or "").upper())
+        )
     return out
+
+
+def _cartera_por_inmueble(cur, inmueble_ids: list[int]) -> dict[int, str]:
+    """tipo_cartera del proceso activo (prioriza JURIDICO)."""
+    out: dict[int, str] = {}
+    if not inmueble_ids or not _table_exists(cur, "procesos"):
+        return out
+    cur.execute(
+        """
+        SELECT DISTINCT ON (p.inmueble_id)
+               p.inmueble_id,
+               UPPER(COALESCE(p.tipo_cartera, '')) AS tipo_cartera
+        FROM procesos p
+        WHERE p.inmueble_id = ANY(%s)
+          AND UPPER(COALESCE(p.estado, 'ACTIVO')) <> 'INACTIVO'
+        ORDER BY p.inmueble_id,
+                 CASE UPPER(COALESCE(p.tipo_cartera, ''))
+                   WHEN 'JURIDICO' THEN 0
+                   WHEN 'PREJURIDICO' THEN 1
+                   ELSE 2
+                 END,
+                 p.radicado_interno DESC
+        """,
+        (inmueble_ids,),
+    )
+    for r in cur.fetchall() or []:
+        iid = int(_celda(r, "inmueble_id", 0))
+        tipo = str(_celda(r, "tipo_cartera", 1) or "").strip().upper()
+        if tipo in {"JURIDICO", "PREJURIDICO"}:
+            out[iid] = tipo
+    return out
+
+
+def filtrar_unidades_por_busqueda(unidades: list[dict], q: str = "") -> list[dict]:
+    """Filtra por nomenclatura torre/apto, nombre o cédula de demandados."""
+    needle = re.sub(r"\s+", " ", str(q or "").strip().upper())
+    if not needle:
+        return list(unidades)
+    result = []
+    for u in unidades:
+        haystack_parts = [str(u.get("torre_apto") or "")]
+        for d in u.get("demandados") or []:
+            if isinstance(d, dict):
+                haystack_parts.append(str(d.get("nombre") or ""))
+                haystack_parts.append(str(d.get("cedula") or ""))
+            else:
+                haystack_parts.append(str(d))
+        haystack = " ".join(haystack_parts).upper()
+        if needle in haystack:
+            result.append(u)
+    return result
+
+
+def _enriquecer_unidad(torre: str, dems: list[dict], tipo_cartera: str = "") -> dict:
+    principal = dems[0] if dems else None
+    extras = dems[1:] if len(dems) > 1 else []
+    return {
+        "torre_apto": torre or "—",
+        "demandados": dems,
+        "demandado_principal": principal,
+        "demandados_extra": extras,
+        "demandados_extra_count": len(extras),
+        "tipo_cartera": tipo_cartera or "",
+        "tipo_cartera_label": (
+            "Jurídico"
+            if tipo_cartera == "JURIDICO"
+            else ("Prejurídico" if tipo_cartera == "PREJURIDICO" else "Sin cartera")
+        ),
+        "busqueda_texto": " ".join(
+            [
+                torre or "",
+                *(
+                    f"{d.get('nombre', '')} {d.get('cedula', '')}"
+                    for d in dems
+                    if isinstance(d, dict)
+                ),
+            ]
+        ).strip(),
+    }
 
 
 def listar_unidades_portal(
     usuario_id: int | str,
     *,
     conjunto_id: Optional[int | str] = None,
+    q: str = "",
     conn=None,
 ) -> dict[str, Any]:
     """
     Unidades PH visibles para el cliente.
 
     Returns:
-      conjuntos, conjunto_id (filtro efectivo), unidades[{torre_apto, demandados, ...}]
+      conjuntos, conjunto_id, q, unidades[{torre_apto, demandados, tipo_cartera, ...}]
     """
     conjuntos = listar_conjuntos_habilitados(usuario_id, conn=conn)
     permitidos = {int(c["id"]) for c in conjuntos}
@@ -277,14 +400,15 @@ def listar_unidades_portal(
     if raw.isdigit() and int(raw) in permitidos:
         filtro = int(raw)
     elif permitidos:
-        # Default: primer conjunto (orden por nombre ya en listar)
         filtro = int(conjuntos[0]["id"])
 
+    query = str(q or "").strip()
     unidades: list[dict] = []
     if not filtro:
         return {
             "conjuntos": conjuntos,
             "conjunto_id": None,
+            "q": query,
             "unidades": [],
         }
 
@@ -297,6 +421,7 @@ def listar_unidades_portal(
                 return {
                     "conjuntos": conjuntos,
                     "conjunto_id": filtro,
+                    "q": query,
                     "unidades": [],
                 }
             cur.execute(
@@ -312,20 +437,25 @@ def listar_unidades_portal(
             filas = [dict(r) for r in cur.fetchall() or []]
             ids = [int(f["id"]) for f in filas]
             dem_map = _demandados_por_inmueble(cur, ids)
+            cartera_map = _cartera_por_inmueble(cur, ids)
             for f in filas:
                 torre = str(f.get("torre_apto") or "").strip()
                 dems = dem_map.get(int(f["id"]), [])
-                unidades.append(
+                enriched = _enriquecer_unidad(
+                    torre,
+                    dems,
+                    cartera_map.get(int(f["id"]), ""),
+                )
+                enriched.update(
                     {
                         "inmueble_id": int(f["id"]),
-                        "torre_apto": torre or "—",
                         "conjunto_id": int(f["conjunto_id"]),
                         "conjunto_nombre": f.get("conjunto_nombre") or "",
-                        "demandados": dems,
-                        "demandados_texto": ", ".join(dems) if dems else "Sin demandados",
                     }
                 )
+                unidades.append(enriched)
             unidades.sort(key=lambda u: sort_key_unidad(u.get("torre_apto") or ""))
+            unidades = filtrar_unidades_por_busqueda(unidades, query)
     finally:
         if not external:
             conn.release()
@@ -333,5 +463,6 @@ def listar_unidades_portal(
     return {
         "conjuntos": conjuntos,
         "conjunto_id": filtro,
+        "q": query,
         "unidades": unidades,
     }
