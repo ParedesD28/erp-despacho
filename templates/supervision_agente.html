@@ -306,7 +306,23 @@ function mostrarToastIa(msg) {
 }
 
 function displayNombre(c) {
-    return c.display_name || c.nombre || c.name || c.phone || c.telefono || '';
+    return c.display_name || c.nombre || c.name || telefonoVisible(c) || c.phone || c.telefono || '';
+}
+
+function conversationKey(c) {
+    return c.conversation_key || c.phone || c.telefono || c.numero || '';
+}
+
+function telefonoVisible(c) {
+    if (!c) return '';
+    if (c.telefono_display) return String(c.telefono_display);
+    if (c.telefono_resuelto) return String(c.telefono_resuelto);
+    const raw = c.phone || c.telefono || c.numero || '';
+    if (c.es_telefono_legible === false || c.telefono_es_id_meta) {
+        const ced = c.identification || c.identificacion || c.cedula || '';
+        return ced ? `CC ${ced}` : 'ID WhatsApp (sin número)';
+    }
+    return String(raw);
 }
 
 function renderLista() {
@@ -316,22 +332,25 @@ function renderLista() {
         return;
     }
     box.innerHTML = conversaciones.map(c => {
-        const phone = c.phone || c.telefono || c.numero || '';
+        const phone = conversationKey(c);
+        const telShow = telefonoVisible(c);
         const nombre = displayNombre(c);
         const cedula = c.identification || c.identificacion || c.cedula || '';
         const mode = c.mode_current || c.modo || 'AGENTE';
-        const selected = actual && String(actual.phone || actual.telefono || '') === String(phone);
-        const lastMsg = c.last_message || c.ultimo_mensaje || 'Sin mensajes recientes';
+        const selected = actual && String(conversationKey(actual)) === String(phone);
+        const lastMsg = c.last_message || c.ultimo_mensaje || c.preview_mensaje || 'Sin mensajes recientes';
         const hora = formatHora(c.last_activity || c.ultima_actividad);
         const ia = String(mode).toUpperCase() !== 'HUMANO';
-        const titulo = nombre && nombre !== phone ? nombre : phone;
-        const sub = nombre && nombre !== phone ? phone : (cedula ? `CC: ${cedula}` : 'Sin cédula');
+        const titulo = (nombre && nombre !== phone && nombre !== telShow) ? nombre : (telShow || nombre || phone);
+        const sub = (nombre && nombre !== phone && nombre !== telShow)
+            ? telShow
+            : (cedula ? `CC: ${cedula}` : (telShow && telShow !== titulo ? telShow : 'Sin cédula'));
 
         return `
         <button onclick="seleccionar('${escapeHtml(String(phone))}')" class="w-full text-left p-3 hover:bg-slate-50 transition-colors flex items-center gap-3 ${selected ? 'bg-emerald-50/70 border-r-4 border-emerald-600' : ''}">
             <div class="relative shrink-0">
                 <div class="w-10 h-10 rounded-full ${ia ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-800'} flex items-center justify-center font-bold text-xs">
-                    ${escapeHtml(iniciales(nombre, phone))}
+                    ${escapeHtml(iniciales(nombre, telShow || phone))}
                 </div>
                 ${ia ? '<span class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-blue-500 border-2 border-white" title="IA atendiendo"></span>' : ''}
             </div>
@@ -364,8 +383,8 @@ async function cargarConversaciones() {
         renderStats(data.aviso_ia);
         renderLista();
         if (actual) {
-            const phone = actual.phone || actual.telefono;
-            const refreshed = conversaciones.find(x => String(x.phone || x.telefono) === String(phone));
+            const phone = conversationKey(actual);
+            const refreshed = conversaciones.find(x => String(conversationKey(x)) === String(phone));
             if (refreshed) actual = refreshed;
         }
     } catch (e) {
@@ -401,18 +420,31 @@ async function editarNombre() {
 
 async function seleccionar(phone) {
     try {
-        const c = conversaciones.find(x => String(x.phone || x.telefono || x.numero || '') === String(phone)) || {phone};
+        const c = conversaciones.find(x => String(conversationKey(x)) === String(phone)) || {phone, conversation_key: phone};
         actual = c;
         renderLista();
 
         document.getElementById('detalle-vacio').classList.add('hidden');
         document.getElementById('detalle').classList.remove('hidden');
 
-        const telefono = c.phone || c.telefono || c.numero || phone;
+        const telefono = conversationKey(c) || phone;
+        const telShow = telefonoVisible(c);
         const nombre = displayNombre(c);
-        document.getElementById('detalle-nombre').textContent = (nombre && nombre !== telefono) ? nombre : telefono;
-        document.getElementById('detalle-telefono').textContent = (nombre && nombre !== telefono) ? telefono : (c.identificacion ? `CC ${c.identificacion}` : 'Sin nombre en agenda — clic en lápiz para guardar');
-        document.getElementById('detalle-avatar').textContent = iniciales(nombre, telefono);
+        const titulo = (nombre && nombre !== telefono && nombre !== telShow) ? nombre : (telShow || telefono);
+        document.getElementById('detalle-nombre').textContent = titulo;
+        let subHeader = telShow;
+        if (nombre && nombre !== telShow && telShow) {
+            subHeader = telShow;
+        } else if (c.identificacion || c.identification) {
+            subHeader = `CC ${c.identificacion || c.identification}`;
+        } else if (!telShow || c.telefono_es_id_meta) {
+            subHeader = 'Sin nombre en agenda — clic en lápiz para guardar';
+        }
+        if (c.telefono_es_id_meta && (c.identificacion || c.identification)) {
+            subHeader = `${telShow || 'ID WhatsApp'} · CC ${c.identificacion || c.identification}`;
+        }
+        document.getElementById('detalle-telefono').textContent = subHeader;
+        document.getElementById('detalle-avatar').textContent = iniciales(nombre, telShow || telefono);
 
         const modo = String(c.mode_current || c.modo || 'AGENTE').toUpperCase();
         const badge = document.getElementById('detalle-modo');
@@ -505,12 +537,15 @@ function renderAdjuntos(adjuntos) {
             </div>`;
         }
         if (tipo === 'image_placeholder') {
+            const mid = a.media_id ? ` · media_id ${a.media_id}` : '';
             return `
-            <div class="mt-2 flex items-center gap-2 rounded-xl bg-slate-100/80 border border-slate-200 px-3 py-2 text-[11px] text-slate-700">
-                <i data-lucide="image" class="w-4 h-4 text-slate-500"></i>
-                <div>
-                    <div class="font-semibold">${escapeHtml(a.caption || 'Imagen recibida')}</div>
-                    <div class="text-slate-500">Vista previa pendiente: el bot aún no guarda la URL/media_id.</div>
+            <div class="mt-2 flex items-start gap-2 rounded-xl bg-sky-50 border border-sky-200 px-3 py-2.5 text-[11px] text-slate-700 max-w-[240px]">
+                <div class="w-14 h-14 shrink-0 rounded-lg bg-slate-200/80 border border-slate-300 flex items-center justify-center">
+                    <i data-lucide="image" class="w-6 h-6 text-slate-500"></i>
+                </div>
+                <div class="min-w-0">
+                    <div class="font-semibold text-slate-800">${escapeHtml(a.caption || 'Imagen / comprobante')}</div>
+                    <div class="text-slate-500 leading-snug mt-0.5">Vista previa no disponible: Agentecobranza aún no persiste <code class="text-[10px]">media_url</code>${escapeHtml(mid)}.</div>
                 </div>
             </div>`;
         }
@@ -610,8 +645,8 @@ async function cargarMensajes(phone) {
                             <span class="w-2 h-2 rounded-full bg-slate-400"></span>
                             <span class="text-[11px] font-bold text-slate-700">Deudor (${escapeHtml(nombreDeudor)})</span>
                         </div>
-                        ${rawContent && !String(rawContent).startsWith('[Imagen') ? `<div class="text-xs md:text-sm whitespace-pre-wrap text-slate-900 leading-relaxed font-normal">${content}</div>` : ''}
-                        ${adjHtml}
+                        ${rawContent && !/^\s*\[?\s*(Imagen recibida|El usuario envi)/i.test(String(rawContent)) ? `<div class="text-xs md:text-sm whitespace-pre-wrap text-slate-900 leading-relaxed font-normal">${content}</div>` : ''}
+                        ${adjHtml || (/^\s*\[?\s*(Imagen recibida|El usuario envi)/i.test(String(rawContent)) ? renderAdjuntos([{tipo:'image_placeholder', caption:'Imagen / comprobante'}]) : '')}
                         <div class="text-[10px] text-slate-400 text-right mt-1 leading-none">
                             <span>${escapeHtml(hora)}</span>
                         </div>
@@ -663,7 +698,7 @@ async function cargarMensajes(phone) {
 }
 
 function telefonoActual() {
-    return actual && (actual.phone || actual.telefono || actual.numero);
+    return actual && conversationKey(actual);
 }
 
 async function tomarControl() {

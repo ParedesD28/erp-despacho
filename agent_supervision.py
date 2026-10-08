@@ -31,6 +31,11 @@ _AGENDA_READY = False
 
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+# Placeholders que deja Agentecobranza cuando llega media sin URL.
+_IMG_PLACEHOLDER_RE = re.compile(
+    r"^\s*\[?\s*(Imagen recibida|El usuario envi[oó] una imagen)",
+    re.IGNORECASE,
+)
 
 
 def _agent_url():
@@ -116,6 +121,63 @@ def telefono_claves_match(digits: str) -> list[str]:
     return list(claves)
 
 
+def es_telefono_whatsapp_legible(value: Any) -> bool:
+    """True si parece E.164 / celular CO; False para PSID/wa_id opacos de Meta."""
+    d = normalizar_telefono_digits(value)
+    if not d:
+        return False
+    # IDs de página / PSID de Meta suelen tener ≥15 dígitos.
+    if len(d) >= 15:
+        return False
+    if d.startswith("57") and len(d) == 12 and d[2] == "3":
+        return True
+    if len(d) == 10 and d.startswith("3"):
+        return True
+    return 10 <= len(d) <= 14
+
+
+def formatear_telefono_display(value: Any) -> str:
+    """Formato legible para UI; si no es teléfono, cadena vacía."""
+    d = normalizar_telefono_digits(value)
+    if not es_telefono_whatsapp_legible(d):
+        return ""
+    if d.startswith("57") and len(d) == 12:
+        local = d[2:]
+        return f"+57 {local[:3]} {local[3:6]} {local[6:]}"
+    if len(d) == 10:
+        return f"{d[:3]} {d[3:6]} {d[6:]}"
+    return d
+
+
+def preview_ultimo_mensaje(fila: dict) -> str:
+    """Preview del listado: campos del bot o fallback por total_mensajes."""
+    raw = (
+        fila.get("last_message")
+        or fila.get("ultimo_mensaje")
+        or fila.get("ultimo_contenido")
+        or fila.get("preview_mensaje")
+        or fila.get("snippet")
+        or fila.get("last_contenido")
+    )
+    if raw is not None and str(raw).strip():
+        s = " ".join(str(raw).split())
+        if _IMG_PLACEHOLDER_RE.search(s) or s.lower().startswith("[imagen"):
+            return "📷 Imagen / comprobante"
+        if s.startswith("[Documento PDF"):
+            return "📄 Documento PDF"
+        if len(s) > 80:
+            return s[:77] + "…"
+        return s
+    total = fila.get("total_mensajes") or fila.get("message_count") or fila.get("mensajes_total")
+    try:
+        n = int(total)
+    except (TypeError, ValueError):
+        n = 0
+    if n > 0:
+        return f"{n} mensaje(s) en el hilo"
+    return ""
+
+
 def ensure_whatsapp_agenda(conn=None) -> None:
     """Crea la tabla de agenda si aún no existe (idempotente)."""
     global _AGENDA_READY
@@ -189,6 +251,13 @@ def enriquecer_mensaje(mensaje: dict) -> dict:
 
     tipo = str(m.get("tipo_mensaje") or m.get("type") or m.get("tipo") or "text").lower()
     contenido = str(m.get("contenido") or m.get("content") or m.get("mensaje") or "")
+    # El bot a veces deja tipo=text con placeholder, o pierde tipo_mensaje.
+    if tipo in {"", "text", "texto"} and _IMG_PLACEHOLDER_RE.search(contenido):
+        tipo = "image"
+    media_id = meta.get("media_id") or meta.get("id_media") or meta.get("image_id") or m.get("media_id")
+    if tipo in {"", "text", "texto"} and media_id and not meta.get("url_pdf"):
+        tipo = "image"
+
     m["contenido"] = contenido
     m["content"] = contenido
     m["tipo_mensaje"] = tipo
@@ -206,7 +275,6 @@ def enriquecer_mensaje(mensaje: dict) -> dict:
         or m.get("media_url")
         or m.get("image_url")
     )
-    media_id = meta.get("media_id") or meta.get("id_media") or meta.get("image_id")
     url_pdf = meta.get("url_pdf") or meta.get("pdf_url") or m.get("url_pdf")
     mime = meta.get("mime_type") or meta.get("mime") or m.get("mime_type")
 
@@ -231,12 +299,15 @@ def enriquecer_mensaje(mensaje: dict) -> dict:
         adjuntos.append({"tipo": "document", "url": str(url_pdf), "mime": "application/pdf", "caption": "PDF"})
     if tipo == "image" and not any(a.get("tipo") == "image" for a in adjuntos):
         # Placeholder: el bot hoy no persiste la URL; la UI muestra tarjeta.
+        caption = "Imagen recibida (comprobante)"
+        if media_id:
+            caption = "Imagen recibida (comprobante) — falta media_url en el bot"
         adjuntos.append(
             {
                 "tipo": "image_placeholder",
                 "url": None,
                 "media_id": media_id,
-                "caption": "Imagen recibida (comprobante)",
+                "caption": caption,
             }
         )
     elif tipo in {"document", "documento"} and url_pdf is None and not adjuntos:
@@ -329,6 +400,45 @@ def _nombre_para_telefono(phone: str, nombres: dict[str, dict]) -> Optional[dict
     return None
 
 
+def _normalizar_identificacion(value: Any) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _cargar_contactos_por_identificacion(idents: list[str]) -> dict[str, dict]:
+    """Mapa identificación (solo dígitos) -> {nombre, telefono} desde contactos ERP."""
+    result: dict[str, dict] = {}
+    keys = sorted({_normalizar_identificacion(i) for i in idents if _normalizar_identificacion(i)})
+    if not keys:
+        return result
+    conn = db.get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, nombre, telefono, identificacion
+                FROM contactos
+                WHERE COALESCE(identificacion, '') <> ''
+                LIMIT 8000
+                """
+            )
+            wanted = set(keys)
+            for row in cur.fetchall():
+                ident = _normalizar_identificacion(row.get("identificacion"))
+                if ident not in wanted:
+                    continue
+                result[ident] = {
+                    "nombre": str(row.get("nombre") or "").strip(),
+                    "telefono": row.get("telefono") or "",
+                    "contacto_id": row.get("id"),
+                    "fuente": "contactos_cedula",
+                }
+    except Exception as exc:
+        print(f"[SUPERVISION AGENTE] No se pudo cruzar cédulas: {exc!r}", flush=True)
+    finally:
+        conn.release()
+    return result
+
+
 def _normalizar_conversaciones(data, buscar: str = ""):
     if not isinstance(data, dict):
         return data
@@ -337,11 +447,14 @@ def _normalizar_conversaciones(data, buscar: str = ""):
         return data
 
     phones = []
+    idents = []
     for fila in filas:
         if isinstance(fila, dict):
             phones.append(fila.get("phone") or fila.get("telefono") or "")
+            idents.append(fila.get("identification") or fila.get("identificacion") or "")
 
     nombres = _cargar_nombres_agenda(phones)
+    por_cedula = _cargar_contactos_por_identificacion(idents)
     out = []
     buscar_l = (buscar or "").strip().lower()
 
@@ -350,6 +463,8 @@ def _normalizar_conversaciones(data, buscar: str = ""):
             continue
         fila = dict(fila)
         phone = fila.get("phone") or fila.get("telefono") or ""
+        # conversation_key: clave opaca del bot (teléfono o PSID) para APIs /control/*
+        fila["conversation_key"] = str(phone)
         fila["phone"] = phone
         fila["telefono"] = phone
         fila["identification"] = fila.get("identification") or fila.get("identificacion")
@@ -362,7 +477,48 @@ def _normalizar_conversaciones(data, buscar: str = ""):
         fila["last_activity"] = fila.get("last_activity") or fila.get("fecha_ultima_actividad")
         fila["human_user"] = fila.get("human_user") or fila.get("usuario_humano")
 
+        ident_digits = _normalizar_identificacion(fila.get("identificacion"))
+        contacto_cedula = por_cedula.get(ident_digits) if ident_digits else None
+
         info = _nombre_para_telefono(phone, nombres)
+        if not info and contacto_cedula and contacto_cedula.get("nombre"):
+            info = {
+                "nombre": contacto_cedula["nombre"],
+                "fuente": contacto_cedula["fuente"],
+                "telefono_display": contacto_cedula.get("telefono"),
+                "notas": "",
+                "contacto_id": contacto_cedula.get("contacto_id"),
+            }
+
+        legible = es_telefono_whatsapp_legible(phone)
+        fila["es_telefono_legible"] = legible
+        telefono_resuelto = ""
+        if info and info.get("telefono_display") and es_telefono_whatsapp_legible(info["telefono_display"]):
+            telefono_resuelto = normalizar_telefono_digits(info["telefono_display"])
+        elif contacto_cedula and es_telefono_whatsapp_legible(contacto_cedula.get("telefono")):
+            telefono_resuelto = normalizar_telefono_digits(contacto_cedula.get("telefono"))
+        elif legible:
+            telefono_resuelto = normalizar_telefono_digits(phone)
+
+        fila["telefono_resuelto"] = telefono_resuelto or None
+        fila["telefono_display"] = (
+            formatear_telefono_display(telefono_resuelto)
+            if telefono_resuelto
+            else (formatear_telefono_display(phone) if legible else "")
+        )
+        if not fila["telefono_display"] and not legible and phone:
+            # No mostrar el PSID crudo como “teléfono”.
+            fila["telefono_display"] = (
+                f"CC {fila['identificacion']}" if fila.get("identificacion") else "ID WhatsApp (sin número)"
+            )
+            fila["telefono_es_id_meta"] = True
+        else:
+            fila["telefono_es_id_meta"] = not legible
+
+        preview = preview_ultimo_mensaje(fila)
+        fila["last_message"] = preview
+        fila["ultimo_mensaje"] = preview
+
         if info:
             fila["nombre"] = info["nombre"]
             fila["name"] = info["nombre"]
@@ -372,7 +528,16 @@ def _normalizar_conversaciones(data, buscar: str = ""):
             fila["nombre"] = fila.get("nombre") or fila.get("name") or ""
             fila["name"] = fila["nombre"]
             fila["nombre_fuente"] = None
-            fila["display_name"] = fila["nombre"] or phone
+            if fila["nombre"]:
+                fila["display_name"] = fila["nombre"]
+            elif telefono_resuelto:
+                fila["display_name"] = fila["telefono_display"] or telefono_resuelto
+            elif fila.get("identificacion"):
+                fila["display_name"] = f"CC {fila['identificacion']}"
+            elif legible:
+                fila["display_name"] = fila["telefono_display"] or phone
+            else:
+                fila["display_name"] = "Contacto WhatsApp"
 
         modo = str(fila["mode_current"]).upper()
         fila["ia_atiende"] = modo != "HUMANO"
@@ -381,9 +546,12 @@ def _normalizar_conversaciones(data, buscar: str = ""):
             haystack = " ".join(
                 [
                     str(phone),
+                    str(fila.get("telefono_display") or ""),
+                    str(fila.get("telefono_resuelto") or ""),
                     str(fila.get("identificacion") or ""),
                     str(fila.get("nombre") or ""),
                     str(fila.get("display_name") or ""),
+                    str(fila.get("last_message") or ""),
                 ]
             ).lower()
             if buscar_l not in haystack:
