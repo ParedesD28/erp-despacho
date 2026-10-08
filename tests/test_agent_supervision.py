@@ -32,6 +32,15 @@ class NormalizacionTelefonoTests(unittest.TestCase):
         self.assertIn("573106927812", claves)
         self.assertIn("3106927812", claves)
 
+    def test_psid_meta_no_es_telefono_legible(self):
+        import agent_supervision as sup
+
+        self.assertFalse(sup.es_telefono_whatsapp_legible("1442782103907655"))
+        self.assertTrue(sup.es_telefono_whatsapp_legible("573126487636"))
+        self.assertTrue(sup.es_telefono_whatsapp_legible("3126487636"))
+        self.assertEqual(sup.formatear_telefono_display("573126487636"), "+57 312 648 7636")
+        self.assertEqual(sup.formatear_telefono_display("1442782103907655"), "")
+
 
 class EnriquecerMensajeTests(unittest.TestCase):
     def test_imagen_sin_url_genera_placeholder(self):
@@ -49,6 +58,21 @@ class EnriquecerMensajeTests(unittest.TestCase):
         self.assertTrue(m["tiene_imagen"])
         tipos = [a["tipo"] for a in m["adjuntos"]]
         self.assertIn("image_placeholder", tipos)
+
+    def test_placeholder_texto_sin_tipo_image(self):
+        import agent_supervision as sup
+
+        m = sup.enriquecer_mensaje(
+            {
+                "tipo_mensaje": "text",
+                "contenido": "[Imagen recibida; presumiblemente comprobante de pago]",
+                "autor": "DEUDOR",
+                "direccion": "ENTRANTE",
+            }
+        )
+        self.assertEqual(m["tipo_mensaje"], "image")
+        self.assertTrue(m["tiene_imagen"])
+        self.assertIn("image_placeholder", [a["tipo"] for a in m["adjuntos"]])
 
     def test_pdf_en_metadata(self):
         import agent_supervision as sup
@@ -116,16 +140,19 @@ class ConversacionesEnrichmentTests(unittest.TestCase):
                     "modo_actual": "AGENTE",
                     "fecha_inicio": "2026-10-01T10:00:00Z",
                     "fecha_ultima_actividad": "2026-10-03T12:00:00Z",
+                    "total_mensajes": 4,
                 },
                 {
                     "telefono": "3001112233",
                     "modo_actual": "HUMANO",
                     "fecha_ultima_actividad": "2026-10-03T11:00:00Z",
+                    "total_mensajes": 2,
                 },
             ],
         }
         with patch.object(sup, "_cargar_nombres_agenda", return_value=fake_nombres):
-            out = sup._normalizar_conversaciones(data, buscar="")
+            with patch.object(sup, "_cargar_contactos_por_identificacion", return_value={}):
+                out = sup._normalizar_conversaciones(data, buscar="")
         filas = out["conversaciones"]
         self.assertEqual(filas[0]["nombre"], "Juan Pérez")
         self.assertEqual(filas[0]["display_name"], "Juan Pérez")
@@ -133,6 +160,58 @@ class ConversacionesEnrichmentTests(unittest.TestCase):
         self.assertFalse(filas[1]["ia_atiende"])
         self.assertEqual(out["aviso_ia"]["total_ia"], 1)
         self.assertTrue(out["aviso_ia"]["activo"])
+        self.assertIn("mensaje", filas[0]["last_message"].lower())
+
+    def test_preview_desde_total_mensajes_y_psid(self):
+        import agent_supervision as sup
+
+        data = {
+            "conversaciones": [
+                {
+                    "telefono": "1442782103907655",
+                    "identificacion": "9872330",
+                    "modo_actual": "HUMANO",
+                    "total_mensajes": 12,
+                    "fecha_ultima_actividad": "2026-10-08T18:00:00Z",
+                }
+            ]
+        }
+        por_cedula = {
+            "9872330": {
+                "nombre": "Deudor Prueba",
+                "telefono": "573001112233",
+                "contacto_id": 9,
+                "fuente": "contactos_cedula",
+            }
+        }
+        with patch.object(sup, "_cargar_nombres_agenda", return_value={}):
+            with patch.object(sup, "_cargar_contactos_por_identificacion", return_value=por_cedula):
+                out = sup._normalizar_conversaciones(data, buscar="")
+        fila = out["conversaciones"][0]
+        self.assertEqual(fila["conversation_key"], "1442782103907655")
+        self.assertTrue(fila["telefono_es_id_meta"])
+        self.assertEqual(fila["telefono_resuelto"], "573001112233")
+        self.assertIn("573", fila["telefono_display"].replace(" ", "").replace("+", ""))
+        self.assertEqual(fila["nombre"], "Deudor Prueba")
+        self.assertEqual(fila["last_message"], "12 mensaje(s) en el hilo")
+
+    def test_preview_ultimo_mensaje_del_bot(self):
+        import agent_supervision as sup
+
+        data = {
+            "conversaciones": [
+                {
+                    "telefono": "573106927812",
+                    "modo_actual": "AGENTE",
+                    "ultimo_mensaje": "[Imagen recibida; presumiblemente comprobante de pago]",
+                    "total_mensajes": 3,
+                }
+            ]
+        }
+        with patch.object(sup, "_cargar_nombres_agenda", return_value={}):
+            with patch.object(sup, "_cargar_contactos_por_identificacion", return_value={}):
+                out = sup._normalizar_conversaciones(data, buscar="")
+        self.assertIn("Imagen", out["conversaciones"][0]["last_message"])
 
     def test_filtro_buscar_por_nombre(self):
         import agent_supervision as sup
@@ -153,7 +232,8 @@ class ConversacionesEnrichmentTests(unittest.TestCase):
             ]
         }
         with patch.object(sup, "_cargar_nombres_agenda", return_value=fake_nombres):
-            out = sup._normalizar_conversaciones(data, buscar="maría")
+            with patch.object(sup, "_cargar_contactos_por_identificacion", return_value={}):
+                out = sup._normalizar_conversaciones(data, buscar="maría")
         self.assertEqual(len(out["conversaciones"]), 1)
         self.assertEqual(out["conversaciones"][0]["nombre"], "María López")
 
@@ -201,6 +281,11 @@ class TemplateSupervisionTests(unittest.TestCase):
         self.assertIn("aviso-ia", self.tpl)
         self.assertIn("toast-ia", self.tpl)
         self.assertIn("Buscar nombre, teléfono o cédula", self.tpl)
+
+    def test_ui_telefono_visible_y_preview(self):
+        self.assertIn("telefonoVisible", self.tpl)
+        self.assertIn("conversationKey", self.tpl)
+        self.assertIn("image_placeholder", self.tpl)
 
     def test_api_agenda_y_aviso_en_router(self):
         self.assertIn('/supervision-agente/api/agenda', self.src)
