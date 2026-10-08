@@ -430,18 +430,24 @@ async function seleccionar(phone) {
         const telefono = conversationKey(c) || phone;
         const telShow = telefonoVisible(c);
         const nombre = displayNombre(c);
-        const titulo = (nombre && nombre !== telefono && nombre !== telShow) ? nombre : (telShow || telefono);
+        const cedula = c.identificacion || c.identification || c.cedula || '';
+        const opaqueId = c.telefono_es_id_meta || c.es_telefono_legible === false;
+        const titulo = (nombre && nombre !== telefono && nombre !== telShow)
+            ? nombre
+            : (telShow || (cedula ? `CC ${cedula}` : 'Contacto WhatsApp'));
         document.getElementById('detalle-nombre').textContent = titulo;
-        let subHeader = telShow;
-        if (nombre && nombre !== telShow && telShow) {
+        // Nunca mostrar PSID / CO.<id> crudo en el subtítulo.
+        let subHeader = '';
+        if (telShow && !opaqueId) {
             subHeader = telShow;
-        } else if (c.identificacion || c.identification) {
-            subHeader = `CC ${c.identificacion || c.identification}`;
-        } else if (!telShow || c.telefono_es_id_meta) {
+        } else if (cedula) {
+            subHeader = opaqueId
+                ? `Sin teléfono WhatsApp · CC ${cedula}`
+                : `CC ${cedula}`;
+        } else if (opaqueId) {
+            subHeader = 'Sin teléfono WhatsApp (ID Meta opaco)';
+        } else {
             subHeader = 'Sin nombre en agenda — clic en lápiz para guardar';
-        }
-        if (c.telefono_es_id_meta && (c.identificacion || c.identification)) {
-            subHeader = `${telShow || 'ID WhatsApp'} · CC ${c.identificacion || c.identification}`;
         }
         document.getElementById('detalle-telefono').textContent = subHeader;
         document.getElementById('detalle-avatar').textContent = iniciales(nombre, telShow || telefono);
@@ -473,32 +479,37 @@ async function seleccionar(phone) {
 
 function clasificarEmisor(m) {
     const role = String(m.role || m.rol || '').toUpperCase().trim();
-    const direction = String(m.direction || m.direccion || m.type || m.tipo || '').toUpperCase().trim();
-    const author = String(m.author || m.autor || m.sender || m.remitente || m.from || '').toUpperCase().trim();
+    // No usar type/tipo aquí: el bot manda tipo_mensaje=text y ensucia la dirección.
+    const direction = String(m.direction || m.direccion || '').toUpperCase().trim();
+    const author = String(m.author || m.autor || m.sender || m.remitente || '').toUpperCase().trim();
     const content = String(m.content || m.contenido || m.mensaje || '').trim();
     const fromMe = m.from_me !== undefined ? m.from_me : (m.fromMe !== undefined ? m.fromMe : m.is_from_me);
-    const tipoMsg = String(m.tipo_mensaje || '').toLowerCase();
+    const tipoMsg = String(m.tipo_mensaje || m.type || m.tipo || '').toLowerCase();
 
     if (author === 'SISTEMA' || author === 'SYSTEM' || role === 'SYSTEM' || role === 'SISTEMA' ||
         content.startsWith('[SISTEMA') || content.startsWith('[SYSTEM') || content.startsWith('[PROMPT') || content.startsWith('[INTERNAL') ||
         tipoMsg === 'estado_deuda') {
         return 'SISTEMA';
     }
+    // Autor explícito gana sobre usuario_humano del JOIN de conversación.
+    if (author === 'AGENTE' || author === 'AGENT' || author === 'BOT' || author === 'IA' || author === 'AI' || author === 'ASSISTANT') {
+        return 'AGENTE';
+    }
+    if (author === 'DEUDOR' || author === 'USER' || author === 'CLIENTE' || author === 'CLIENT' || author === 'CUSTOMER') {
+        return 'DEUDOR';
+    }
     if (author === 'HUMANO' || author === 'HUMAN' || author === 'ABOGADO' || author === 'SUPERVISOR' ||
-        role === 'HUMANO' || role === 'HUMAN' || m.human === true || (m.usuario_humano && direction !== 'IN' && direction !== 'INBOUND' && direction !== 'ENTRANTE')) {
+        role === 'HUMANO' || role === 'HUMAN' || m.human === true) {
         return 'HUMANO';
     }
     const esInboundDirection = ['IN', 'INBOUND', 'INCOMING', 'ENTRANTE', 'ENTRADA', 'RECEIVED'].includes(direction);
     const esUserRole = ['USER', 'CLIENTE', 'CLIENT', 'DEUDOR', 'DEBTOR', 'CUSTOMER', 'CONTACT'].includes(role);
-    const esUserAuthor = ['USER', 'CLIENTE', 'CLIENT', 'DEUDOR', 'DEBTOR', 'CUSTOMER', 'CONTACT'].includes(author);
-    const esPhoneAuthor = actual && String(actual.phone || actual.telefono || '').replace(/\D/g, '') === author.replace(/\D/g, '') && author.length > 5;
-    if (esInboundDirection || esUserRole || esUserAuthor || esPhoneAuthor || fromMe === false) {
+    if (esInboundDirection || esUserRole || fromMe === false) {
         return 'DEUDOR';
     }
     const esOutboundDirection = ['OUT', 'OUTBOUND', 'SALIENTE', 'OUTGOING', 'SENT'].includes(direction);
     const esAssistantRole = ['ASSISTANT', 'BOT', 'AGENT', 'AGENTE', 'IA', 'AI'].includes(role);
-    const esAgentAuthor = ['AGENTE', 'AGENT', 'BOT', 'IA', 'AI', 'ASSISTANT'].includes(author);
-    if (esOutboundDirection || esAssistantRole || esAgentAuthor || fromMe === true) {
+    if (esOutboundDirection || esAssistantRole || fromMe === true) {
         return 'AGENTE';
     }
     if (content.includes('[Documento PDF enviado]') || (content.includes('liquidación') && content.includes('propuesta'))) {
