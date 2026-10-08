@@ -462,11 +462,18 @@ def _normalizar_conversaciones(data, buscar: str = ""):
         if not isinstance(fila, dict):
             continue
         fila = dict(fila)
-        phone = fila.get("phone") or fila.get("telefono") or ""
-        # conversation_key: clave opaca del bot (teléfono o PSID) para APIs /control/*
-        fila["conversation_key"] = str(phone)
+        # conversation_key: clave del bot para /control/* (puede ser PSID). No sustituir por wa_id.
+        conversation_key = (
+            fila.get("conversation_key")
+            or fila.get("telefono")
+            or fila.get("phone")
+            or ""
+        )
+        phone = str(conversation_key)
+        fila["conversation_key"] = phone
         fila["phone"] = phone
         fila["telefono"] = phone
+        fila["wa_id"] = fila.get("wa_id") or fila.get("phone_legible")
         fila["identification"] = fila.get("identification") or fila.get("identificacion")
         fila["identificacion"] = fila["identification"]
         fila["mode_current"] = (
@@ -481,6 +488,8 @@ def _normalizar_conversaciones(data, buscar: str = ""):
         contacto_cedula = por_cedula.get(ident_digits) if ident_digits else None
 
         info = _nombre_para_telefono(phone, nombres)
+        if not info and fila.get("wa_id"):
+            info = _nombre_para_telefono(str(fila.get("wa_id")), nombres)
         if not info and contacto_cedula and contacto_cedula.get("nombre"):
             info = {
                 "nombre": contacto_cedula["nombre"],
@@ -490,14 +499,16 @@ def _normalizar_conversaciones(data, buscar: str = ""):
                 "contacto_id": contacto_cedula.get("contacto_id"),
             }
 
-        legible = es_telefono_whatsapp_legible(phone)
-        fila["es_telefono_legible"] = legible
+        legible = es_telefono_whatsapp_legible(phone) or es_telefono_whatsapp_legible(fila.get("wa_id"))
+        fila["es_telefono_legible"] = bool(legible)
         telefono_resuelto = ""
-        if info and info.get("telefono_display") and es_telefono_whatsapp_legible(info["telefono_display"]):
+        if es_telefono_whatsapp_legible(fila.get("wa_id")):
+            telefono_resuelto = normalizar_telefono_digits(fila.get("wa_id"))
+        elif info and info.get("telefono_display") and es_telefono_whatsapp_legible(info["telefono_display"]):
             telefono_resuelto = normalizar_telefono_digits(info["telefono_display"])
         elif contacto_cedula and es_telefono_whatsapp_legible(contacto_cedula.get("telefono")):
             telefono_resuelto = normalizar_telefono_digits(contacto_cedula.get("telefono"))
-        elif legible:
+        elif es_telefono_whatsapp_legible(phone):
             telefono_resuelto = normalizar_telefono_digits(phone)
 
         fila["telefono_resuelto"] = telefono_resuelto or None
@@ -582,7 +593,24 @@ def _normalizar_mensajes(data):
     mensajes = data.get("mensajes") or data.get("messages") or data.get("data")
     if not isinstance(mensajes, list):
         return data
-    data["mensajes"] = [enriquecer_mensaje(m) for m in mensajes if isinstance(m, dict)]
+    # El bot hace JOIN y repite c.usuario_humano en cada fila; eso no implica
+    # que el mensaje lo haya escrito el abogado (rompe clasificarEmisor).
+    conv_usuario = None
+    out = []
+    for m in mensajes:
+        if not isinstance(m, dict):
+            continue
+        m = dict(m)
+        if conv_usuario is None and m.get("usuario_humano"):
+            conv_usuario = m.get("usuario_humano")
+        autor = str(m.get("autor") or m.get("author") or "").upper()
+        if autor != "HUMANO":
+            m.pop("usuario_humano", None)
+        out.append(enriquecer_mensaje(m))
+    data["mensajes"] = out
+    if conv_usuario and not data.get("usuario_humano"):
+        data["usuario_humano"] = conv_usuario
+        data["human_user"] = conv_usuario
     return data
 
 

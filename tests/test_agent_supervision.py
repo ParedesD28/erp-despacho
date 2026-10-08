@@ -118,6 +118,43 @@ class EnriquecerMensajeTests(unittest.TestCase):
         self.assertEqual(m["adjuntos"][0]["url"], "https://x.test/a.jpg")
 
 
+class MensajesNormalizacionTests(unittest.TestCase):
+    def test_quita_usuario_humano_de_mensajes_agente(self):
+        import agent_supervision as sup
+
+        data = {
+            "mensajes": [
+                {
+                    "autor": "AGENTE",
+                    "direccion": "SALIENTE",
+                    "contenido": "Hola",
+                    "tipo_mensaje": "text",
+                    "usuario_humano": "abogado@erp",
+                },
+                {
+                    "autor": "HUMANO",
+                    "direccion": "SALIENTE",
+                    "contenido": "Manual",
+                    "tipo_mensaje": "text",
+                    "usuario_humano": "abogado@erp",
+                },
+                {
+                    "autor": "DEUDOR",
+                    "direccion": "ENTRANTE",
+                    "contenido": "[Imagen recibida; presumiblemente comprobante de pago]",
+                    "tipo_mensaje": "image",
+                    "usuario_humano": "abogado@erp",
+                },
+            ]
+        }
+        out = sup._normalizar_mensajes(data)
+        self.assertNotIn("usuario_humano", out["mensajes"][0])
+        self.assertEqual(out["mensajes"][1].get("usuario_humano"), "abogado@erp")
+        self.assertNotIn("usuario_humano", out["mensajes"][2])
+        self.assertEqual(out.get("usuario_humano"), "abogado@erp")
+        self.assertTrue(out["mensajes"][2]["tiene_imagen"])
+
+
 class ConversacionesEnrichmentTests(unittest.TestCase):
     def test_enriquece_nombre_y_aviso_ia(self):
         import agent_supervision as sup
@@ -286,6 +323,10 @@ class TemplateSupervisionTests(unittest.TestCase):
         self.assertIn("telefonoVisible", self.tpl)
         self.assertIn("conversationKey", self.tpl)
         self.assertIn("image_placeholder", self.tpl)
+        self.assertIn("Autor explícito gana sobre usuario_humano", self.tpl)
+        self.assertIn("Sin teléfono WhatsApp", self.tpl)
+        self.assertIn('usuario_humano', self.src)
+        self.assertIn('autor != "HUMANO"', self.src)
 
     def test_api_agenda_y_aviso_en_router(self):
         self.assertIn('/supervision-agente/api/agenda', self.src)
