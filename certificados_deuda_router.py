@@ -324,6 +324,14 @@ async def procesar_certificado_unificado(
             '{titular_nombre,titular_cedula,fmi,propietarios[],conceptos_ordinaria[]}.'
         ),
     ),
+    extender_certificado_saldo_anterior: str = Form(
+        "false",
+        description=(
+            "Si true, desglosa saldo anterior en cuotas hacia atrás "
+            "(solo cuando el certificado se extiende a esa fecha). "
+            "Default false: saldo solo afecta inicio de mora (opción B)."
+        ),
+    ),
 ):
     """
     Flujo unificado: Bolsa Global → lookup Neon (clave canónica) → certificado(s).
@@ -385,6 +393,12 @@ async def procesar_certificado_unificado(
             incluir_poder=incluir_poder,
             fmi_por_indice=fmi_map,
             edicion_por_indice=edicion_map,
+            extender_certificado_saldo_anterior=str(
+                extender_certificado_saldo_anterior or ""
+            )
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on", "si", "sí"},
         )
     except CertificadoNoEncontradoError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

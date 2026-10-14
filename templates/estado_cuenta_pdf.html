@@ -91,6 +91,19 @@
                 Un certificado por <strong>unidad</strong> (titular principal + lista de
                 co-propietarios). Analizar OK = parseo PDF; sin match = Neon no cruzó.
             </p>
+            <div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-950 space-y-1">
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="chk-extender-saldo-anterior" class="mt-1 rounded border-rose-300 text-rose-800 focus:ring-rose-500">
+                    <span>
+                        <span class="font-semibold">Extender certificado al saldo anterior</span>
+                        (desglose en cuotas de administración hacia atrás).
+                        <span class="block text-xs text-rose-800 mt-0.5">
+                            Por defecto el saldo anterior <strong>solo afecta el inicio de mora</strong>.
+                            Marque esto únicamente si la pretensión / certificado cubre ese período previo.
+                        </span>
+                    </span>
+                </label>
+            </div>
             <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
                 <label class="flex items-start gap-2 cursor-pointer">
                     <input type="checkbox" id="chk-permitir-datos-pdf" class="mt-1 rounded border-amber-300 text-amber-800 focus:ring-amber-500">
@@ -796,10 +809,18 @@
         return fetch(url, { method: 'POST', body: fd });
     }
 
+    function extenderSaldoAnteriorOpts() {
+        return !!(document.getElementById('chk-extender-saldo-anterior') || {}).checked;
+    }
+
     async function postBolsa(url, cacheId, files) {
         const fd = new FormData();
         if (cacheId) fd.append('cache_id', cacheId);
         (files || []).forEach(f => fd.append('archivos', f));
+        fd.append(
+            'extender_certificado_saldo_anterior',
+            extenderSaldoAnteriorOpts() ? 'true' : 'false'
+        );
         return fetch(url, { method: 'POST', body: fd });
     }
 
@@ -818,6 +839,10 @@
         fd.append('modo', modo);
         const opts = pdfFallbackOpts();
         fd.append('permitir_datos_pdf', opts.permitir ? 'true' : 'false');
+        fd.append(
+            'extender_certificado_saldo_anterior',
+            extenderSaldoAnteriorOpts() ? 'true' : 'false'
+        );
         if (opts.nit) fd.append('copropiedad_nit', opts.nit);
         if (opts.cedula) fd.append('titular_cedula', opts.cedula);
         if (indices && indices.length) {

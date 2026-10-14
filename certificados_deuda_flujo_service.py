@@ -481,13 +481,19 @@ def procesar_lote_certificados(
     titular_cedula: str = "",
     copropiedad_nit: str = "",
     copropiedad_nombre: str = "",
+    extender_certificado_saldo_anterior: bool = False,
 ) -> dict[str, Any]:
     """
     Bolsa Global por cuenta + lookup Neon (clave canónica).
 
     No genera Word; solo preview / diagnóstico.
+    `extender_certificado_saldo_anterior`: desglose cuotas hacia atrás
+    solo si el abogado extiende el certificado a esa fecha.
     """
-    bolsa = calcular_bolsa_lote(cuentas)
+    bolsa = calcular_bolsa_lote(
+        cuentas,
+        extender_certificado_saldo_anterior=extender_certificado_saldo_anterior,
+    )
     resultados: list[dict[str, Any]] = []
     for r in bolsa.get("resultados") or []:
         resultados.append(
@@ -781,6 +787,7 @@ def procesar_y_generar_certificados(
     incluir_poder: bool = True,
     fmi_por_indice: Optional[dict[int, str]] = None,
     edicion_por_indice: Optional[dict[int, dict[str, Any]]] = None,
+    extender_certificado_saldo_anterior: bool = False,
 ) -> dict[str, Any] | tuple[BytesIO, str, dict[str, Any]]:
     """
     Punto único: preview (dict) o generar (buffer, filename, meta).
@@ -793,6 +800,8 @@ def procesar_y_generar_certificados(
     hay `indices`, se intersectan (no se mezclan deudores entre cuentas).
     `fmi_por_indice` aplica solo en `generar` (índice del preview → FMI).
     `edicion_por_indice` (phasecob): nombre/cédula/FMI/conceptos por índice.
+    `extender_certificado_saldo_anterior`: desglose saldo anterior solo
+    si el certificado se extiende a esa fecha.
     """
     preview = procesar_lote_certificados(
         cuentas,
@@ -800,6 +809,7 @@ def procesar_y_generar_certificados(
         titular_cedula=titular_cedula,
         copropiedad_nit=copropiedad_nit,
         copropiedad_nombre=copropiedad_nombre,
+        extender_certificado_saldo_anterior=extender_certificado_saldo_anterior,
     )
     if (modo or "preview").strip().lower() != "generar":
         return preview

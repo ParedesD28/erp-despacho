@@ -42,9 +42,10 @@ _MAX_MESES_DESGLOSE_SALDO = 240
 
 _ALERTA_SALDO_ANTERIOR_BASE = (
     "ATENCIÓN ABOGADO: esta cuenta tiene saldo anterior COLON. "
-    "Ese monto afecta el inicio de mora y la pretensión. "
-    "Revise el tratamiento (desglose en cuotas hacia atrás u opción B) "
-    "antes de emitir certificado o poder — no se dañe el proceso."
+    "El saldo anterior SIEMPRE se usa para determinar el inicio de mora (Art. 1653 / Bolsa). "
+    "El desglose en cuotas de administración hacia atrás SOLO aplica si usted "
+    "extiende el certificado hasta esa fecha; si no lo extiende, no se inventan "
+    "cuotas en el capital demandado. Revise antes de emitir — no se dañe el proceso."
 )
 
 
@@ -59,7 +60,7 @@ class ResultadoMoraCapitalLimpio:
     # ΣAbono bruto y saldo anterior COLON.
     bolsa_abonos: float = 0.0
     saldo_anterior: float | None = None
-    # Preferencia: desglose_cuotas; fallback: opcion_b (restar de bolsa).
+    # Default: opcion_b (mora). desglose_cuotas solo si se extiende el certificado.
     saldo_anterior_modo: SaldoAnteriorModo | None = None
     saldo_anterior_desglose: list[dict[str, Any]] = field(default_factory=list)
     alerta_saldo_anterior: bool = False
@@ -282,6 +283,7 @@ def mensaje_alerta_saldo_anterior(
     modo: SaldoAnteriorModo,
     cuota_inferida: float | None = None,
     n_meses_desglose: int = 0,
+    extender_certificado: bool = False,
 ) -> str:
     """Texto visible para el abogado (UI Bolsa / certificados)."""
     monto = _fmt_cop_alerta(saldo)
@@ -292,15 +294,21 @@ def mensaje_alerta_saldo_anterior(
             else ""
         )
         detalle = (
-            f" Modo: desglose en {n_meses_desglose} cuota(s) de administración "
-            f"hacia atrás (capital sintético previo a la ventana).{cuota_txt}"
+            f" Certificado extendido: desglose en {n_meses_desglose} cuota(s) "
+            f"de administración hacia atrás (entran al capital demandado).{cuota_txt}"
         )
     else:
         detalle = (
-            " Modo: opción B (fallback) — se restó el saldo de la bolsa de abonos; "
-            "no se inyectó capital por el saldo mixto. No fue posible inferir cuota "
-            "ordinaria del extracto para desglosar."
+            " Uso actual: el saldo se restó de la bolsa solo para fechar la mora "
+            "(opción B); no se inyectaron cuotas sintéticas al capital. "
+            "Active «Extender certificado al saldo anterior» solo si la pretensión "
+            "cubre ese período previo."
         )
+        if not extender_certificado and cuota_inferida and cuota_inferida > _EPS:
+            detalle += (
+                f" Cuota ordinaria inferible del extracto: {_fmt_cop_alerta(cuota_inferida)} "
+                "(disponible para desglose si extiende el certificado)."
+            )
     return f"{_ALERTA_SALDO_ANTERIOR_BASE} Saldo anterior: {monto}.{detalle}"
 
 
@@ -546,18 +554,20 @@ def determinar_mora_y_capital_limpio(
     rows: Sequence[Mapping[str, Any]] | None,
     *,
     saldo_anterior: float | None = None,
+    extender_certificado_saldo_anterior: bool = False,
 ) -> dict[str, Any]:
     """
     Método Bolsa Global (Art. 1653 / 1655 CC) — reglas estrictas:
 
     1. Sumar todos los Abono → bolsa bruta (`bolsa_abonos`).
        Si hay `saldo_anterior` COLON:
-       - Preferido: desglose en cuotas de administración hacia atrás
-         (capital sintético previo a la ventana; bolsa = ΣAbono completa).
-       - Fallback Opción B: bolsa efectiva = max(0, ΣAbono − saldo_anterior)
-         si no se puede inferir cuota ordinaria del extracto.
-       Con saldo_anterior > 0 siempre se enciende `alerta_saldo_anterior`
-       para el abogado (revisar pretensión / no dañar el proceso).
+       - Siempre (default): Opción B — bolsa efectiva =
+         max(0, ΣAbono − saldo_anterior) para fechar inicio de mora.
+         No se inventan cuotas en capital demandado.
+       - Solo si `extender_certificado_saldo_anterior=True` y hay cuota
+         ordinaria inferible: desglose en cuotas hacia atrás (capital
+         sintético previo a la ventana; bolsa = ΣAbono completa).
+       Con saldo_anterior > 0 siempre se enciende `alerta_saldo_anterior`.
     2. Agrupar Valor > 0 por mes YYYY.MM.
     3. Clasificar: intereses / capital / gastos; no reconocido → alerta + capital.
     4. Consumir mes a mes: intereses primero, luego capital.
@@ -693,23 +703,26 @@ def determinar_mora_y_capital_limpio(
                 saldo_ant = _redondear_cop(parsed_sa)
             saldo_ant_val = saldo_ant
 
-    # Preferido: desglose cuotas hacia atrás; fallback Opción B.
+    # Default Opción B (mora). Desglose solo si se extiende el certificado.
     if saldo_ant > _EPS:
         alerta_sa = True
+        extender = bool(extender_certificado_saldo_anterior)
         primer_mes = min(meses.keys()) if meses else None
         mes_antes = _mes_anterior_corte(primer_mes) if primer_mes else None
         cuota_inferida = inferir_cuota_ordinaria_desde_rows(rows)
 
         if (
-            mes_antes is not None
+            extender
+            and mes_antes is not None
             and cuota_inferida is not None
             and cuota_inferida > _EPS
         ):
-            saldo_desglose = desglosar_saldo_anterior_en_cuotas(
+            propuesto = desglosar_saldo_anterior_en_cuotas(
                 saldo_ant, cuota_inferida, mes_antes
             )
-            if saldo_desglose:
+            if propuesto:
                 saldo_modo = "desglose_cuotas"
+                saldo_desglose = propuesto
                 for i, parte in enumerate(saldo_desglose):
                     mes_d = str(parte["mes_corte"])
                     item_syn = _ItemMes(
@@ -721,8 +734,8 @@ def determinar_mora_y_capital_limpio(
                     )
                     meses.setdefault(mes_d, _GrupoMes()).capitales.append(item_syn)
                 errores.append(
-                    f"Saldo anterior {_fmt_cop_alerta(saldo_ant)} desglosado en "
-                    f"{len(saldo_desglose)} cuota(s) de administración hacia atrás "
+                    f"Certificado extendido: saldo anterior {_fmt_cop_alerta(saldo_ant)} "
+                    f"desglosado en {len(saldo_desglose)} cuota(s) hacia atrás "
                     f"(cuota inferida {_fmt_cop_alerta(cuota_inferida)})."
                 )
                 alerta_sa_msg = mensaje_alerta_saldo_anterior(
@@ -730,32 +743,43 @@ def determinar_mora_y_capital_limpio(
                     modo="desglose_cuotas",
                     cuota_inferida=cuota_inferida,
                     n_meses_desglose=len(saldo_desglose),
+                    extender_certificado=True,
                 )
             else:
                 saldo_modo = "opcion_b"
         else:
             saldo_modo = "opcion_b"
+            if extender and (
+                cuota_inferida is None or cuota_inferida <= _EPS or mes_antes is None
+            ):
+                errores.append(
+                    "Se pidió extender el certificado al saldo anterior, pero no "
+                    "fue posible inferir cuota ordinaria del extracto; se usa "
+                    "opción B (solo mora, sin cuotas sintéticas)."
+                )
 
         if saldo_modo == "opcion_b":
             if saldo_ant > bolsa_abonos + _EPS:
                 errores.append(
                     f"Saldo anterior ({saldo_ant}) supera ΣAbono ({bolsa_abonos}); "
-                    "bolsa efectiva = 0. Opción B (fallback): el remanente previo "
-                    "no se demanda como capital (no hubo desglose de cuotas)."
+                    "bolsa efectiva = 0. Opción B: el remanente previo no se demanda "
+                    "como capital (certificado no extendido / sin desglose)."
                 )
             else:
                 errores.append(
-                    f"Opción B (fallback): bolsa efectiva = ΣAbono ({bolsa_abonos}) − "
+                    f"Opción B: bolsa efectiva = ΣAbono ({bolsa_abonos}) − "
                     f"saldo_anterior ({saldo_ant}) = "
-                    f"{_redondear_cop(max(0.0, bolsa_abonos - saldo_ant))}."
+                    f"{_redondear_cop(max(0.0, bolsa_abonos - saldo_ant))} "
+                    "(solo para inicio de mora; sin cuotas sintéticas)."
                 )
             alerta_sa_msg = mensaje_alerta_saldo_anterior(
                 saldo=saldo_ant,
                 modo="opcion_b",
                 cuota_inferida=cuota_inferida,
+                extender_certificado=extender,
             )
 
-    # bolsa_global_inicial: completa con desglose; efectiva (Σ−saldo) en opción B.
+    # bolsa_global_inicial: efectiva (Σ−saldo) en B; completa si desglose.
     if saldo_modo == "opcion_b" and saldo_ant > _EPS:
         bolsa_inicial = _redondear_cop(max(0.0, bolsa_abonos - saldo_ant))
     else:

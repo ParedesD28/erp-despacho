@@ -2253,14 +2253,22 @@ async def _cuentas_lote_para_bolsa(
     return cuentas
 
 
+def _form_flag_true(raw: str | None) -> bool:
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on", "si", "sí"}
+
+
 async def _payload_bolsa_global(
     cache_id: str,
     archivos: list[UploadFile] | None,
+    *,
+    extender_certificado_saldo_anterior: bool = False,
 ) -> dict:
     """Resuelve cuentas y calcula Bolsa Global (shared por JSON/Excel/export)."""
     cuentas = await _cuentas_lote_para_bolsa(cache_id, archivos)
     return await asyncio.to_thread(
-        bolsa_global_estado_cuenta_service.calcular_bolsa_lote, cuentas
+        bolsa_global_estado_cuenta_service.calcular_bolsa_lote,
+        cuentas,
+        extender_certificado_saldo_anterior=extender_certificado_saldo_anterior,
     )
 
 
@@ -2268,22 +2276,38 @@ async def _payload_bolsa_global(
 async def calcular_bolsa_global_estado_cuenta(
     cache_id: str = Form(""),
     archivos: list[UploadFile] | None = File(None),
+    extender_certificado_saldo_anterior: str = Form("false"),
 ):
     """
     Método Bolsa Global por deudor/archivo (Art. 1653-1655).
     Endpoint aparte del Excel de transcripción (PR #20).
     Requiere sesión + accion.editar (middleware genérico de POST).
+    `extender_certificado_saldo_anterior`: desglose cuotas hacia atrás
+    solo si el abogado extiende el certificado a esa fecha.
     """
-    return await _payload_bolsa_global(cache_id, archivos)
+    return await _payload_bolsa_global(
+        cache_id,
+        archivos,
+        extender_certificado_saldo_anterior=_form_flag_true(
+            extender_certificado_saldo_anterior
+        ),
+    )
 
 
 @app.post("/herramientas/estado-cuenta/bolsa-global/excel")
 async def exportar_bolsa_global_excel(
     cache_id: str = Form(""),
     archivos: list[UploadFile] | None = File(None),
+    extender_certificado_saldo_anterior: str = Form("false"),
 ):
     """Descarga Excel dedicado de mora/capital limpio (no toca generar_excel_lote)."""
-    payload = await _payload_bolsa_global(cache_id, archivos)
+    payload = await _payload_bolsa_global(
+        cache_id,
+        archivos,
+        extender_certificado_saldo_anterior=_form_flag_true(
+            extender_certificado_saldo_anterior
+        ),
+    )
     excel = await asyncio.to_thread(
         bolsa_global_estado_cuenta_service.generar_excel_bolsa_global, payload
     )
@@ -2301,9 +2325,16 @@ async def exportar_bolsa_global_excel(
 async def exportar_bolsa_global_json(
     cache_id: str = Form(""),
     archivos: list[UploadFile] | None = File(None),
+    extender_certificado_saldo_anterior: str = Form("false"),
 ):
     """Descarga JSON del mismo resultado de Bolsa Global."""
-    payload = await _payload_bolsa_global(cache_id, archivos)
+    payload = await _payload_bolsa_global(
+        cache_id,
+        archivos,
+        extender_certificado_saldo_anterior=_form_flag_true(
+            extender_certificado_saldo_anterior
+        ),
+    )
     raw = await asyncio.to_thread(
         bolsa_global_estado_cuenta_service.resultado_a_json_bytes, payload
     )

@@ -118,7 +118,7 @@ class BolsaIntegracionServicioTests(unittest.TestCase):
         self.assertEqual(out["fecha_inicio_mora"], "Sin deuda")
         self.assertTrue(any("PDF no parseado" in e for e in out["errores_procesamiento"]))
 
-    def test_saldo_anterior_cuenta_desglose_y_alerta(self):
+    def test_saldo_anterior_cuenta_opcion_b_y_alerta(self):
         rows = [
             _fila("2024.01.01", "CUOTA ADMON", 100, 0),
             _fila("2024.01.01", "INTERES MORA", 20, 0),
@@ -131,11 +131,27 @@ class BolsaIntegracionServicioTests(unittest.TestCase):
         self.assertFalse(out["omitido"])
         self.assertEqual(out["saldo_anterior"], 80.0)
         self.assertEqual(out["bolsa_abonos"], 150.0)
-        self.assertEqual(out["bolsa_global_inicial"], 150.0)
-        self.assertEqual(out["saldo_anterior_modo"], "desglose_cuotas")
+        self.assertEqual(out["bolsa_global_inicial"], 70.0)
+        self.assertEqual(out["saldo_anterior_modo"], "opcion_b")
+        self.assertEqual(out["saldo_anterior_desglose"], [])
         self.assertTrue(out["alerta_saldo_anterior"])
         self.assertIn("ATENCIÓN ABOGADO", out["alerta_saldo_anterior_mensaje"] or "")
         self.assertEqual(out["fecha_inicio_mora"], "2024.01")
+
+    def test_extender_certificado_activa_desglose(self):
+        rows = [
+            _fila("2024.01.01", "CUOTA ADMON", 100, 0),
+            _fila("2024.01.15", "ABONO", 0, 150),
+            _fila("2024.02.01", "CUOTA ADMON", 100, 0),
+        ]
+        out = calcular_bolsa_por_cuenta(
+            _cuenta("a.pdf", "DEUDOR A", rows, saldo_anterior=80),
+            extender_certificado_saldo_anterior=True,
+        )
+        self.assertEqual(out["saldo_anterior_modo"], "desglose_cuotas")
+        self.assertEqual(out["bolsa_global_inicial"], 150.0)
+        self.assertTrue(out["alerta_saldo_anterior"])
+        self.assertGreater(len(out["saldo_anterior_desglose"]), 0)
 
     def test_excel_resumen_incluye_saldo_anterior(self):
         from openpyxl import load_workbook

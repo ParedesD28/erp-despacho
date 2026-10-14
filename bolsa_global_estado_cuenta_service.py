@@ -46,7 +46,11 @@ def _meta_cuenta(cuenta: dict[str, Any]) -> MetaCuentaBolsa:
     }
 
 
-def calcular_bolsa_por_cuenta(cuenta: dict[str, Any]) -> dict[str, Any]:
+def calcular_bolsa_por_cuenta(
+    cuenta: dict[str, Any],
+    *,
+    extender_certificado_saldo_anterior: bool = False,
+) -> dict[str, Any]:
     """Ejecuta Bolsa Global sobre una cuenta (un PDF / deudor)."""
     meta = _meta_cuenta(cuenta)
     if cuenta.get("error"):
@@ -55,22 +59,40 @@ def calcular_bolsa_por_cuenta(cuenta: dict[str, Any]) -> dict[str, Any]:
         )
         return {**meta, **vacio, "omitido": True}
 
+    # Flag por cuenta o del lote: solo entonces se desglosa saldo anterior.
+    extender = bool(
+        extender_certificado_saldo_anterior
+        or cuenta.get("extender_certificado_saldo_anterior")
+    )
     rows = cuenta.get("rows") or []
     resultado = determinar_mora_y_capital_limpio(
-        rows, saldo_anterior=meta.get("saldo_anterior_cuenta")
+        rows,
+        saldo_anterior=meta.get("saldo_anterior_cuenta"),
+        extender_certificado_saldo_anterior=extender,
     )
     return {**meta, **resultado, "omitido": False}
 
 
-def calcular_bolsa_lote(cuentas: list[dict[str, Any]] | None) -> dict[str, Any]:
+def calcular_bolsa_lote(
+    cuentas: list[dict[str, Any]] | None,
+    *,
+    extender_certificado_saldo_anterior: bool = False,
+) -> dict[str, Any]:
     """
     Un bloque de resultado por deudor/archivo (sin mezclar rows entre cuentas).
 
     `cuentas` debe traer `rows` sellados (como en la caché del lote o el
     retorno interno de `procesar_lote_estados_cuenta` antes de strippear).
+    `extender_certificado_saldo_anterior`: desglose cuotas hacia atrás
+    (solo si el abogado extiende el certificado a esa fecha).
     """
     cuentas = list(cuentas or [])
-    resultados = [calcular_bolsa_por_cuenta(c) for c in cuentas]
+    resultados = [
+        calcular_bolsa_por_cuenta(
+            c, extender_certificado_saldo_anterior=extender_certificado_saldo_anterior
+        )
+        for c in cuentas
+    ]
     con_capital = 0
     total_lote = 0.0
     for r in resultados:

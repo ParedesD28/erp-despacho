@@ -423,9 +423,9 @@ class TestContratoSalida(unittest.TestCase):
 
 
 class TestSaldoAnteriorDesgloseYAlerta(unittest.TestCase):
-    """Preferido: desglose cuotas hacia atrás; fallback B; alerta si saldo > 0."""
+    """Default: opción B (mora). Desglose solo si se extiende el certificado."""
 
-    def test_desglose_cuotas_cuando_se_infiere_ordinaria(self):
+    def test_default_opcion_b_sin_inyectar_cuotas(self):
         rows = [
             _fila("2024.01.01", "CUOTA ADMINISTRACION", 100, 0),
             _fila("2024.01.01", "INTERES", 20, 0),
@@ -436,45 +436,55 @@ class TestSaldoAnteriorDesgloseYAlerta(unittest.TestCase):
         self.assertEqual(legacy["fecha_inicio_mora"], "2024.02")
         self.assertFalse(legacy["alerta_saldo_anterior"])
 
-        # saldo 80 → 1 cuota sintética 2023.12; bolsa completa 150
+        # Default: opción B — resta de bolsa, sin cuotas sintéticas
         r = determinar_mora_y_capital_limpio(rows, saldo_anterior=80)
         self.assertEqual(r["saldo_anterior"], 80.0)
-        self.assertEqual(r["saldo_anterior_modo"], "desglose_cuotas")
+        self.assertEqual(r["saldo_anterior_modo"], "opcion_b")
         self.assertTrue(r["alerta_saldo_anterior"])
         self.assertIn("ATENCIÓN ABOGADO", r["alerta_saldo_anterior_mensaje"] or "")
+        self.assertIn("inicio de mora", (r["alerta_saldo_anterior_mensaje"] or "").lower())
+        self.assertIn("extiende", (r["alerta_saldo_anterior_mensaje"] or "").lower())
         self.assertEqual(r["bolsa_abonos"], 150.0)
-        self.assertEqual(r["bolsa_global_inicial"], 150.0)  # no se resta (desglose)
+        self.assertEqual(r["bolsa_global_inicial"], 70.0)  # 150 − 80
+        self.assertEqual(r["saldo_anterior_desglose"], [])
+        self.assertEqual(r["fecha_inicio_mora"], "2024.01")
+        conceptos = [i["concepto"] for i in r["capital_limpio_a_demandar"]]
+        self.assertTrue(all("SALDO ANTERIOR" not in c for c in conceptos))
+
+    def test_desglose_solo_si_extiende_certificado(self):
+        rows = [
+            _fila("2024.01.01", "CUOTA ADMINISTRACION", 100, 0),
+            _fila("2024.01.01", "INTERES", 20, 0),
+            _fila("2024.01.15", "ABONO", 0, 150),
+            _fila("2024.02.01", "CUOTA ADMINISTRACION", 100, 0),
+        ]
+        r = determinar_mora_y_capital_limpio(
+            rows,
+            saldo_anterior=80,
+            extender_certificado_saldo_anterior=True,
+        )
+        self.assertEqual(r["saldo_anterior_modo"], "desglose_cuotas")
+        self.assertTrue(r["alerta_saldo_anterior"])
+        self.assertEqual(r["bolsa_global_inicial"], 150.0)
         self.assertEqual(len(r["saldo_anterior_desglose"]), 1)
         self.assertEqual(r["saldo_anterior_desglose"][0]["mes_corte"], "2023.12")
         self.assertEqual(r["fecha_inicio_mora"], "2024.01")
 
-    def test_fallback_opcion_b_sin_cuota_inferible(self):
-        # Solo intereses + abono: no hay cuota ordinaria → Opción B
+    def test_extender_sin_cuota_inferible_queda_en_b(self):
         rows = [
             _fila("2024.01.01", "INTERES MORA", 50, 0),
             _fila("2024.01.15", "ABONO", 0, 100),
-            _fila("2024.02.01", "INTERES MORA", 40, 0),
             _fila("2024.02.01", "PINTURA FACHADA", 200, 0),
         ]
-        r = determinar_mora_y_capital_limpio(rows, saldo_anterior=80)
+        r = determinar_mora_y_capital_limpio(
+            rows, saldo_anterior=80, extender_certificado_saldo_anterior=True
+        )
         self.assertEqual(r["saldo_anterior_modo"], "opcion_b")
         self.assertTrue(r["alerta_saldo_anterior"])
-        self.assertEqual(r["bolsa_global_inicial"], 20.0)  # 100 − 80
+        self.assertEqual(r["bolsa_global_inicial"], 20.0)
         self.assertEqual(r["saldo_anterior_desglose"], [])
-
-    def test_saldo_mayor_que_bolsa_con_desglose_demanda_previas(self):
-        rows = [
-            _fila("2024.01.01", "CUOTA ADMINISTRACION", 100, 0),
-            _fila("2024.01.15", "ABONO", 0, 50),
-        ]
-        r = determinar_mora_y_capital_limpio(rows, saldo_anterior=200)
-        self.assertEqual(r["saldo_anterior_modo"], "desglose_cuotas")
-        self.assertTrue(r["alerta_saldo_anterior"])
-        # Bolsa completa 50; desglose 2×100 hacia atrás → mora antes de 2024.01
-        self.assertEqual(r["bolsa_global_inicial"], 50.0)
-        self.assertTrue(r["total_capital_demandado"] > 100.0)
         self.assertTrue(
-            any("SALDO ANTERIOR" in (i["concepto"] or "") for i in r["capital_limpio_a_demandar"])
+            any("extender" in e.lower() for e in r["errores_procesamiento"])
         )
 
 
@@ -503,20 +513,38 @@ class TestMirador1405Regresion(unittest.TestCase):
         self.assertIsNone(r["saldo_anterior"])
         self.assertFalse(r["alerta_saldo_anterior"])
 
-    def test_con_saldo_anterior_desglose_2024_07_y_alerta(self):
+    def test_con_saldo_anterior_opcion_b_2024_07_y_alerta(self):
+        """Default: opción B para mora; alerta; sin cuotas sintéticas."""
         r = determinar_mora_y_capital_limpio(
             self.rows, saldo_anterior=self.saldo_anterior
         )
         self.assertEqual(r["fecha_inicio_mora"], self.esperado_con)
         self.assertEqual(r["saldo_anterior"], self.saldo_anterior)
         self.assertAlmostEqual(r["bolsa_abonos"], 2_050_000.0, places=2)
-        # Desglose: bolsa inicial = ΣAbono (no se resta)
-        self.assertAlmostEqual(r["bolsa_global_inicial"], 2_050_000.0, places=2)
+        self.assertAlmostEqual(
+            r["bolsa_global_inicial"],
+            2_050_000.0 - self.saldo_anterior,
+            places=2,
+        )
+        self.assertEqual(r["saldo_anterior_modo"], "opcion_b")
+        self.assertEqual(r["saldo_anterior_desglose"], [])
+        self.assertTrue(r["alerta_saldo_anterior"])
+        self.assertIn("ATENCIÓN ABOGADO", r["alerta_saldo_anterior_mensaje"] or "")
+        self.assertIn("inicio de mora", (r["alerta_saldo_anterior_mensaje"] or "").lower())
+        self.assertIn("extiende", (r["alerta_saldo_anterior_mensaje"] or "").lower())
+        self.assertIn("no se dañe el proceso", (r["alerta_saldo_anterior_mensaje"] or "").lower())
+        conceptos = [i["concepto"] for i in r["capital_limpio_a_demandar"]]
+        self.assertTrue(all("SALDO ANTERIOR" not in c for c in conceptos))
+
+    def test_mirador_extender_tambien_2024_07(self):
+        r = determinar_mora_y_capital_limpio(
+            self.rows,
+            saldo_anterior=self.saldo_anterior,
+            extender_certificado_saldo_anterior=True,
+        )
+        self.assertEqual(r["fecha_inicio_mora"], self.esperado_con)
         self.assertEqual(r["saldo_anterior_modo"], "desglose_cuotas")
         self.assertTrue(r["alerta_saldo_anterior"])
-        self.assertTrue(r["alerta_saldo_anterior_mensaje"])
-        self.assertIn("ATENCIÓN ABOGADO", r["alerta_saldo_anterior_mensaje"])
-        self.assertIn("no se dañe el proceso", r["alerta_saldo_anterior_mensaje"].lower())
         self.assertGreater(len(r["saldo_anterior_desglose"]), 0)
         total_desglose = sum(float(x["valor"]) for x in r["saldo_anterior_desglose"])
         self.assertAlmostEqual(total_desglose, self.saldo_anterior, places=2)
