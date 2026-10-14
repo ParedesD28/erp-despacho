@@ -111,6 +111,8 @@ def generar_excel_bolsa_global(payload: dict[str, Any]) -> io.BytesIO:
                 "Fecha inicio mora": r.get("fecha_inicio_mora") or "",
                 "Total capital demandado": r.get("total_capital_demandado"),
                 "Saldo anterior": r.get("saldo_anterior"),
+                "Modo saldo anterior": r.get("saldo_anterior_modo") or "",
+                "Alerta saldo anterior": bool(r.get("alerta_saldo_anterior")),
                 "Bolsa abonos (Σ)": r.get("bolsa_abonos"),
                 "Bolsa inicial": r.get("bolsa_global_inicial"),
                 "Bolsa remanente": r.get("bolsa_remanente_final"),

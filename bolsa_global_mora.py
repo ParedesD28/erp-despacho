@@ -34,6 +34,20 @@ class ItemCapitalLimpio:
     indice_fila: int | None = None
 
 
+# Modos de incorporación del saldo anterior COLON.
+SaldoAnteriorModo = Literal["desglose_cuotas", "opcion_b"]
+
+_CONCEPTO_SALDO_ANTERIOR_DESGLOSE = "CUOTAS DE ADMINISTRACION (SALDO ANTERIOR)"
+_MAX_MESES_DESGLOSE_SALDO = 240
+
+_ALERTA_SALDO_ANTERIOR_BASE = (
+    "ATENCIÓN ABOGADO: esta cuenta tiene saldo anterior COLON. "
+    "Ese monto afecta el inicio de mora y la pretensión. "
+    "Revise el tratamiento (desglose en cuotas hacia atrás u opción B) "
+    "antes de emitir certificado o poder — no se dañe el proceso."
+)
+
+
 @dataclass
 class ResultadoMoraCapitalLimpio:
     fecha_inicio_mora: str
@@ -42,9 +56,14 @@ class ResultadoMoraCapitalLimpio:
     bolsa_global_inicial: float
     bolsa_remanente_final: float
     errores_procesamiento: list[str] = field(default_factory=list)
-    # Opción B: ΣAbono bruto y saldo anterior COLON (mixto; no se demanda como capital).
+    # ΣAbono bruto y saldo anterior COLON.
     bolsa_abonos: float = 0.0
     saldo_anterior: float | None = None
+    # Preferencia: desglose_cuotas; fallback: opcion_b (restar de bolsa).
+    saldo_anterior_modo: SaldoAnteriorModo | None = None
+    saldo_anterior_desglose: list[dict[str, Any]] = field(default_factory=list)
+    alerta_saldo_anterior: bool = False
+    alerta_saldo_anterior_mensaje: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +85,10 @@ class ResultadoMoraCapitalLimpio:
             "bolsa_remanente_final": self.bolsa_remanente_final,
             "bolsa_abonos": self.bolsa_abonos,
             "saldo_anterior": self.saldo_anterior,
+            "saldo_anterior_modo": self.saldo_anterior_modo,
+            "saldo_anterior_desglose": list(self.saldo_anterior_desglose),
+            "alerta_saldo_anterior": self.alerta_saldo_anterior,
+            "alerta_saldo_anterior_mensaje": self.alerta_saldo_anterior_mensaje,
             "errores_procesamiento": list(self.errores_procesamiento),
         }
 
@@ -151,7 +174,134 @@ def resultado_vacio(*, errores: list[str] | None = None) -> dict[str, Any]:
         errores_procesamiento=list(errores or []),
         bolsa_abonos=0.0,
         saldo_anterior=None,
+        saldo_anterior_modo=None,
+        saldo_anterior_desglose=[],
+        alerta_saldo_anterior=False,
+        alerta_saldo_anterior_mensaje=None,
     ).as_dict()
+
+
+def _mes_anterior_corte(mes_corte: str) -> str | None:
+    """YYYY.MM → mes calendario anterior, o None si inválido."""
+    try:
+        anio_s, mes_s = mes_corte.split(".", 1)
+        anio, mes = int(anio_s), int(mes_s)
+    except (TypeError, ValueError):
+        return None
+    if mes <= 1:
+        return _mes_valido(anio - 1, 12)
+    return _mes_valido(anio, mes - 1)
+
+
+def inferir_cuota_ordinaria_desde_rows(
+    rows: Sequence[Mapping[str, Any]] | None,
+) -> float | None:
+    """
+    Infiere valor de cuota de administración ordinaria del extracto.
+
+    Usa la primera cuota ordinaria cronológica (más cercana al período previo
+    a la ventana) para desglosar saldo anterior hacia atrás.
+    """
+    if not rows:
+        return None
+    candidatos: list[tuple[str, float]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        valor_parsed = _a_float_seguro(row.get("Valor"))
+        if valor_parsed is None or valor_parsed <= _EPS:
+            continue
+        if not _es_cuota_ordinaria(str(row.get("Concepto") or "")):
+            continue
+        mes = _extraer_mes_corte(row.get("Fecha"))
+        if mes is None:
+            continue
+        candidatos.append((mes, _redondear_cop(valor_parsed)))
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda x: x[0])
+    return candidatos[0][1]
+
+
+def desglosar_saldo_anterior_en_cuotas(
+    saldo: float,
+    cuota: float,
+    mes_antes_ventana: str,
+) -> list[dict[str, Any]]:
+    """
+    Parte `saldo` en cuotas de administración hacia atrás desde `mes_antes_ventana`.
+
+    Cada ítem: {mes_corte, fecha, valor, concepto}. El remanente < cuota
+    queda en el mes más antiguo. Tope de seguridad: _MAX_MESES_DESGLOSE_SALDO.
+    """
+    saldo = _redondear_cop(max(0.0, float(saldo)))
+    cuota = _redondear_cop(float(cuota))
+    if saldo <= _EPS or cuota <= _EPS:
+        return []
+    out: list[dict[str, Any]] = []
+    rem = saldo
+    mes: str | None = mes_antes_ventana
+    for _ in range(_MAX_MESES_DESGLOSE_SALDO):
+        if rem <= _EPS or mes is None:
+            break
+        valor = _redondear_cop(min(cuota, rem))
+        out.append(
+            {
+                "mes_corte": mes,
+                "fecha": f"{mes}.01",
+                "valor": valor,
+                "concepto": _CONCEPTO_SALDO_ANTERIOR_DESGLOSE,
+            }
+        )
+        rem = _redondear_cop(rem - valor)
+        mes = _mes_anterior_corte(mes)
+    if rem > _EPS:
+        if out:
+            out[-1]["valor"] = _redondear_cop(float(out[-1]["valor"]) + rem)
+        else:
+            out.append(
+                {
+                    "mes_corte": mes_antes_ventana,
+                    "fecha": f"{mes_antes_ventana}.01",
+                    "valor": _redondear_cop(saldo),
+                    "concepto": _CONCEPTO_SALDO_ANTERIOR_DESGLOSE,
+                }
+            )
+    return out
+
+
+def _fmt_cop_alerta(valor: float) -> str:
+    """Formato compacto COP para alertas (miles con punto)."""
+    entero = int(round(float(valor)))
+    return f"${entero:,}".replace(",", ".")
+
+
+def mensaje_alerta_saldo_anterior(
+    *,
+    saldo: float,
+    modo: SaldoAnteriorModo,
+    cuota_inferida: float | None = None,
+    n_meses_desglose: int = 0,
+) -> str:
+    """Texto visible para el abogado (UI Bolsa / certificados)."""
+    monto = _fmt_cop_alerta(saldo)
+    if modo == "desglose_cuotas":
+        cuota_txt = (
+            f" Cuota ordinaria inferida: {_fmt_cop_alerta(cuota_inferida)}."
+            if cuota_inferida and cuota_inferida > _EPS
+            else ""
+        )
+        detalle = (
+            f" Modo: desglose en {n_meses_desglose} cuota(s) de administración "
+            f"hacia atrás (capital sintético previo a la ventana).{cuota_txt}"
+        )
+    else:
+        detalle = (
+            " Modo: opción B (fallback) — se restó el saldo de la bolsa de abonos; "
+            "no se inyectó capital por el saldo mixto. No fue posible inferir cuota "
+            "ordinaria del extracto para desglosar."
+        )
+    return f"{_ALERTA_SALDO_ANTERIOR_BASE} Saldo anterior: {monto}.{detalle}"
 
 
 def _normalizar_texto(valor: Any) -> str:
@@ -400,12 +550,14 @@ def determinar_mora_y_capital_limpio(
     """
     Método Bolsa Global (Art. 1653 / 1655 CC) — reglas estrictas:
 
-    1. Sumar todos los Abono → bolsa bruta.
-       Opción B: si hay `saldo_anterior` COLON (deuda previa a la ventana,
-       mixto capital+intereses), bolsa efectiva =
-       max(0, ΣAbono − saldo_anterior). No se inyecta capital sintético
-       por el saldo opaco; si saldo_anterior > ΣAbono, bolsa=0 y el
-       remanente previo NO se demanda como capital.
+    1. Sumar todos los Abono → bolsa bruta (`bolsa_abonos`).
+       Si hay `saldo_anterior` COLON:
+       - Preferido: desglose en cuotas de administración hacia atrás
+         (capital sintético previo a la ventana; bolsa = ΣAbono completa).
+       - Fallback Opción B: bolsa efectiva = max(0, ΣAbono − saldo_anterior)
+         si no se puede inferir cuota ordinaria del extracto.
+       Con saldo_anterior > 0 siempre se enciende `alerta_saldo_anterior`
+       para el abogado (revisar pretensión / no dañar el proceso).
     2. Agrupar Valor > 0 por mes YYYY.MM.
     3. Clasificar: intereses / capital / gastos; no reconocido → alerta + capital.
     4. Consumir mes a mes: intereses primero, luego capital.
@@ -418,8 +570,6 @@ def determinar_mora_y_capital_limpio(
 
     Retorna dict (vía ResultadoMoraCapitalLimpio.as_dict) para consumo fácil
     desde JSON/API sin acoplar el Excel de descarga PDF→Excel.
-    `bolsa_global_inicial` = bolsa efectiva (tras restar saldo anterior).
-    `bolsa_abonos` = ΣAbono bruto; `saldo_anterior` = monto usado o None.
     """
     errores: list[str] = []
     bolsa = 0.0
@@ -521,6 +671,12 @@ def determinar_mora_y_capital_limpio(
     bolsa_abonos = _redondear_cop(bolsa)
     saldo_ant_val: float | None = None
     saldo_ant = 0.0
+    saldo_modo: SaldoAnteriorModo | None = None
+    saldo_desglose: list[dict[str, Any]] = []
+    alerta_sa = False
+    alerta_sa_msg: str | None = None
+    cuota_inferida: float | None = None
+
     if saldo_anterior is not None and saldo_anterior != "":
         parsed_sa = _a_float_seguro(saldo_anterior)
         if parsed_sa is None:
@@ -536,21 +692,74 @@ def determinar_mora_y_capital_limpio(
             else:
                 saldo_ant = _redondear_cop(parsed_sa)
             saldo_ant_val = saldo_ant
+
+    # Preferido: desglose cuotas hacia atrás; fallback Opción B.
+    if saldo_ant > _EPS:
+        alerta_sa = True
+        primer_mes = min(meses.keys()) if meses else None
+        mes_antes = _mes_anterior_corte(primer_mes) if primer_mes else None
+        cuota_inferida = inferir_cuota_ordinaria_desde_rows(rows)
+
+        if (
+            mes_antes is not None
+            and cuota_inferida is not None
+            and cuota_inferida > _EPS
+        ):
+            saldo_desglose = desglosar_saldo_anterior_en_cuotas(
+                saldo_ant, cuota_inferida, mes_antes
+            )
+            if saldo_desglose:
+                saldo_modo = "desglose_cuotas"
+                for i, parte in enumerate(saldo_desglose):
+                    mes_d = str(parte["mes_corte"])
+                    item_syn = _ItemMes(
+                        indice=-(i + 1),
+                        fecha=str(parte["fecha"]),
+                        concepto=str(parte["concepto"]),
+                        valor=_redondear_cop(float(parte["valor"])),
+                        clase="capital",
+                    )
+                    meses.setdefault(mes_d, _GrupoMes()).capitales.append(item_syn)
+                errores.append(
+                    f"Saldo anterior {_fmt_cop_alerta(saldo_ant)} desglosado en "
+                    f"{len(saldo_desglose)} cuota(s) de administración hacia atrás "
+                    f"(cuota inferida {_fmt_cop_alerta(cuota_inferida)})."
+                )
+                alerta_sa_msg = mensaje_alerta_saldo_anterior(
+                    saldo=saldo_ant,
+                    modo="desglose_cuotas",
+                    cuota_inferida=cuota_inferida,
+                    n_meses_desglose=len(saldo_desglose),
+                )
+            else:
+                saldo_modo = "opcion_b"
+        else:
+            saldo_modo = "opcion_b"
+
+        if saldo_modo == "opcion_b":
             if saldo_ant > bolsa_abonos + _EPS:
                 errores.append(
                     f"Saldo anterior ({saldo_ant}) supera ΣAbono ({bolsa_abonos}); "
-                    "bolsa efectiva = 0. Opción B: el remanente previo no se demanda "
-                    "como capital (saldo COLON mixto)."
+                    "bolsa efectiva = 0. Opción B (fallback): el remanente previo "
+                    "no se demanda como capital (no hubo desglose de cuotas)."
                 )
-            elif saldo_ant > _EPS:
+            else:
                 errores.append(
-                    f"Opción B: bolsa efectiva = ΣAbono ({bolsa_abonos}) − "
+                    f"Opción B (fallback): bolsa efectiva = ΣAbono ({bolsa_abonos}) − "
                     f"saldo_anterior ({saldo_ant}) = "
                     f"{_redondear_cop(max(0.0, bolsa_abonos - saldo_ant))}."
                 )
+            alerta_sa_msg = mensaje_alerta_saldo_anterior(
+                saldo=saldo_ant,
+                modo="opcion_b",
+                cuota_inferida=cuota_inferida,
+            )
 
-    # bolsa_global_inicial = bolsa efectiva usada en Art. 1653
-    bolsa_inicial = _redondear_cop(max(0.0, bolsa_abonos - saldo_ant))
+    # bolsa_global_inicial: completa con desglose; efectiva (Σ−saldo) en opción B.
+    if saldo_modo == "opcion_b" and saldo_ant > _EPS:
+        bolsa_inicial = _redondear_cop(max(0.0, bolsa_abonos - saldo_ant))
+    else:
+        bolsa_inicial = bolsa_abonos
     bolsa = bolsa_inicial
 
     # ---- 2) Consumir bolsa cronológicamente ----
@@ -704,4 +913,8 @@ def determinar_mora_y_capital_limpio(
         errores_procesamiento=errores,
         bolsa_abonos=bolsa_abonos,
         saldo_anterior=saldo_ant_val,
+        saldo_anterior_modo=saldo_modo,
+        saldo_anterior_desglose=list(saldo_desglose),
+        alerta_saldo_anterior=alerta_sa,
+        alerta_saldo_anterior_mensaje=alerta_sa_msg,
     ).as_dict()
