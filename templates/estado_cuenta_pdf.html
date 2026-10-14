@@ -2291,9 +2291,10 @@
                         Certificado de deuda (.docx)
                     </button>
                 </div>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                     <div><p class="text-xs uppercase text-slate-500 font-bold">Inicio mora</p><p class="font-semibold text-slate-800">${esc(r.fecha_inicio_mora || '—')}</p></div>
                     <div><p class="text-xs uppercase text-slate-500 font-bold">Capital demandado</p><p class="font-semibold text-slate-800">${money(r.total_capital_demandado)}</p></div>
+                    <div><p class="text-xs uppercase text-slate-500 font-bold">Saldo anterior</p><p class="font-semibold text-slate-800">${r.saldo_anterior == null || r.saldo_anterior === '' ? '—' : money(r.saldo_anterior)}</p></div>
                     <div><p class="text-xs uppercase text-slate-500 font-bold">Bolsa inicial</p><p class="font-semibold text-slate-800">${money(r.bolsa_global_inicial)}</p></div>
                     <div><p class="text-xs uppercase text-slate-500 font-bold">Bolsa remanente</p><p class="font-semibold text-slate-800">${money(r.bolsa_remanente_final)}</p></div>
                 </div>

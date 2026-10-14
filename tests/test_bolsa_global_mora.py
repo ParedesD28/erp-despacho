@@ -403,6 +403,8 @@ class TestContratoSalida(unittest.TestCase):
             "total_capital_demandado",
             "bolsa_global_inicial",
             "bolsa_remanente_final",
+            "bolsa_abonos",
+            "saldo_anterior",
             "errores_procesamiento",
         ):
             self.assertIn(clave, r)
@@ -411,6 +413,86 @@ class TestContratoSalida(unittest.TestCase):
         r = determinar_mora_y_capital_limpio([])
         self.assertEqual(r["fecha_inicio_mora"], "Sin deuda")
         self.assertEqual(r["capital_limpio_a_demandar"], [])
+        self.assertIsNone(r["saldo_anterior"])
+        self.assertEqual(r["bolsa_abonos"], 0.0)
+
+
+class TestSaldoAnteriorOpcionB(unittest.TestCase):
+    """Opción B: bolsa_efectiva = max(0, ΣAbono − saldo_anterior)."""
+
+    def test_reduce_bolsa_sin_inyectar_capital(self):
+        rows = [
+            _fila("2024.01.01", "CUOTA ADMINISTRACION", 100, 0),
+            _fila("2024.01.01", "INTERES", 20, 0),
+            _fila("2024.01.15", "ABONO", 0, 150),
+            _fila("2024.02.01", "CUOTA ADMINISTRACION", 100, 0),
+        ]
+        # Sin saldo: 150 cubre ene (120) y deja 30 → feb B-remanente capital 70
+        legacy = determinar_mora_y_capital_limpio(rows)
+        self.assertEqual(legacy["fecha_inicio_mora"], "2024.02")
+        self.assertEqual(legacy["bolsa_global_inicial"], 150.0)
+
+        # Con saldo_anterior 80: bolsa efectiva 70 → no cubre ene completo
+        r = determinar_mora_y_capital_limpio(rows, saldo_anterior=80)
+        self.assertEqual(r["bolsa_abonos"], 150.0)
+        self.assertEqual(r["saldo_anterior"], 80.0)
+        self.assertEqual(r["bolsa_global_inicial"], 70.0)
+        self.assertEqual(r["fecha_inicio_mora"], "2024.01")
+        # No hay ítem sintético de saldo anterior en capital
+        conceptos = [i["concepto"] for i in r["capital_limpio_a_demandar"]]
+        self.assertTrue(all("SALDO ANTERIOR" not in c for c in conceptos))
+
+    def test_saldo_mayor_que_bolsa_efectiva_cero(self):
+        rows = [
+            _fila("2024.01.01", "CUOTA ADMINISTRACION", 100, 0),
+            _fila("2024.01.15", "ABONO", 0, 50),
+        ]
+        r = determinar_mora_y_capital_limpio(rows, saldo_anterior=200)
+        self.assertEqual(r["bolsa_global_inicial"], 0.0)
+        self.assertEqual(r["bolsa_abonos"], 50.0)
+        self.assertEqual(r["fecha_inicio_mora"], "2024.01")
+        self.assertEqual(r["total_capital_demandado"], 100.0)
+        self.assertTrue(
+            any("supera" in e.lower() for e in r["errores_procesamiento"])
+        )
+
+
+class TestMirador1405Regresion(unittest.TestCase):
+    """Fixture real Mirador 1-405: con saldo_anterior → 2024.07; sin → 2025.01."""
+
+    @classmethod
+    def setUpClass(cls):
+        from pathlib import Path
+        import json
+
+        path = Path(__file__).resolve().parent / "fixtures" / "mirador_1405_movimientos.json"
+        if not path.is_file():
+            raise unittest.SkipTest("fixture mirador_1405_movimientos.json ausente")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        cls.rows = data["rows"]
+        cls.saldo_anterior = float(data["saldo_anterior"])
+        cls.esperado_con = data["fecha_inicio_mora_con_saldo"]
+        cls.esperado_sin = data["fecha_inicio_mora_sin_saldo"]
+
+    def test_sin_saldo_anterior_legacy_2025_01(self):
+        r = determinar_mora_y_capital_limpio(self.rows)
+        self.assertEqual(r["fecha_inicio_mora"], self.esperado_sin)
+        self.assertAlmostEqual(r["bolsa_abonos"], 2_050_000.0, places=2)
+        self.assertAlmostEqual(r["bolsa_global_inicial"], 2_050_000.0, places=2)
+        self.assertIsNone(r["saldo_anterior"])
+
+    def test_con_saldo_anterior_opcion_b_2024_07(self):
+        r = determinar_mora_y_capital_limpio(
+            self.rows, saldo_anterior=self.saldo_anterior
+        )
+        self.assertEqual(r["fecha_inicio_mora"], self.esperado_con)
+        self.assertEqual(r["saldo_anterior"], self.saldo_anterior)
+        self.assertAlmostEqual(r["bolsa_abonos"], 2_050_000.0, places=2)
+        self.assertAlmostEqual(
+            r["bolsa_global_inicial"],
+            2_050_000.0 - self.saldo_anterior,
+            places=2,
+        )
 
 
 if __name__ == "__main__":

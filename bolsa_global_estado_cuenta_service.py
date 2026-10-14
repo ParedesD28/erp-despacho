@@ -26,9 +26,13 @@ class MetaCuentaBolsa(TypedDict):
     conjunto: str
     movimientos_extraidos: int
     error_parseo: str | None
+    saldo_anterior_cuenta: float | None
 
 
 def _meta_cuenta(cuenta: dict[str, Any]) -> MetaCuentaBolsa:
+    saldo = cuenta.get("saldo_anterior")
+    if saldo is None and isinstance(cuenta.get("cabecera"), dict):
+        saldo = cuenta["cabecera"].get("saldo_anterior")
     return {
         "archivo": str(cuenta.get("archivo") or ""),
         "titular": str(cuenta.get("titular") or ""),
@@ -38,6 +42,7 @@ def _meta_cuenta(cuenta: dict[str, Any]) -> MetaCuentaBolsa:
         "conjunto": str(cuenta.get("conjunto") or ""),
         "movimientos_extraidos": int(cuenta.get("movimientos_extraidos") or 0),
         "error_parseo": cuenta.get("error") or None,
+        "saldo_anterior_cuenta": saldo if saldo is not None else None,
     }
 
 
@@ -51,7 +56,9 @@ def calcular_bolsa_por_cuenta(cuenta: dict[str, Any]) -> dict[str, Any]:
         return {**meta, **vacio, "omitido": True}
 
     rows = cuenta.get("rows") or []
-    resultado = determinar_mora_y_capital_limpio(rows)
+    resultado = determinar_mora_y_capital_limpio(
+        rows, saldo_anterior=meta.get("saldo_anterior_cuenta")
+    )
     return {**meta, **resultado, "omitido": False}
 
 
@@ -103,6 +110,8 @@ def generar_excel_bolsa_global(payload: dict[str, Any]) -> io.BytesIO:
                 "Codigo Cuenta": r.get("codigo_cuenta") or "",
                 "Fecha inicio mora": r.get("fecha_inicio_mora") or "",
                 "Total capital demandado": r.get("total_capital_demandado"),
+                "Saldo anterior": r.get("saldo_anterior"),
+                "Bolsa abonos (Σ)": r.get("bolsa_abonos"),
                 "Bolsa inicial": r.get("bolsa_global_inicial"),
                 "Bolsa remanente": r.get("bolsa_remanente_final"),
                 "Ítems capital limpio": len(r.get("capital_limpio_a_demandar") or []),

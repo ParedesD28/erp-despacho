@@ -41,7 +41,7 @@ def _fila(fecha, concepto, valor=0, abono=0, **extra):
     return base
 
 
-def _cuenta(archivo, titular, rows, error=None):
+def _cuenta(archivo, titular, rows, error=None, saldo_anterior=None):
     return {
         "archivo": archivo,
         "titular": titular,
@@ -50,6 +50,7 @@ def _cuenta(archivo, titular, rows, error=None):
         "codigo_cuenta": "C1",
         "conjunto": "CONJUNTO",
         "movimientos_extraidos": len(rows),
+        "saldo_anterior": saldo_anterior,
         "rows": rows,
         "error": error,
     }
@@ -116,6 +117,46 @@ class BolsaIntegracionServicioTests(unittest.TestCase):
         self.assertTrue(out["omitido"])
         self.assertEqual(out["fecha_inicio_mora"], "Sin deuda")
         self.assertTrue(any("PDF no parseado" in e for e in out["errores_procesamiento"]))
+
+    def test_saldo_anterior_cuenta_reduce_bolsa_opcion_b(self):
+        rows = [
+            _fila("2024.01.01", "CUOTA ADMON", 100, 0),
+            _fila("2024.01.01", "INTERES MORA", 20, 0),
+            _fila("2024.01.15", "ABONO", 0, 150),
+            _fila("2024.02.01", "CUOTA ADMON", 100, 0),
+        ]
+        out = calcular_bolsa_por_cuenta(
+            _cuenta("a.pdf", "DEUDOR A", rows, saldo_anterior=80)
+        )
+        self.assertFalse(out["omitido"])
+        self.assertEqual(out["saldo_anterior"], 80.0)
+        self.assertEqual(out["bolsa_abonos"], 150.0)
+        self.assertEqual(out["bolsa_global_inicial"], 70.0)
+        self.assertEqual(out["fecha_inicio_mora"], "2024.01")
+
+    def test_excel_resumen_incluye_saldo_anterior(self):
+        from openpyxl import load_workbook
+
+        lote = calcular_bolsa_lote(
+            [
+                _cuenta(
+                    "a.pdf",
+                    "ANA",
+                    [
+                        _fila("2024.01.01", "CUOTA ADMON", 100, 0),
+                        _fila("2024.01.15", "ABONO", 0, 50),
+                    ],
+                    saldo_anterior=10,
+                )
+            ]
+        )
+        xlsx = generar_excel_bolsa_global(lote)
+        wb = load_workbook(xlsx)
+        headers = [c.value for c in wb["Resumen Bolsa"][1]]
+        self.assertIn("Saldo anterior", headers)
+        self.assertIn("Bolsa abonos (Σ)", headers)
+        idx = headers.index("Saldo anterior") + 1
+        self.assertEqual(wb["Resumen Bolsa"].cell(2, idx).value, 10)
 
     def test_excel_y_json_export_separados(self):
         lote = calcular_bolsa_lote(

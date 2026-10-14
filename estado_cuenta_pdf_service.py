@@ -56,6 +56,15 @@ _MOV_INLINE_RE = re.compile(
 )
 _DATE_INLINE_RE = re.compile(r"\d{4}\.\d{2}\.\d{2}")
 _DECORATIVE_CHARS = set("-._")
+# Línea COLON tipica: "Saldo anterior     .  .              0              0        997,872"
+# Captura el último monto de la línea (saldo de apertura); no inventa filas FAC.
+_SALDO_ANTERIOR_LINE_RE = re.compile(
+    r"^saldo\s+anterior\b(.*)$",
+    re.IGNORECASE,
+)
+_SALDO_ANTERIOR_MONEY_RE = re.compile(
+    r"(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)"
+)
 _RUIDO_CONCEPTO = {
     "periodo",
     "pagina",
@@ -219,6 +228,30 @@ def _es_titular_candidato(linea: str) -> bool:
     return letras >= 4 and not _DOC_TIPO_RE.match(linea)
 
 
+def extraer_saldo_anterior(lineas: list[str] | None) -> float | None:
+    """
+    Extrae el monto de 'Saldo anterior' del texto COLON (float|None).
+
+    No crea filas de movimiento: el monto va a metadata (`cabecera.saldo_anterior`)
+    para Opción B de Bolsa (reducir ΣAbono). Sigue siendo ruido como concepto FAC.
+    """
+    if not lineas:
+        return None
+    hallado: float | None = None
+    for linea in lineas:
+        m = _SALDO_ANTERIOR_LINE_RE.match((linea or "").strip())
+        if not m:
+            continue
+        montos = _SALDO_ANTERIOR_MONEY_RE.findall(m.group(1) or "")
+        if not montos:
+            continue
+        try:
+            hallado = _parse_monto(montos[-1])
+        except (ValueError, TypeError):
+            continue
+    return hallado
+
+
 def extraer_cabecera_portada(lineas: list[str]) -> dict:
     """
     Lee bloque / apartamento / titular / código de la hoja 1 (COLON).
@@ -237,6 +270,7 @@ def extraer_cabecera_portada(lineas: list[str]) -> dict:
         "codigo_cuenta": None,
         "conjunto": lineas[0] if lineas else None,
         "advertencia_encoding": False,
+        "saldo_anterior": None,
     }
 
     for i, linea in enumerate(lineas):
@@ -392,6 +426,7 @@ def _resultado_analisis(
         or inconsistencias_saldo > 0
         or fuente_parseo == "ia_vision"
     )
+    saldo_ant = cabecera.get("saldo_anterior")
     return {
         "rows": rows,
         "cabecera": cabecera,
@@ -400,6 +435,7 @@ def _resultado_analisis(
         "apartamento": cabecera.get("apartamento"),
         "codigo_cuenta": cabecera.get("codigo_cuenta"),
         "conjunto": cabecera.get("conjunto"),
+        "saldo_anterior": saldo_ant,
         "fechas_detectadas": fechas_detectadas,
         "movimientos_extraidos": len(rows),
         "bloques_omitidos": bloques_omitidos,
@@ -464,6 +500,9 @@ def analizar_estado_cuenta_pdf(source: Source) -> dict:
         texto = _extraer_texto_pagina(page)
         chars_movimiento += len(texto.strip())
         lineas.extend(_limpiar_lineas(texto))
+
+    # Saldo anterior: metadata (Opción B Bolsa); no se convierte en fila FAC.
+    cabecera["saldo_anterior"] = extraer_saldo_anterior(lineas_portada + lineas)
 
     chars_portada = sum(len(x) for x in lineas_portada)
     sin_texto = chars_portada + chars_movimiento < _MIN_CHARS_TEXTO or not lineas
@@ -651,6 +690,7 @@ def generar_excel_estado_cuenta(rows: list[dict], cabecera: dict | None = None) 
                 ("Bloque", cabecera.get("bloque") or ""),
                 ("Apartamento", cabecera.get("apartamento") or ""),
                 ("Codigo Cuenta", cabecera.get("codigo_cuenta") or ""),
+                ("Saldo anterior", cabecera.get("saldo_anterior") if cabecera.get("saldo_anterior") is not None else ""),
                 ("Movimientos", len(rows)),
             ],
             columns=["Campo", "Valor"],
@@ -688,6 +728,7 @@ def generar_excel_lote(cuentas: list[dict], depuracion: dict | None = None) -> i
                 "Apartamento": cuenta.get("apartamento"),
                 "Codigo Cuenta": cuenta.get("codigo_cuenta"),
                 "Conjunto": cuenta.get("conjunto"),
+                "Saldo anterior": cuenta.get("saldo_anterior"),
                 "Fechas detectadas": cuenta.get("fechas_detectadas"),
                 "Movimientos": cuenta.get("movimientos_extraidos"),
                 "Omitidos": cuenta.get("bloques_omitidos"),
@@ -840,6 +881,7 @@ def _cuenta_error(filename: str, mensaje: str) -> dict:
         "apartamento": None,
         "codigo_cuenta": None,
         "conjunto": None,
+        "saldo_anterior": None,
         "fechas_detectadas": 0,
         "movimientos_extraidos": 0,
         "bloques_omitidos": 0,
@@ -864,6 +906,9 @@ def _procesar_un_pdf_en_lote(filename: str, contenido: bytes) -> dict:
         uno = procesar_estado_cuenta_pdf_seguro(
             contenido, filename, generar_excel=False
         )
+        saldo_ant = uno.get("saldo_anterior")
+        if saldo_ant is None and isinstance(uno.get("cabecera"), dict):
+            saldo_ant = uno["cabecera"].get("saldo_anterior")
         return {
             "archivo": filename,
             "titular": uno.get("titular"),
@@ -871,6 +916,7 @@ def _procesar_un_pdf_en_lote(filename: str, contenido: bytes) -> dict:
             "apartamento": uno.get("apartamento"),
             "codigo_cuenta": uno.get("codigo_cuenta"),
             "conjunto": uno.get("conjunto"),
+            "saldo_anterior": saldo_ant,
             "fechas_detectadas": uno["fechas_detectadas"],
             "movimientos_extraidos": uno["movimientos_extraidos"],
             "bloques_omitidos": uno["bloques_omitidos"],

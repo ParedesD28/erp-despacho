@@ -42,6 +42,9 @@ class ResultadoMoraCapitalLimpio:
     bolsa_global_inicial: float
     bolsa_remanente_final: float
     errores_procesamiento: list[str] = field(default_factory=list)
+    # Opción B: ΣAbono bruto y saldo anterior COLON (mixto; no se demanda como capital).
+    bolsa_abonos: float = 0.0
+    saldo_anterior: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +64,8 @@ class ResultadoMoraCapitalLimpio:
             "total_capital_demandado": self.total_capital_demandado,
             "bolsa_global_inicial": self.bolsa_global_inicial,
             "bolsa_remanente_final": self.bolsa_remanente_final,
+            "bolsa_abonos": self.bolsa_abonos,
+            "saldo_anterior": self.saldo_anterior,
             "errores_procesamiento": list(self.errores_procesamiento),
         }
 
@@ -144,6 +149,8 @@ def resultado_vacio(*, errores: list[str] | None = None) -> dict[str, Any]:
         bolsa_global_inicial=0.0,
         bolsa_remanente_final=0.0,
         errores_procesamiento=list(errores or []),
+        bolsa_abonos=0.0,
+        saldo_anterior=None,
     ).as_dict()
 
 
@@ -387,11 +394,18 @@ def clasificar_concepto_bolsa(concepto_raw: Any) -> ClaseConcepto:
 
 def determinar_mora_y_capital_limpio(
     rows: Sequence[Mapping[str, Any]] | None,
+    *,
+    saldo_anterior: float | None = None,
 ) -> dict[str, Any]:
     """
     Método Bolsa Global (Art. 1653 / 1655 CC) — reglas estrictas:
 
-    1. Sumar todos los Abono → bolsa.
+    1. Sumar todos los Abono → bolsa bruta.
+       Opción B: si hay `saldo_anterior` COLON (deuda previa a la ventana,
+       mixto capital+intereses), bolsa efectiva =
+       max(0, ΣAbono − saldo_anterior). No se inyecta capital sintético
+       por el saldo opaco; si saldo_anterior > ΣAbono, bolsa=0 y el
+       remanente previo NO se demanda como capital.
     2. Agrupar Valor > 0 por mes YYYY.MM.
     3. Clasificar: intereses / capital / gastos; no reconocido → alerta + capital.
     4. Consumir mes a mes: intereses primero, luego capital.
@@ -404,6 +418,8 @@ def determinar_mora_y_capital_limpio(
 
     Retorna dict (vía ResultadoMoraCapitalLimpio.as_dict) para consumo fácil
     desde JSON/API sin acoplar el Excel de descarga PDF→Excel.
+    `bolsa_global_inicial` = bolsa efectiva (tras restar saldo anterior).
+    `bolsa_abonos` = ΣAbono bruto; `saldo_anterior` = monto usado o None.
     """
     errores: list[str] = []
     bolsa = 0.0
@@ -502,7 +518,39 @@ def determinar_mora_y_capital_limpio(
             errores.append(f"Fila {idx}: Error inesperado — {exc}")
             continue
 
-    bolsa_inicial = _redondear_cop(bolsa)
+    bolsa_abonos = _redondear_cop(bolsa)
+    saldo_ant_val: float | None = None
+    saldo_ant = 0.0
+    if saldo_anterior is not None and saldo_anterior != "":
+        parsed_sa = _a_float_seguro(saldo_anterior)
+        if parsed_sa is None:
+            errores.append(
+                f"saldo_anterior ilegible '{saldo_anterior}'; se ignora (bolsa = ΣAbono)."
+            )
+        else:
+            if parsed_sa < 0:
+                errores.append(
+                    f"saldo_anterior negativo ({parsed_sa}); se trata como 0."
+                )
+                saldo_ant = 0.0
+            else:
+                saldo_ant = _redondear_cop(parsed_sa)
+            saldo_ant_val = saldo_ant
+            if saldo_ant > bolsa_abonos + _EPS:
+                errores.append(
+                    f"Saldo anterior ({saldo_ant}) supera ΣAbono ({bolsa_abonos}); "
+                    "bolsa efectiva = 0. Opción B: el remanente previo no se demanda "
+                    "como capital (saldo COLON mixto)."
+                )
+            elif saldo_ant > _EPS:
+                errores.append(
+                    f"Opción B: bolsa efectiva = ΣAbono ({bolsa_abonos}) − "
+                    f"saldo_anterior ({saldo_ant}) = "
+                    f"{_redondear_cop(max(0.0, bolsa_abonos - saldo_ant))}."
+                )
+
+    # bolsa_global_inicial = bolsa efectiva usada en Art. 1653
+    bolsa_inicial = _redondear_cop(max(0.0, bolsa_abonos - saldo_ant))
     bolsa = bolsa_inicial
 
     # ---- 2) Consumir bolsa cronológicamente ----
@@ -654,4 +702,6 @@ def determinar_mora_y_capital_limpio(
         bolsa_global_inicial=bolsa_inicial,
         bolsa_remanente_final=_redondear_cop(max(0.0, bolsa)),
         errores_procesamiento=errores,
+        bolsa_abonos=bolsa_abonos,
+        saldo_anterior=saldo_ant_val,
     ).as_dict()
