@@ -561,6 +561,88 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
                 pass
         mock_close.assert_awaited_once()
 
+    @respx.mock
+    async def test_listar_y_descargar_documentos_actuacion(self) -> None:
+        from external_legal_client import LegalAPIClient
+
+        act_id = "1234567890"
+        doc_id = "98765"
+        respx.get(f"{TEST_BASE}/Proceso/DocumentosActuacion/{act_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "documentos": [
+                        {
+                            "idRegDocumento": doc_id,
+                            "nombre": "auto_admisorio.pdf",
+                            "tipoDocumento": "pdf",
+                        }
+                    ]
+                },
+            )
+        )
+        pdf_bytes = b"%PDF-1.4 fake-content"
+        respx.get(f"{TEST_BASE}/Descarga/Documento/{doc_id}").mock(
+            return_value=httpx.Response(
+                200,
+                content=pdf_bytes,
+                headers={"content-type": "application/pdf"},
+            )
+        )
+
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            docs = await client.listar_documentos_actuacion(act_id)
+            self.assertEqual(len(docs), 1)
+            self.assertEqual(docs[0].id_reg_documento, doc_id)
+            self.assertEqual(docs[0].nombre, "auto_admisorio.pdf")
+            raw = await client.descargar_documento(doc_id)
+            self.assertEqual(raw, pdf_bytes)
+            paired = await client.descargar_pdfs_actuacion(act_id)
+            self.assertEqual(len(paired), 1)
+            self.assertEqual(paired[0][1], pdf_bytes)
+
+    @respx.mock
+    async def test_documentos_path_template_override(self) -> None:
+        from external_legal_client import LegalAPIClient
+
+        _set_env(
+            LEGAL_API_DOCUMENTOS_PATH_TEMPLATE="/Custom/Docs/{id_reg_actuacion}",
+            LEGAL_API_DESCARGA_PATH_TEMPLATE="/Custom/Get/{id_reg_documento}",
+        )
+        respx.get(f"{TEST_BASE}/Custom/Docs/42").mock(
+            return_value=httpx.Response(200, json=[])
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            docs = await client.listar_documentos_actuacion(42)
+        self.assertEqual(docs, [])
+        os.environ.pop("LEGAL_API_DOCUMENTOS_PATH_TEMPLATE", None)
+        os.environ.pop("LEGAL_API_DESCARGA_PATH_TEMPLATE", None)
+
+    @respx.mock
+    async def test_descarga_fallida_loggea_y_continua(self) -> None:
+        from external_legal_client import LegalAPIClient
+
+        act_id = "1"
+        respx.get(f"{TEST_BASE}/Proceso/DocumentosActuacion/{act_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {"idRegDocumento": "ok", "nombre": "a.pdf"},
+                    {"idRegDocumento": "bad", "nombre": "b.pdf"},
+                ],
+            )
+        )
+        respx.get(f"{TEST_BASE}/Descarga/Documento/ok").mock(
+            return_value=httpx.Response(200, content=b"%PDF-ok")
+        )
+        respx.get(f"{TEST_BASE}/Descarga/Documento/bad").mock(
+            return_value=httpx.Response(404, json={"Message": "missing"})
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            paired = await client.descargar_pdfs_actuacion(act_id)
+        self.assertEqual(len(paired), 1)
+        self.assertEqual(paired[0][1], b"%PDF-ok")
+
 
 if __name__ == "__main__":
     unittest.main()

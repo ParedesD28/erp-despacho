@@ -129,6 +129,7 @@
                         <th class="text-left px-4 py-3 font-bold">Fecha</th>
                         <th class="text-left px-4 py-3 font-bold">Actuación</th>
                         <th class="text-left px-4 py-3 font-bold">Anotación</th>
+                        <th class="text-left px-4 py-3 font-bold">Docs</th>
                         <th class="text-left px-4 py-3 font-bold">Inicio término</th>
                         <th class="text-left px-4 py-3 font-bold">Fin término</th>
                         <th class="text-left px-4 py-3 font-bold">Registro</th>
@@ -140,6 +141,13 @@
                         <td class="px-4 py-2.5 text-slate-700 whitespace-nowrap">{{ a.fecha_actuacion or "—" }}</td>
                         <td class="px-4 py-2.5 text-slate-800">{{ a.actuacion or "—" }}</td>
                         <td class="px-4 py-2.5 text-slate-700 max-w-md">{{ a.anotacion or "—" }}</td>
+                        <td class="px-4 py-2.5 text-slate-700 whitespace-nowrap">
+                            {% if a.con_documentos %}
+                            <span class="text-[10px] uppercase font-bold tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">Sí</span>
+                            {% else %}
+                            <span class="text-slate-400">—</span>
+                            {% endif %}
+                        </td>
                         <td class="px-4 py-2.5 text-slate-700 whitespace-nowrap">{{ a.inicio_termino or "—" }}</td>
                         <td class="px-4 py-2.5 text-slate-700 whitespace-nowrap">{{ a.fin_termino or "—" }}</td>
                         <td class="px-4 py-2.5 text-slate-700 whitespace-nowrap">{{ a.fecha_registro or "—" }}</td>

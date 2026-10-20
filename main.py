@@ -9,6 +9,7 @@ import sms_router
 import cartas_cobro_router
 import certificados_deuda_router
 import asyncio
+import hmac
 import io
 import json
 import os
@@ -919,16 +920,37 @@ def detalle_expediente(request: Request, radicado: str):
 
                 alertas_expediente = []
                 if sync_procesos_service._table_exists(cur, "alertas_seguimiento"):
-                    cur.execute(
-                        """
-                        SELECT id, titulo, detalle, leida, atendida, created_at
-                        FROM alertas_seguimiento
-                        WHERE radicado_interno = %s
-                        ORDER BY created_at DESC
-                        LIMIT 20
-                        """,
-                        (radicado,),
+                    ap_drive = (
+                        sync_procesos_service._table_exists(cur, "actuaciones_proceso")
+                        and "drive_url"
+                        in sync_procesos_service._cols(cur, "actuaciones_proceso")
                     )
+                    if ap_drive:
+                        cur.execute(
+                            """
+                            SELECT
+                                a.id, a.titulo, a.detalle, a.leida, a.atendida,
+                                a.created_at, ap.drive_url, ap.drive_file_id
+                            FROM alertas_seguimiento a
+                            LEFT JOIN actuaciones_proceso ap
+                              ON ap.id = a.actuacion_proceso_id
+                            WHERE a.radicado_interno = %s
+                            ORDER BY a.created_at DESC
+                            LIMIT 20
+                            """,
+                            (radicado,),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT id, titulo, detalle, leida, atendida, created_at
+                            FROM alertas_seguimiento
+                            WHERE radicado_interno = %s
+                            ORDER BY created_at DESC
+                            LIMIT 20
+                            """,
+                            (radicado,),
+                        )
                     alertas_expediente = [dict(r) for r in cur.fetchall()]
                 contactos_opts = expedientes_service._contact_options(cur)
                 abogados_opts = expedientes_service._get_abogados(cur)
@@ -2088,6 +2110,38 @@ def servir_pdf_autenticado(filename: str):
     )
 
 
+@app.get("/expediente-docs/{radicado}/{rest:path}", include_in_schema=False)
+def servir_expediente_doc(radicado: str, rest: str):
+    """PDF de actuación guardado en disco ERP (auth de sesión; fuera de /static/)."""
+    import expediente_docs_storage as eds
+
+    rad = eds.safe_radicado_segment(radicado)
+    parts = [p for p in (rest or "").split("/") if p and p not in {".", ".."}]
+    if not parts or any("/" in p or "\\" in p for p in parts):
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    # Solo nombres de archivo sanitizados (sin path traversal).
+    from pathlib import Path as _Path
+
+    for part in parts:
+        if _Path(part).name != part:
+            raise HTTPException(status_code=404, detail="Documento no encontrado")
+
+    root = eds.local_docs_root().resolve()
+    path = root.joinpath(rad, *parts).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    return FileResponse(
+        path=str(path),
+        media_type="application/pdf",
+        filename=parts[-1],
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
 # ==============================================================================
 # INFORMES Y DESCARGA EXCEL
 # ==============================================================================
@@ -2224,6 +2278,179 @@ def debug_legal_api_env(request: Request):
     if getattr(request.state, "perfil_codigo", None) != permisos.PERFIL_ADMIN:
         return JSONResponse({"error": "No autorizado"}, status_code=403)
     return JSONResponse(_legal_api_env_debug_payload())
+
+
+def _require_admin_html(request: Request):
+    """None si admin; si no, RedirectResponse o template 403 simple."""
+    if getattr(request.state, "perfil_codigo", None) != permisos.PERFIL_ADMIN:
+        return _redirect("/informes", error="Solo+administrador")
+    return None
+
+
+@app.get("/herramientas/google-drive", include_in_schema=False)
+def vista_google_drive_oauth(request: Request):
+    """Admin: estado OAuth Drive + botón conectar (sin Python local)."""
+    denied = _require_admin_html(request)
+    if denied is not None:
+        return denied
+    import google_drive_oauth as gdo
+
+    return render_template(
+        "google_drive_conectar.html",
+        {
+            "request": request,
+            "status": gdo.status_snapshot(),
+            "error": None,
+            "refresh_token": None,
+            "token_warning": None,
+        },
+    )
+
+
+@app.get("/herramientas/google-drive/conectar", include_in_schema=False)
+def google_drive_conectar(request: Request):
+    """Admin: redirige a Google OAuth (drive.file, access_type=offline)."""
+    denied = _require_admin_html(request)
+    if denied is not None:
+        return denied
+    import google_drive_oauth as gdo
+
+    if not gdo.oauth_client_ready():
+        return render_template(
+            "google_drive_conectar.html",
+            {
+                "request": request,
+                "status": gdo.status_snapshot(),
+                "error": (
+                    "Faltan GOOGLE_OAUTH_CLIENT_ID y/o GOOGLE_OAUTH_CLIENT_SECRET en Render. "
+                    "Configúralos y redeploy antes de conectar."
+                ),
+                "refresh_token": None,
+                "token_warning": None,
+            },
+        )
+    try:
+        user_id = str(getattr(request.state, "user_id", "") or "")
+        state = gdo.mint_oauth_state(user_id=user_id)
+        url = gdo.build_authorize_url(state=state)
+    except ValueError as exc:
+        return render_template(
+            "google_drive_conectar.html",
+            {
+                "request": request,
+                "status": gdo.status_snapshot(),
+                "error": str(exc),
+                "refresh_token": None,
+                "token_warning": None,
+            },
+        )
+    response = RedirectResponse(url=url, status_code=302)
+    response.set_cookie(
+        key=gdo.STATE_COOKIE,
+        value=state,
+        max_age=gdo.STATE_TTL_S,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.get("/herramientas/google-drive/oauth/callback", include_in_schema=False)
+def google_drive_oauth_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+):
+    """Admin: intercambia code → guarda refresh_token cifrado en DB (+ muestra una vez)."""
+    denied = _require_admin_html(request)
+    if denied is not None:
+        return denied
+    import google_drive_oauth as gdo
+
+    ctx: dict[str, Any] = {
+        "request": request,
+        "status": gdo.status_snapshot(),
+        "error": None,
+        "refresh_token": None,
+        "token_warning": None,
+        "saved_to_db": False,
+    }
+
+    def _finish(template_ctx: dict) -> Any:
+        template_ctx["status"] = gdo.status_snapshot()
+        resp = render_template("google_drive_conectar.html", template_ctx)
+        try:
+            resp.delete_cookie(
+                gdo.STATE_COOKIE,
+                path="/",
+                secure=True,
+                httponly=True,
+                samesite="lax",
+            )
+        except Exception:
+            pass
+        return resp
+
+    if error:
+        ctx["error"] = f"Google denegó el acceso: {error}"
+        return _finish(ctx)
+
+    cookie_state = request.cookies.get(gdo.STATE_COOKIE) or ""
+    user_id = str(getattr(request.state, "user_id", "") or "")
+    state_ok = (
+        bool(state)
+        and bool(cookie_state)
+        and hmac.compare_digest(state, cookie_state)
+        and gdo.verify_oauth_state(state, user_id=user_id)
+    )
+    if not state_ok:
+        ctx["error"] = (
+            "State OAuth inválido o expirado. Vuelve a pulsar «Conectar con Google»."
+        )
+        return _finish(ctx)
+
+    if not (code or "").strip():
+        ctx["error"] = "Google no envió código de autorización."
+        return _finish(ctx)
+
+    try:
+        tokens = gdo.exchange_code_for_tokens(code.strip())
+    except Exception as exc:
+        ctx["error"] = f"No se pudo intercambiar el código: {exc}"
+        return _finish(ctx)
+
+    refresh = (tokens.get("refresh_token") or "").strip()
+    if not refresh:
+        ctx["error"] = (
+            "Google no devolvió refresh_token. Usa cliente tipo «Aplicación web» "
+            "con redirect URI exacto, revoca el acceso previo de la app en "
+            "myaccount.google.com/permissions y vuelve a conectar."
+        )
+        return _finish(ctx)
+
+    from app_settings import save_google_oauth_refresh_token
+
+    saved = save_google_oauth_refresh_token(refresh)
+    ctx["saved_to_db"] = saved
+    ctx["refresh_token"] = refresh
+    if saved:
+        ctx["token_warning"] = (
+            "Token guardado cifrado en la base (Drive ya puede usarlo tras el próximo sync). "
+            "Copia de respaldo opcional a Render como GOOGLE_OAUTH_REFRESH_TOKEN. "
+            "No lo pegues en chats."
+        )
+        _json_log("INFO", "google_drive_oauth_connected", saved_to_db=True)
+    else:
+        ctx["token_warning"] = (
+            "No se pudo guardar en DB (¿migración app_settings aplicada?). "
+            "Copia el token a Render → GOOGLE_OAUTH_REFRESH_TOKEN y redeploy. "
+            "No lo pegues en chats."
+        )
+        _json_log("WARN", "google_drive_oauth_connected", saved_to_db=False)
+    return _finish(ctx)
 
 
 @app.get("/herramientas/consulta-proceso")

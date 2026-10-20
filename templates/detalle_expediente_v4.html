@@ -54,6 +54,10 @@
       <li class="text-xs text-amber-950 {% if not a.leida %}font-semibold{% endif %}">
         {% if not a.leida %}<span class="text-[9px] uppercase text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded mr-1">Nueva</span>{% endif %}
         {{ a.titulo }} — <span class="text-amber-800/80 font-normal">{{ a.detalle or '' }}</span>
+        {% if a.drive_url %}
+        <a href="{{ a.drive_url }}" target="_blank" rel="noopener noreferrer"
+           class="ml-1 text-blue-700 font-bold hover:underline">PDF Drive ↗</a>
+        {% endif %}
       </li>
       {% endfor %}
     </ul>
