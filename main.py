@@ -919,16 +919,37 @@ def detalle_expediente(request: Request, radicado: str):
 
                 alertas_expediente = []
                 if sync_procesos_service._table_exists(cur, "alertas_seguimiento"):
-                    cur.execute(
-                        """
-                        SELECT id, titulo, detalle, leida, atendida, created_at
-                        FROM alertas_seguimiento
-                        WHERE radicado_interno = %s
-                        ORDER BY created_at DESC
-                        LIMIT 20
-                        """,
-                        (radicado,),
+                    ap_drive = (
+                        sync_procesos_service._table_exists(cur, "actuaciones_proceso")
+                        and "drive_url"
+                        in sync_procesos_service._cols(cur, "actuaciones_proceso")
                     )
+                    if ap_drive:
+                        cur.execute(
+                            """
+                            SELECT
+                                a.id, a.titulo, a.detalle, a.leida, a.atendida,
+                                a.created_at, ap.drive_url, ap.drive_file_id
+                            FROM alertas_seguimiento a
+                            LEFT JOIN actuaciones_proceso ap
+                              ON ap.id = a.actuacion_proceso_id
+                            WHERE a.radicado_interno = %s
+                            ORDER BY a.created_at DESC
+                            LIMIT 20
+                            """,
+                            (radicado,),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT id, titulo, detalle, leida, atendida, created_at
+                            FROM alertas_seguimiento
+                            WHERE radicado_interno = %s
+                            ORDER BY created_at DESC
+                            LIMIT 20
+                            """,
+                            (radicado,),
+                        )
                     alertas_expediente = [dict(r) for r in cur.fetchall()]
                 contactos_opts = expedientes_service._contact_options(cur)
                 abogados_opts = expedientes_service._get_abogados(cur)
@@ -2084,6 +2105,38 @@ def servir_pdf_autenticado(filename: str):
         path=str(path),
         media_type="application/pdf",
         filename=filename,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@app.get("/expediente-docs/{radicado}/{rest:path}", include_in_schema=False)
+def servir_expediente_doc(radicado: str, rest: str):
+    """PDF de actuación guardado en disco ERP (auth de sesión; fuera de /static/)."""
+    import expediente_docs_storage as eds
+
+    rad = eds.safe_radicado_segment(radicado)
+    parts = [p for p in (rest or "").split("/") if p and p not in {".", ".."}]
+    if not parts or any("/" in p or "\\" in p for p in parts):
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    # Solo nombres de archivo sanitizados (sin path traversal).
+    from pathlib import Path as _Path
+
+    for part in parts:
+        if _Path(part).name != part:
+            raise HTTPException(status_code=404, detail="Documento no encontrado")
+
+    root = eds.local_docs_root().resolve()
+    path = root.joinpath(rad, *parts).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    return FileResponse(
+        path=str(path),
+        media_type="application/pdf",
+        filename=parts[-1],
         headers={"Cache-Control": "private, max-age=300"},
     )
 

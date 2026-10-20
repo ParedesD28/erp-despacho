@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 # LEGAL_API_RETRY_MAX_WAIT_S  — espera máxima backoff (default 8)
 # LEGAL_API_USER_AGENT        — User-Agent (default estilo navegador; override opcional)
 # LEGAL_API_EXTRA_HEADERS     — objeto JSON opcional de headers extra (Authorization, api-key, …)
+# LEGAL_API_DOCUMENTOS_PATH_TEMPLATE — lista docs actuación (default /Proceso/DocumentosActuacion/{id_reg_actuacion})
+# LEGAL_API_DESCARGA_PATH_TEMPLATE   — bytes PDF (default /Descarga/Documento/{id_reg_documento})
 
 DEFAULT_TIMEOUT_S = 20.0
 DEFAULT_MAX_ATTEMPTS = 3
@@ -66,6 +68,29 @@ RELATIVE_ENDPOINT_TEMPLATES: tuple[str, ...] = (
     "/Proceso/Detalle/{id_interno}",
     "/Proceso/Actuaciones/{id_interno}",
     "/Proceso/Sujetos/{id_interno}",
+    "/Proceso/DocumentosActuacion/{id_reg_actuacion}",
+    "/Descarga/Documento/{id_reg_documento}",
+)
+# Plantillas de path para documentos (override vía env; placeholders entre llaves).
+DEFAULT_DOCUMENTOS_PATH_TEMPLATE = "/Proceso/DocumentosActuacion/{id_reg_actuacion}"
+DEFAULT_DESCARGA_PATH_TEMPLATE = "/Descarga/Documento/{id_reg_documento}"
+_DOC_ID_KEYS: tuple[str, ...] = (
+    "id_reg_documento",
+    "idRegDocumento",
+    "idDocumento",
+    "IdDocumento",
+    "id",
+    "guid",
+    "Guid",
+)
+_DOC_NAME_KEYS: tuple[str, ...] = (
+    "nombre",
+    "nombreDocumento",
+    "NombreDocumento",
+    "name",
+    "fileName",
+    "filename",
+    "titulo",
 )
 # Query keys del endpoint de búsqueda (valores no se exponen en debug).
 BUSCAR_QUERY_KEYS: tuple[str, ...] = ("numero", "SoloActivos", "pagina")
@@ -153,8 +178,12 @@ def _joined_path_examples(base_url: str) -> list[str]:
         base_path = ""
     out: list[str] = []
     for tmpl in RELATIVE_ENDPOINT_TEMPLATES:
-        # Plantillas con {id_interno} → literal 0 solo para diagnóstico de forma.
-        rel = tmpl.replace("{id_interno}", "0")
+        # Placeholders → literal 0 solo para diagnóstico de forma (sin host).
+        rel = (
+            tmpl.replace("{id_interno}", "0")
+            .replace("{id_reg_actuacion}", "0")
+            .replace("{id_reg_documento}", "0")
+        )
         out.append(f"{base_path}{rel}")
     return out
 
@@ -343,6 +372,30 @@ class ActuacionResponse(_IgnoreExtra):
     @field_validator("id_actuacion", mode="before")
     @classmethod
     def _id_actuacion_to_str(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return None
+        return str(value).strip() or None
+
+
+class DocumentoActuacionResponse(_IgnoreExtra):
+    """Metadato de un documento asociado a una actuación (lista previo a descarga)."""
+
+    id_reg_documento: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(*_DOC_ID_KEYS),
+    )
+    nombre: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(*_DOC_NAME_KEYS),
+    )
+    tipo: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("tipo", "tipoDocumento", "TipoDocumento", "mime"),
+    )
+
+    @field_validator("id_reg_documento", mode="before")
+    @classmethod
+    def _id_doc_to_str(cls, value: Any) -> Any:
         if value is None or value == "":
             return None
         return str(value).strip() or None
@@ -643,7 +696,159 @@ class LegalAPIClient:
         )
         return self._parse_list(items, SujetoResponse, "sujetos")
 
+    async def listar_documentos_actuacion(
+        self,
+        id_reg_actuacion: str | int,
+    ) -> list[DocumentoActuacionResponse]:
+        """Lista metadatos de documentos de una actuación (`conDocumentos`).
+
+        Path relativo vía `LEGAL_API_DOCUMENTOS_PATH_TEMPLATE`
+        (default `/Proceso/DocumentosActuacion/{id_reg_actuacion}`).
+        """
+        act_id = str(id_reg_actuacion or "").strip()
+        if not act_id:
+            raise HTTPException(status_code=400, detail="id_reg_actuacion vacío")
+
+        path = self._documentos_path(act_id)
+        try:
+            data = await self._request_json("GET", path)
+        except HTTPException as exc:
+            logger.warning(
+                "Fallo listando documentos actuación path=%s id_reg_actuacion=%s "
+                "status=%s detail=%s",
+                path,
+                act_id,
+                getattr(exc, "status_code", "?"),
+                getattr(exc, "detail", exc),
+            )
+            raise
+
+        items = self._unwrap_list(
+            data,
+            keys=(
+                "documentos",
+                "Documentos",
+                "data",
+                "items",
+                "Items",
+                "resultados",
+            ),
+        )
+        return self._parse_list(items, DocumentoActuacionResponse, "documentos")
+
+    async def descargar_documento(self, id_reg_documento: str | int) -> bytes:
+        """Descarga bytes de un documento (típicamente PDF).
+
+        Path relativo vía `LEGAL_API_DESCARGA_PATH_TEMPLATE`
+        (default `/Descarga/Documento/{id_reg_documento}`).
+        """
+        doc_id = str(id_reg_documento or "").strip()
+        if not doc_id:
+            raise HTTPException(status_code=400, detail="id_reg_documento vacío")
+
+        path = self._descarga_path(doc_id)
+        try:
+            content = await self._request_bytes("GET", path)
+        except HTTPException as exc:
+            logger.warning(
+                "Fallo descargando documento path=%s id_reg_documento=%s "
+                "status=%s detail=%s",
+                path,
+                doc_id,
+                getattr(exc, "status_code", "?"),
+                getattr(exc, "detail", exc),
+            )
+            raise
+        if not content:
+            logger.warning(
+                "Descarga de documento vacía path=%s id_reg_documento=%s",
+                path,
+                doc_id,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Documento vacío en la API legal externa",
+            )
+        return content
+
+    async def descargar_pdfs_actuacion(
+        self,
+        id_reg_actuacion: str | int,
+    ) -> list[tuple[DocumentoActuacionResponse, bytes]]:
+        """Lista documentos de la actuación y descarga cada uno (bytes).
+
+        Omite ítems sin id. Si la lista falla, propaga. Si una descarga falla,
+        registra warning y continúa con el resto.
+        """
+        docs = await self.listar_documentos_actuacion(id_reg_actuacion)
+        out: list[tuple[DocumentoActuacionResponse, bytes]] = []
+        for doc in docs:
+            if not doc.id_reg_documento:
+                logger.warning(
+                    "Documento sin id_reg_documento omitido (actuacion=%s nombre=%s)",
+                    id_reg_actuacion,
+                    doc.nombre,
+                )
+                continue
+            try:
+                raw = await self.descargar_documento(doc.id_reg_documento)
+            except HTTPException as exc:
+                logger.warning(
+                    "No se pudo descargar documento id=%s actuacion=%s: %s",
+                    doc.id_reg_documento,
+                    id_reg_actuacion,
+                    getattr(exc, "detail", exc),
+                )
+                continue
+            out.append((doc, raw))
+        return out
+
     # --- Internos ---
+
+    @staticmethod
+    def _path_template_from_env(name: str, default: str) -> str:
+        raw = (os.environ.get(name) or "").strip()
+        return raw or default
+
+    def _documentos_path(self, id_reg_actuacion: str) -> str:
+        tmpl = self._path_template_from_env(
+            "LEGAL_API_DOCUMENTOS_PATH_TEMPLATE",
+            DEFAULT_DOCUMENTOS_PATH_TEMPLATE,
+        )
+        try:
+            return tmpl.format(
+                id_reg_actuacion=id_reg_actuacion,
+                idRegActuacion=id_reg_actuacion,
+                id_actuacion=id_reg_actuacion,
+            )
+        except (KeyError, ValueError, IndexError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "LEGAL_API_DOCUMENTOS_PATH_TEMPLATE inválida "
+                    "(use {id_reg_actuacion})"
+                ),
+            ) from exc
+
+    def _descarga_path(self, id_reg_documento: str) -> str:
+        tmpl = self._path_template_from_env(
+            "LEGAL_API_DESCARGA_PATH_TEMPLATE",
+            DEFAULT_DESCARGA_PATH_TEMPLATE,
+        )
+        try:
+            return tmpl.format(
+                id_reg_documento=id_reg_documento,
+                idRegDocumento=id_reg_documento,
+                id_documento=id_reg_documento,
+            )
+        except (KeyError, ValueError, IndexError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "LEGAL_API_DESCARGA_PATH_TEMPLATE inválida "
+                    "(use {id_reg_documento})"
+                ),
+            ) from exc
 
     async def _request_json(
         self,
@@ -693,6 +898,79 @@ class LegalAPIClient:
         *,
         params: Optional[dict[str, Any]] = None,
     ) -> Any:
+        response = await self._request_raw(method, path, params=params)
+        if not response.content:
+            return {}
+
+        if _looks_like_html(response):
+            raise HTTPException(
+                status_code=502,
+                detail=_detail_non_json(response, request_path=path),
+            )
+
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=_detail_non_json(response, request_path=path),
+            ) from exc
+
+    async def _request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+    ) -> bytes:
+        """GET binario (PDF) con los mismos reintentos que JSON."""
+        last_exc: Optional[BaseException] = None
+        try:
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(self._max_attempts),
+                wait=wait_exponential(
+                    multiplier=self._retry_min_wait,
+                    min=self._retry_min_wait,
+                    max=self._retry_max_wait,
+                ),
+                retry=retry_if_exception(_is_retryable),
+                reraise=True,
+            ):
+                with attempt:
+                    try:
+                        response = await self._request_raw(method, path, params=params)
+                        if _looks_like_html(response):
+                            raise HTTPException(
+                                status_code=502,
+                                detail=_detail_non_json(response, request_path=path),
+                            )
+                        return bytes(response.content or b"")
+                    except BaseException as exc:
+                        last_exc = exc
+                        raise
+        except BaseException as exc:
+            last_exc = exc
+
+        assert last_exc is not None
+        if isinstance(last_exc, HTTPException):
+            raise last_exc
+        if _is_retryable(last_exc):
+            raise _http_exception_after_retries(last_exc) from last_exc
+        if isinstance(last_exc, httpx.HTTPError):
+            logger.exception("Error HTTP binario con API legal externa")
+            raise HTTPException(
+                status_code=502,
+                detail="Error de red con la API legal externa",
+            ) from last_exc
+        raise last_exc
+
+    async def _request_raw(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+    ) -> httpx.Response:
         try:
             response = await self._client.request(method, path, params=params)
         except (httpx.ConnectTimeout, httpx.ReadTimeout):
@@ -721,23 +999,7 @@ class LegalAPIClient:
                 status_code=502,
                 detail=_detail_for_http_error(response),
             )
-
-        if not response.content:
-            return {}
-
-        if _looks_like_html(response):
-            raise HTTPException(
-                status_code=502,
-                detail=_detail_non_json(response, request_path=path),
-            )
-
-        try:
-            return response.json()
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=_detail_non_json(response, request_path=path),
-            ) from exc
+        return response
 
     def _parse_busqueda(self, data: Any) -> ProcesoBusquedaResponse:
         # Array raíz de procesos → normalizar a dict.

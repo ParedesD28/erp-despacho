@@ -161,26 +161,158 @@ def _actuacion_ya_existe(cur, radicado_interno: str, *, id_actuacion: Optional[s
 
 
 def _insertar_actuacion(cur, row: dict) -> Optional[int]:
-    cur.execute(
-        """
-        INSERT INTO actuaciones_proceso (
-            radicado_interno, radicado_rama, id_actuacion, content_hash,
-            fecha_actuacion, fecha_registro, tipo_actuacion, descripcion,
-            con_documentos, inicio_termino, fin_termino, tipo_termino, vencido
-        ) VALUES (
-            %(radicado_interno)s, %(radicado_rama)s, %(id_actuacion)s, %(content_hash)s,
-            %(fecha_actuacion)s, %(fecha_registro)s, %(tipo_actuacion)s, %(descripcion)s,
-            %(con_documentos)s, %(inicio_termino)s, %(fin_termino)s, %(tipo_termino)s, %(vencido)s
+    cols = _cols(cur, "actuaciones_proceso")
+    has_drive = "drive_url" in cols and "drive_file_id" in cols
+    if has_drive:
+        cur.execute(
+            """
+            INSERT INTO actuaciones_proceso (
+                radicado_interno, radicado_rama, id_actuacion, content_hash,
+                fecha_actuacion, fecha_registro, tipo_actuacion, descripcion,
+                con_documentos, inicio_termino, fin_termino, tipo_termino, vencido,
+                drive_url, drive_file_id
+            ) VALUES (
+                %(radicado_interno)s, %(radicado_rama)s, %(id_actuacion)s, %(content_hash)s,
+                %(fecha_actuacion)s, %(fecha_registro)s, %(tipo_actuacion)s, %(descripcion)s,
+                %(con_documentos)s, %(inicio_termino)s, %(fin_termino)s, %(tipo_termino)s, %(vencido)s,
+                %(drive_url)s, %(drive_file_id)s
+            )
+            ON CONFLICT (radicado_interno, content_hash) DO NOTHING
+            RETURNING id
+            """,
+            {
+                **row,
+                "drive_url": row.get("drive_url"),
+                "drive_file_id": row.get("drive_file_id"),
+            },
         )
-        ON CONFLICT (radicado_interno, content_hash) DO NOTHING
-        RETURNING id
-        """,
-        row,
-    )
+    else:
+        cur.execute(
+            """
+            INSERT INTO actuaciones_proceso (
+                radicado_interno, radicado_rama, id_actuacion, content_hash,
+                fecha_actuacion, fecha_registro, tipo_actuacion, descripcion,
+                con_documentos, inicio_termino, fin_termino, tipo_termino, vencido
+            ) VALUES (
+                %(radicado_interno)s, %(radicado_rama)s, %(id_actuacion)s, %(content_hash)s,
+                %(fecha_actuacion)s, %(fecha_registro)s, %(tipo_actuacion)s, %(descripcion)s,
+                %(con_documentos)s, %(inicio_termino)s, %(fin_termino)s, %(tipo_termino)s, %(vencido)s
+            )
+            ON CONFLICT (radicado_interno, content_hash) DO NOTHING
+            RETURNING id
+            """,
+            row,
+        )
     got = cur.fetchone()
     if not got:
         return None
     return int(got["id"] if isinstance(got, dict) else got[0])
+
+
+def _actualizar_drive_actuacion(
+    cur,
+    actuacion_id: int,
+    *,
+    drive_url: Optional[str],
+    drive_file_id: Optional[str],
+) -> None:
+    cols = _cols(cur, "actuaciones_proceso")
+    if "drive_url" not in cols or "drive_file_id" not in cols:
+        return
+    cur.execute(
+        """
+        UPDATE actuaciones_proceso
+        SET drive_url = %s, drive_file_id = %s
+        WHERE id = %s
+        """,
+        (drive_url, drive_file_id, int(actuacion_id)),
+    )
+
+
+def _truthy_con_documentos(value: Any) -> bool:
+    if value is True:
+        return True
+    if value is False or value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    return text in {"1", "true", "t", "yes", "si", "sí"}
+
+
+async def _sincronizar_documentos_actuacion(
+    client,
+    drive,
+    row: dict,
+) -> dict:
+    """Descarga PDFs de la actuación y sube el primero a Drive.
+
+    Retorna `{drive_url, drive_file_id, docs_ok, docs_fail}` (urls pueden ser None).
+    Respeta rate limit entre llamadas a la API legal.
+    """
+    result = {
+        "drive_url": None,
+        "drive_file_id": None,
+        "docs_ok": 0,
+        "docs_fail": 0,
+    }
+    id_act = row.get("id_actuacion")
+    if not id_act:
+        log_msg(
+            "⚠️ [SYNC RAMA]",
+            "Actuación con documentos sin id_actuacion — no se puede descargar",
+            radicado=row.get("radicado_rama"),
+        )
+        return result
+
+    try:
+        await _sleep_rate_limit()
+        paired = await client.descargar_pdfs_actuacion(id_act)
+    except Exception as exc:
+        log_msg(
+            "💥 [SYNC RAMA]",
+            f"Descarga documentos falló id_actuacion={id_act}: "
+            f"{type(exc).__name__}: {exc}",
+        )
+        result["docs_fail"] += 1
+        return result
+
+    if not paired:
+        log_msg(
+            "⚠️ [SYNC RAMA]",
+            f"Sin PDFs descargables para id_actuacion={id_act}",
+        )
+        return result
+
+    from expediente_docs_storage import build_actuacion_filename
+
+    radicado_rama = str(row.get("radicado_rama") or row.get("radicado_interno") or "")
+    for idx, (doc_meta, content) in enumerate(paired):
+        fname = build_actuacion_filename(
+            fecha=row.get("fecha_actuacion"),
+            tipo=row.get("tipo_actuacion"),
+            id_actuacion=f"{id_act}" + (f"_{idx + 1}" if idx else ""),
+            nombre_doc=getattr(doc_meta, "nombre", None),
+        )
+        try:
+            uploaded = drive.upload_pdf(
+                content,
+                radicado=radicado_rama,
+                filename=fname,
+            )
+            result["docs_ok"] += 1
+            # Persistimos el primer PDF exitoso como enlace principal.
+            if not result["drive_url"]:
+                result["drive_url"] = uploaded.get("webViewLink")
+                result["drive_file_id"] = uploaded.get("file_id")
+        except Exception as exc:
+            result["docs_fail"] += 1
+            log_msg(
+                "💥 [SYNC RAMA]",
+                f"Upload Drive falló id_actuacion={id_act} file={fname}: "
+                f"{type(exc).__name__}: {exc}",
+            )
+    return result
 
 
 def _crear_alerta(
@@ -270,12 +402,16 @@ async def sincronizar_un_expediente(
     client,
     cur,
     expediente: dict,
+    *,
+    drive=None,
 ) -> dict:
     """Sincroniza un expediente. Retorna métricas; no propaga excepciones de negocio HTTP."""
     radicado_interno = str(expediente.get("radicado_interno") or "").strip()
     radicado_rama = normalizar_radicado_rama(expediente.get("radicado_rama"))
     nuevas = 0
     alertas = 0
+    docs_ok = 0
+    docs_fail = 0
 
     id_interno = await client.consultar_id_por_radicado(radicado_rama)
     await _sleep_rate_limit()
@@ -307,6 +443,21 @@ async def sincronizar_un_expediente(
         last_new_id = new_id
         last_new_row = row
 
+        # PDF → Drive solo en actuaciones nuevas con documentos (si Drive habilitado).
+        if drive is not None and _truthy_con_documentos(row.get("con_documentos")):
+            drive_meta = await _sincronizar_documentos_actuacion(client, drive, row)
+            docs_ok += int(drive_meta.get("docs_ok") or 0)
+            docs_fail += int(drive_meta.get("docs_fail") or 0)
+            if drive_meta.get("drive_url") or drive_meta.get("drive_file_id"):
+                _actualizar_drive_actuacion(
+                    cur,
+                    new_id,
+                    drive_url=drive_meta.get("drive_url"),
+                    drive_file_id=drive_meta.get("drive_file_id"),
+                )
+                row["drive_url"] = drive_meta.get("drive_url")
+                row["drive_file_id"] = drive_meta.get("drive_file_id")
+
     if nuevas > 0 and last_new_row is not None:
         tipo = last_new_row.get("tipo_actuacion") or "Actuación"
         fecha_txt = str(last_new_row.get("fecha_actuacion") or "")
@@ -316,6 +467,8 @@ async def sincronizar_un_expediente(
             f"{nuevas} movimiento(s) nuevo(s). "
             f"Última: {fecha_txt} — {(last_new_row.get('descripcion') or '')[:240]}"
         )
+        if last_new_row.get("drive_url"):
+            detalle = f"{detalle} PDF: {last_new_row['drive_url']}"
         _crear_alerta(
             cur,
             radicado_interno=radicado_interno,
@@ -332,6 +485,8 @@ async def sincronizar_un_expediente(
         "radicado_rama": radicado_rama,
         "nuevas": nuevas,
         "alertas": alertas,
+        "docs_ok": docs_ok,
+        "docs_fail": docs_fail,
         "ok": True,
     }
 
@@ -357,6 +512,9 @@ async def sincronizar_expedientes_activos(db_session=None) -> dict:
         "errores": 0,
         "nuevas_actuaciones": 0,
         "alertas": 0,
+        "docs_ok": 0,
+        "docs_fail": 0,
+        "docs_backend": "none",
         "omitidos_sin_tablas": False,
     }
     try:
@@ -373,21 +531,41 @@ async def sincronizar_expedientes_activos(db_session=None) -> dict:
             expedientes = listar_expedientes_activos_con_radicado(cur)
             resumen["candidatos"] = len(expedientes)
 
+        from expediente_docs_storage import get_document_storage, storage_backend_name
+
+        drive = get_document_storage()
+        resumen["docs_backend"] = storage_backend_name() if drive is not None else "none"
+        if drive is not None:
+            log_msg(
+                "☁️ [SYNC RAMA]",
+                f"Almacenamiento PDFs activo: {resumen['docs_backend']}",
+            )
+        else:
+            log_msg(
+                "ℹ️ [SYNC RAMA]",
+                "Sin almacenamiento PDF (configura OAuth Drive o EXPEDIENTE_DOCS_*)",
+            )
+
         async with LegalAPIClient() as client:
             for idx, exp in enumerate(expedientes):
                 rad = str(exp.get("radicado_interno") or "")
                 try:
                     with conn:
                         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                            metrics = await sincronizar_un_expediente(client, cur, exp)
+                            metrics = await sincronizar_un_expediente(
+                                client, cur, exp, drive=drive
+                            )
                     resumen["ok"] += 1
                     resumen["nuevas_actuaciones"] += int(metrics.get("nuevas") or 0)
                     resumen["alertas"] += int(metrics.get("alertas") or 0)
+                    resumen["docs_ok"] += int(metrics.get("docs_ok") or 0)
+                    resumen["docs_fail"] += int(metrics.get("docs_fail") or 0)
                     log_msg(
                         "✅ [SYNC RAMA]",
                         f"Expediente {rad}",
                         nuevas=metrics.get("nuevas"),
                         alertas=metrics.get("alertas"),
+                        docs_ok=metrics.get("docs_ok"),
                     )
                 except Exception as exc:
                     resumen["errores"] += 1
@@ -420,6 +598,8 @@ async def sincronizar_expedientes_activos(db_session=None) -> dict:
         errores=resumen["errores"],
         nuevas=resumen["nuevas_actuaciones"],
         alertas=resumen["alertas"],
+        docs_ok=resumen["docs_ok"],
+        docs_fail=resumen["docs_fail"],
     )
     _json_log("INFO", "sync_rama_fin", **{k: v for k, v in resumen.items() if k != "started"})
     return resumen
@@ -445,7 +625,17 @@ def listar_alertas_recientes(cur, *, limit: int = 50, solo_no_leidas: bool = Fal
     if not _table_exists(cur, "alertas_seguimiento"):
         return []
     limit = max(1, min(int(limit), 200))
-    where = "WHERE leida = FALSE AND atendida = FALSE" if solo_no_leidas else ""
+    where = "WHERE a.leida = FALSE AND a.atendida = FALSE" if solo_no_leidas else ""
+    drive_select = ""
+    drive_join = ""
+    if _table_exists(cur, "actuaciones_proceso"):
+        ap_cols = _cols(cur, "actuaciones_proceso")
+        if "drive_url" in ap_cols:
+            drive_select = ", ap.drive_url, ap.drive_file_id"
+            drive_join = (
+                " LEFT JOIN actuaciones_proceso ap"
+                " ON ap.id = a.actuacion_proceso_id"
+            )
     cur.execute(
         f"""
         SELECT
@@ -459,8 +649,10 @@ def listar_alertas_recientes(cur, *, limit: int = 50, solo_no_leidas: bool = Fal
             a.created_at,
             p.radicado_rama,
             p.requiere_revision
+            {drive_select}
         FROM alertas_seguimiento a
         LEFT JOIN procesos p ON p.radicado_interno = a.radicado_interno
+        {drive_join}
         {where}
         ORDER BY a.created_at DESC
         LIMIT %s

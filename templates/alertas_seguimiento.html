@@ -43,9 +43,19 @@
             <span>Radicado interno: <b class="text-slate-700">{{ a.radicado_interno }}</b></span>
             {% if a.radicado_rama %}<span>Rama: <b class="text-slate-700">{{ a.radicado_rama }}</b></span>{% endif %}
             <span>{{ a.created_at }}</span>
+            {% if a.drive_url %}
+            <a href="{{ a.drive_url }}" target="_blank" rel="noopener noreferrer"
+               class="text-blue-700 font-bold hover:underline">PDF en Drive ↗</a>
+            {% endif %}
           </div>
         </div>
         <div class="flex flex-wrap gap-2 shrink-0">
+          {% if a.drive_url %}
+          <a href="{{ a.drive_url }}" target="_blank" rel="noopener noreferrer"
+             class="px-3 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700">
+            Abrir PDF
+          </a>
+          {% endif %}
           <a href="/expediente/{{ a.radicado_interno }}"
              class="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800">
             Ver expediente
