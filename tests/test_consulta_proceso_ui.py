@@ -85,6 +85,101 @@ class TestConsultaProcesoUi(unittest.TestCase):
             "Falta configurar LEGAL_API_BASE_URL",
         )
 
+    def test_con_env_no_muestra_falta_configurar_por_error_html(self) -> None:
+        """Regresión: detail con 'LEGAL_API_BASE_URL' (HTML/WAF) ≠ env ausente."""
+        import asyncio
+        from contextlib import asynccontextmanager
+
+        from fastapi import HTTPException
+
+        import main as erp_main
+
+        html_detail = (
+            "La API devolvió HTML (revisa LEGAL_API_BASE_URL: debe ser la base "
+            "REST, no el portal web). HTTP 200, Content-Type: text/html"
+        )
+
+        @asynccontextmanager
+        async def fake_client():
+            client = MagicMock()
+
+            async def boom(_radicado: str):
+                raise HTTPException(status_code=502, detail=html_detail)
+
+            client.consultar_id_por_radicado = boom
+            yield client
+
+        captured: dict = {}
+
+        def fake_render(name, context, status_code=200):
+            captured["name"] = name
+            captured["context"] = context
+            return MagicMock(status_code=status_code)
+
+        with patch.dict(os.environ, {"LEGAL_API_BASE_URL": _TEST_BASE}, clear=False):
+            with patch(
+                "external_legal_client.LegalAPIClient",
+                side_effect=lambda *a, **k: fake_client(),
+            ):
+                with patch.object(erp_main, "render_template", side_effect=fake_render):
+                    asyncio.run(
+                        erp_main.vista_consulta_proceso(
+                            MagicMock(), radicado="66001418900120260028400"
+                        )
+                    )
+
+        self.assertTrue(captured["context"]["api_configurada"])
+        self.assertEqual(captured["context"]["error"], html_detail)
+        self.assertNotEqual(
+            captured["context"]["error"],
+            "Falta configurar LEGAL_API_BASE_URL",
+        )
+        self.assertNotIn(
+            "Falta configurar LEGAL_API_BASE_URL",
+            captured["context"]["error"],
+        )
+
+    def test_con_env_mapea_solo_detail_exacto_no_configurada(self) -> None:
+        import asyncio
+        from contextlib import asynccontextmanager
+
+        from fastapi import HTTPException
+
+        import main as erp_main
+
+        @asynccontextmanager
+        async def fake_client():
+            client = MagicMock()
+
+            async def boom(_radicado: str):
+                raise HTTPException(
+                    status_code=503, detail="LEGAL_API_BASE_URL no configurada"
+                )
+
+            client.consultar_id_por_radicado = boom
+            yield client
+
+        captured: dict = {}
+
+        def fake_render(name, context, status_code=200):
+            captured["context"] = context
+            return MagicMock(status_code=status_code)
+
+        with patch.dict(os.environ, {"LEGAL_API_BASE_URL": _TEST_BASE}, clear=False):
+            with patch(
+                "external_legal_client.LegalAPIClient",
+                side_effect=lambda *a, **k: fake_client(),
+            ):
+                with patch.object(erp_main, "render_template", side_effect=fake_render):
+                    asyncio.run(
+                        erp_main.vista_consulta_proceso(MagicMock(), radicado="123")
+                    )
+
+        self.assertEqual(
+            captured["context"]["error"],
+            "Falta configurar LEGAL_API_BASE_URL",
+        )
+
     def test_debug_env_payload_sin_url(self) -> None:
         import main as erp_main
 
