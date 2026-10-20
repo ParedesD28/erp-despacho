@@ -57,6 +57,14 @@ DEFAULT_ACCEPT_LANGUAGE = "es-ES,es;q=0.9"
 RETRYABLE_STATUS = frozenset({502, 503, 504})
 _ERROR_BODY_SNIPPET_LIMIT = 240
 _NON_JSON_SNIPPET_LIMIT = 300
+# Paths relativos al LEGAL_API_BASE_URL (que ya debe incluir /api/vN).
+# No se añade versión aquí: la versión vive solo en la base env.
+RELATIVE_ENDPOINT_TEMPLATES: tuple[str, ...] = (
+    "/Procesos/Consulta/NumRadicado",
+    "/Proceso/Detalle/{id_interno}",
+    "/Proceso/Actuaciones/{id_interno}",
+    "/Proceso/SujetosProcesales/{id_interno}",
+)
 # Claves candidatas para id interno en búsqueda por radicado (snake / camel / genéricas).
 _ID_INTERNO_KEYS: tuple[str, ...] = (
     "id_interno",
@@ -126,6 +134,25 @@ def _origin_referer_from_base_url(base_url: str) -> tuple[Optional[str], Optiona
         return None, None
     origin = f"{parsed.scheme}://{parsed.netloc}"
     return origin, f"{origin}/"
+
+
+def _base_path_from_url(base_url: str) -> str:
+    """Solo el path de la base (p. ej. `/api/v1`). Sin scheme/host."""
+    path = urlparse((base_url or "").strip()).path or ""
+    return path.rstrip("/") or "/"
+
+
+def _joined_path_examples(base_url: str) -> list[str]:
+    """Ejemplos path-only: base_path + template relativo (sin host)."""
+    base_path = _base_path_from_url(base_url)
+    if base_path == "/":
+        base_path = ""
+    out: list[str] = []
+    for tmpl in RELATIVE_ENDPOINT_TEMPLATES:
+        # Plantillas con {id_interno} → literal 0 solo para diagnóstico de forma.
+        rel = tmpl.replace("{id_interno}", "0")
+        out.append(f"{base_path}{rel}")
+    return out
 
 
 def _default_request_headers(*, base_url: str, user_agent: str) -> dict[str, str]:
@@ -391,21 +418,33 @@ def _looks_like_html(response: httpx.Response) -> bool:
     return bool(_HTML_OPEN_RE.match(text))
 
 
-def _detail_non_json(response: httpx.Response) -> str:
-    """Mensaje UI: status, Content-Type y ~300 chars del cuerpo (seguro)."""
+def _detail_non_json(
+    response: httpx.Response,
+    *,
+    request_path: str = "",
+) -> str:
+    """Mensaje UI: status, Content-Type, path relativo y snippet (sin host)."""
     ct = _content_type(response)
     snippet = _safe_response_snippet(response, limit=_NON_JSON_SNIPPET_LIMIT)
+    env_base = (os.environ.get("LEGAL_API_BASE_URL") or "").strip()
+    base_path = _base_path_from_url(env_base) if env_base else "?"
     if _looks_like_html(response):
         base = (
-            "La API devolvió HTML (revisa LEGAL_API_BASE_URL: debe ser la base "
-            "REST, no el portal web)"
+            "La API devolvió HTML (base_path actual sirve SPA/portal; "
+            "prueba cambiar solo el segmento de versión en LEGAL_API_BASE_URL, "
+            "p. ej. /api/v1 → /api/v2, sin tocar el host)"
         )
     else:
         base = "Respuesta no JSON de la API legal externa"
-    parts = [f"{base}. HTTP {response.status_code}, Content-Type: {ct}"]
+    parts = [
+        f"{base}. HTTP {response.status_code}, Content-Type: {ct}",
+        f"base_path={base_path}",
+    ]
+    if request_path:
+        parts.append(f"request_path={request_path}")
     if snippet:
         parts.append(f"Cuerpo: {snippet}")
-    return ". ".join(parts) if snippet else parts[0]
+    return ". ".join(parts)
 
 
 def _detail_for_http_error(response: httpx.Response) -> str:
@@ -659,7 +698,7 @@ class LegalAPIClient:
         if _looks_like_html(response):
             raise HTTPException(
                 status_code=502,
-                detail=_detail_non_json(response),
+                detail=_detail_non_json(response, request_path=path),
             )
 
         try:
@@ -667,7 +706,7 @@ class LegalAPIClient:
         except ValueError as exc:
             raise HTTPException(
                 status_code=502,
-                detail=_detail_non_json(response),
+                detail=_detail_non_json(response, request_path=path),
             ) from exc
 
     def _parse_busqueda(self, data: Any) -> ProcesoBusquedaResponse:

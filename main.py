@@ -2104,11 +2104,21 @@ def _legal_api_configurada() -> bool:
 
 def _legal_api_env_debug_payload() -> dict[str, Any]:
     """Metadatos seguros de LEGAL_API_BASE_URL (nunca la URL ni el host)."""
+    from external_legal_client import (
+        RELATIVE_ENDPOINT_TEMPLATES,
+        _base_path_from_url,
+        _joined_path_examples,
+    )
+
     stripped = (os.environ.get("LEGAL_API_BASE_URL") or "").strip()
+    base_path = _base_path_from_url(stripped) if stripped else ""
     return {
         "legal_api_base_url_present": bool(stripped),
         "legal_api_base_url_len": len(stripped),
         "startswith_https": stripped.lower().startswith("https://"),
+        "base_path": base_path,
+        "relative_endpoints": list(RELATIVE_ENDPOINT_TEMPLATES),
+        "joined_path_examples": _joined_path_examples(stripped) if stripped else [],
     }
 
 

@@ -191,11 +191,21 @@ class TestConsultaProcesoUi(unittest.TestCase):
                 "legal_api_base_url_present",
                 "legal_api_base_url_len",
                 "startswith_https",
+                "base_path",
+                "relative_endpoints",
+                "joined_path_examples",
             },
         )
         self.assertTrue(payload["legal_api_base_url_present"])
         self.assertEqual(payload["legal_api_base_url_len"], len(_TEST_BASE))
         self.assertTrue(payload["startswith_https"])
+        self.assertEqual(payload["base_path"], "/api/v1")
+        self.assertTrue(
+            any(
+                p.startswith("/api/v1/Procesos/")
+                for p in payload["joined_path_examples"]
+            )
+        )
         dumped = json.dumps(payload)
         self.assertNotIn("ejemplo.invalid", dumped)
         self.assertNotIn(_TEST_BASE, dumped)
