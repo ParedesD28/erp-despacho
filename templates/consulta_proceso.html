@@ -50,9 +50,9 @@
     </div>
 
     {% if error %}
-    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-800 text-sm font-semibold flex items-start gap-2">
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-800 text-sm flex items-start gap-2">
         <i data-lucide="alert-triangle" class="w-5 h-5 flex-shrink-0 mt-0.5"></i>
-        <span>{{ error }}</span>
+        <span class="font-semibold whitespace-pre-wrap break-words">{{ error }}</span>
     </div>
     {% endif %}
 

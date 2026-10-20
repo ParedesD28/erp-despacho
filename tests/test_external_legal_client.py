@@ -24,6 +24,9 @@ def _set_env(**overrides: str) -> None:
     os.environ["LEGAL_API_MAX_ATTEMPTS"] = "3"
     os.environ["LEGAL_API_RETRY_MIN_WAIT_S"] = "0.01"
     os.environ["LEGAL_API_RETRY_MAX_WAIT_S"] = "0.05"
+    # Limpiar headers extra salvo que el test los pase explícitamente.
+    if "LEGAL_API_EXTRA_HEADERS" not in overrides:
+        os.environ.pop("LEGAL_API_EXTRA_HEADERS", None)
     for key, value in overrides.items():
         os.environ[key] = value
 
@@ -164,6 +167,112 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         detail = str(ctx.exception.detail)
         self.assertIn("HTTP 406", detail)
         self.assertIn("Not Acceptable", detail)
+
+    @respx.mock
+    async def test_respuesta_html_pide_base_rest(self) -> None:
+        from external_legal_client import LegalAPIClient
+
+        html = (
+            "<!DOCTYPE html><html><head><title>Login</title></head>"
+            "<body><form>Iniciar sesión</form></body></html>"
+        )
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+            return_value=httpx.Response(
+                200,
+                text=html,
+                headers={"Content-Type": "text/html; charset=utf-8"},
+            )
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            with self.assertRaises(HTTPException) as ctx:
+                await client.consultar_id_por_radicado("66001418900220260028000")
+        self.assertEqual(ctx.exception.status_code, 502)
+        detail = str(ctx.exception.detail)
+        self.assertIn("HTML", detail)
+        self.assertIn("LEGAL_API_BASE_URL", detail)
+        self.assertIn("REST", detail)
+        self.assertIn("HTTP 200", detail)
+        self.assertIn("Content-Type:", detail)
+        self.assertIn("text/html", detail)
+        self.assertIn("Cuerpo:", detail)
+
+    @respx.mock
+    async def test_respuesta_no_json_incluye_diagnostico(self) -> None:
+        from external_legal_client import LegalAPIClient
+
+        body = "Gateway Timeout — upstream closed connection unexpectedly " + ("x" * 400)
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+            return_value=httpx.Response(
+                200,
+                text=body,
+                headers={"Content-Type": "text/plain"},
+            )
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            with self.assertRaises(HTTPException) as ctx:
+                await client.consultar_id_por_radicado("11001400300120210012300")
+        detail = str(ctx.exception.detail)
+        self.assertIn("no json", detail.lower())
+        self.assertIn("HTTP 200", detail)
+        self.assertIn("Content-Type:", detail)
+        self.assertIn("text/plain", detail)
+        self.assertIn("Cuerpo:", detail)
+        self.assertLessEqual(len(detail), 900)
+
+    @respx.mock
+    async def test_busqueda_array_raiz_y_aliases_id(self) -> None:
+        from external_legal_client import LegalAPIClient
+
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+            return_value=httpx.Response(
+                200,
+                json=[{"id": "555666777", "llaveProceso": "abc"}],
+            )
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            id_interno = await client.consultar_id_por_radicado(
+                "11001400300120210012300"
+            )
+        self.assertEqual(id_interno, 555666777)
+
+    @respx.mock
+    async def test_busqueda_objeto_con_id_top_level(self) -> None:
+        from external_legal_client import LegalAPIClient
+
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+            return_value=httpx.Response(
+                200,
+                json={"id_interno": 112233, "llaveProceso": "z"},
+            )
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            id_interno = await client.consultar_id_por_radicado(
+                "11001400300120210012300"
+            )
+        self.assertEqual(id_interno, 112233)
+
+    @respx.mock
+    async def test_extra_headers_desde_env(self) -> None:
+        from external_legal_client import LegalAPIClient
+
+        _set_env(
+            LEGAL_API_EXTRA_HEADERS='{"Authorization":"Bearer test-token","X-Api-Key":"k1"}'
+        )
+        route = respx.get(
+            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={"procesos": [{"idProceso": 9}]},
+            )
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            await client.consultar_id_por_radicado("11001400300120210012300")
+        headers = route.calls.last.request.headers
+        self.assertEqual(headers.get("Authorization"), "Bearer test-token")
+        self.assertEqual(headers.get("X-Api-Key"), "k1")
+        # Defaults siguen presentes.
+        self.assertIn("application/json", headers.get("Accept", ""))
 
     @respx.mock
     async def test_consultar_radicado_vacio(self) -> None:

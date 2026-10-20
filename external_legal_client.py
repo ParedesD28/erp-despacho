@@ -5,8 +5,10 @@ Host y timeouts solo vía variables de entorno. Sin URLs fijas en código.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 from typing import Any, Optional, Sequence, TypeVar
 
 import httpx
@@ -36,6 +38,7 @@ logger = logging.getLogger(__name__)
 # LEGAL_API_RETRY_MIN_WAIT_S  — espera mínima backoff (default 0.5)
 # LEGAL_API_RETRY_MAX_WAIT_S  — espera máxima backoff (default 8)
 # LEGAL_API_USER_AGENT        — User-Agent genérico (default ERPLegalClient/1.0)
+# LEGAL_API_EXTRA_HEADERS     — objeto JSON opcional de headers extra (Authorization, api-key, …)
 
 DEFAULT_TIMEOUT_S = 20.0
 DEFAULT_MAX_ATTEMPTS = 3
@@ -47,8 +50,33 @@ DEFAULT_ACCEPT = "application/json, text/plain, */*"
 DEFAULT_ACCEPT_LANGUAGE = "es-CO,es;q=0.9"
 RETRYABLE_STATUS = frozenset({502, 503, 504})
 _ERROR_BODY_SNIPPET_LIMIT = 240
+_NON_JSON_SNIPPET_LIMIT = 300
+# Claves candidatas para id interno en búsqueda por radicado (snake / camel / genéricas).
+_ID_INTERNO_KEYS: tuple[str, ...] = (
+    "id_interno",
+    "idProceso",
+    "id_proceso",
+    "IdProceso",
+    "IDProceso",
+    "id",
+)
+_PROCESOS_LIST_KEYS: tuple[str, ...] = (
+    "procesos",
+    "Procesos",
+    "data",
+    "resultados",
+    "Resultados",
+    "items",
+    "Items",
+    "results",
+)
 
 T = TypeVar("T", bound=BaseModel)
+
+_HTML_OPEN_RE = re.compile(
+    r"^\s*(<!doctype\s+html\b|<html\b|<head\b|<body\b)",
+    re.IGNORECASE,
+)
 
 
 def _env_float(name: str, default: float) -> float:
@@ -79,6 +107,38 @@ def _base_url_from_env() -> str:
             detail="LEGAL_API_BASE_URL no configurada",
         )
     return base
+
+
+def _extra_headers_from_env() -> dict[str, str]:
+    """Parsea LEGAL_API_EXTRA_HEADERS (objeto JSON). Sin secretos en código."""
+    raw = (os.environ.get("LEGAL_API_EXTRA_HEADERS") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "LEGAL_API_EXTRA_HEADERS debe ser un objeto JSON válido "
+            '(ej. {"Authorization":"Bearer …"})'
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            "LEGAL_API_EXTRA_HEADERS debe ser un objeto JSON (no array ni escalar)"
+        )
+    out: dict[str, str] = {}
+    for key, value in parsed.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(
+                "LEGAL_API_EXTRA_HEADERS: cada clave debe ser un string no vacío"
+            )
+        if value is None:
+            continue
+        if not isinstance(value, (str, int, float, bool)):
+            raise ValueError(
+                f"LEGAL_API_EXTRA_HEADERS: valor de {key!r} debe ser escalar"
+            )
+        out[key.strip()] = str(value)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +340,39 @@ def _safe_response_snippet(
     return text
 
 
+def _content_type(response: httpx.Response) -> str:
+    return (response.headers.get("content-type") or "").strip() or "(vacío)"
+
+
+def _looks_like_html(response: httpx.Response) -> bool:
+    """Detecta portal/login HTML. No scrapea: solo clasifica para fallar claro."""
+    ct = _content_type(response).lower()
+    if "text/html" in ct or "application/xhtml" in ct:
+        return True
+    try:
+        text = response.text or ""
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(_HTML_OPEN_RE.match(text))
+
+
+def _detail_non_json(response: httpx.Response) -> str:
+    """Mensaje UI: status, Content-Type y ~300 chars del cuerpo (seguro)."""
+    ct = _content_type(response)
+    snippet = _safe_response_snippet(response, limit=_NON_JSON_SNIPPET_LIMIT)
+    if _looks_like_html(response):
+        base = (
+            "La API devolvió HTML (revisa LEGAL_API_BASE_URL: debe ser la base "
+            "REST, no el portal web)"
+        )
+    else:
+        base = "Respuesta no JSON de la API legal externa"
+    parts = [f"{base}. HTTP {response.status_code}, Content-Type: {ct}"]
+    if snippet:
+        parts.append(f"Cuerpo: {snippet}")
+    return ". ".join(parts) if snippet else parts[0]
+
+
 def _detail_for_http_error(response: httpx.Response) -> str:
     detail = f"API legal externa respondió HTTP {response.status_code}"
     structured: Optional[str] = None
@@ -294,11 +387,16 @@ def _detail_for_http_error(response: httpx.Response) -> str:
     except Exception:  # noqa: BLE001 — cuerpo no JSON
         pass
 
-    # 406 Not Acceptable: incluir snippet del body si no hubo mensaje estructurado.
-    if response.status_code == 406 and not structured:
+    # 406 Not Acceptable / cuerpo no estructurado: snippet + Content-Type.
+    if not structured and (
+        response.status_code == 406 or _looks_like_html(response)
+    ):
+        ct = _content_type(response)
         snippet = _safe_response_snippet(response)
+        extra = f"Content-Type: {ct}"
         if snippet:
-            detail = f"{detail}: {snippet}"
+            extra = f"{extra}. Cuerpo: {snippet}"
+        detail = f"{detail}. {extra}"
     return detail
 
 
@@ -363,16 +461,20 @@ class LegalAPIClient:
             ua = user_agent.strip()
         ua = ua or DEFAULT_USER_AGENT
 
+        headers: dict[str, str] = {
+            "Accept": DEFAULT_ACCEPT,
+            "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
+            "User-Agent": ua,
+        }
+        # Extra headers (Authorization / api-key) sobrescriben defaults si coincide la clave.
+        headers.update(_extra_headers_from_env())
+
         self._owns_client = client is None
         # Sin Content-Type por defecto: los GET no deben forzar application/json.
         self._client = client or httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(timeout_s, connect=connect_s),
-            headers={
-                "Accept": DEFAULT_ACCEPT,
-                "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
-                "User-Agent": ua,
-            },
+            headers=headers,
             follow_redirects=True,
             limits=httpx.Limits(
                 max_connections=20,
@@ -523,22 +625,36 @@ class LegalAPIClient:
         if not response.content:
             return {}
 
+        if _looks_like_html(response):
+            raise HTTPException(
+                status_code=502,
+                detail=_detail_non_json(response),
+            )
+
         try:
             return response.json()
         except ValueError as exc:
             raise HTTPException(
                 status_code=502,
-                detail="Respuesta no JSON de la API legal externa",
+                detail=_detail_non_json(response),
             ) from exc
 
     def _parse_busqueda(self, data: Any) -> ProcesoBusquedaResponse:
+        # Array raíz de procesos → normalizar a dict.
+        if isinstance(data, list):
+            data = {"procesos": data}
         if not isinstance(data, dict):
             raise HTTPException(
                 status_code=502,
                 detail="Respuesta de búsqueda con formato inesperado",
             )
 
-        pag = data.get("paginacion") or data.get("paginación") or {}
+        pag = (
+            data.get("paginacion")
+            or data.get("paginación")
+            or data.get("pagination")
+            or {}
+        )
         if not isinstance(pag, dict):
             pag = {}
 
@@ -573,29 +689,57 @@ class LegalAPIClient:
             ) from exc
 
     @staticmethod
-    def _extract_id_interno(data: dict[str, Any]) -> Optional[int]:
-        for key in ("id_interno", "idProceso"):
-            if key in data and data[key] is not None:
-                try:
-                    return int(data[key])
-                except (TypeError, ValueError):
-                    pass
+    def _coerce_id(value: Any) -> Optional[int]:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
-        procesos = data.get("procesos") or data.get("Procesos") or data.get("data")
-        if isinstance(procesos, list) and procesos:
-            first = procesos[0]
-            if isinstance(first, dict):
-                for key in ("id_interno", "idProceso", "id"):
-                    if first.get(key) is not None:
-                        try:
-                            return int(first[key])
-                        except (TypeError, ValueError):
-                            continue
-            elif isinstance(first, (int, str)):
-                try:
-                    return int(first)
-                except (TypeError, ValueError):
-                    return None
+    @classmethod
+    def _id_from_mapping(cls, mapping: dict[str, Any]) -> Optional[int]:
+        for key in _ID_INTERNO_KEYS:
+            if key in mapping:
+                parsed = cls._coerce_id(mapping.get(key))
+                if parsed is not None:
+                    return parsed
+        return None
+
+    @classmethod
+    def _id_from_list_item(cls, item: Any) -> Optional[int]:
+        if isinstance(item, dict):
+            return cls._id_from_mapping(item)
+        return cls._coerce_id(item)
+
+    @classmethod
+    def _extract_id_interno(cls, data: dict[str, Any]) -> Optional[int]:
+        top = cls._id_from_mapping(data)
+        if top is not None:
+            return top
+
+        for list_key in _PROCESOS_LIST_KEYS:
+            procesos = data.get(list_key)
+            if isinstance(procesos, list) and procesos:
+                found = cls._id_from_list_item(procesos[0])
+                if found is not None:
+                    return found
+            elif isinstance(procesos, dict):
+                found = cls._id_from_mapping(procesos)
+                if found is not None:
+                    return found
+
+        # Un solo proceso anidado: {proceso: {idProceso: …}} / {resultado: {…}}
+        for nest_key in ("proceso", "Proceso", "resultado", "Resultado"):
+            nested = data.get(nest_key)
+            if isinstance(nested, dict):
+                found = cls._id_from_mapping(nested)
+                if found is not None:
+                    return found
+            elif isinstance(nested, list) and nested:
+                found = cls._id_from_list_item(nested[0])
+                if found is not None:
+                    return found
         return None
 
     @staticmethod
