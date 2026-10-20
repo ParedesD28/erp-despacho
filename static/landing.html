@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Diego Alejandro Paredes García | Gestión Legal | Pereira, Colombia</title>
-  <meta name="description" content="Litigio estratégico, derecho civil y comercial, cobro de cartera y propiedad horizontal en Pereira y el departamento de Risaralda.">
+  <title>Diego Alejandro Paredes García | Gestión Legal | Litigio y Representación Corporativa</title>
+  <meta name="description" content="Despacho jurídico en Pereira, Risaralda. Litigio civil y comercial, cobranza judicial de cartera y administración legal de propiedad horizontal.">
   
   <!-- Datos Estructurados SEO (JSON-LD) -->
   <script type="application/ld+json">
@@ -36,15 +36,22 @@
 
   <style>
     :root {
-      --bg: #0c0e12;
-      --surface: #14181f;
-      --surface-border: #232a35;
-      --surface-alt: #1a202c;
-      --text-main: #e2e8f0;
+      --bg-body: #090b0e;
+      --bg-header: rgba(14, 18, 24, 0.94);
+      --surface-card: #121720;
+      --surface-card-hover: #171e2b;
+      --surface-elevated: #1a2230;
+      --border-subtle: #232c3d;
+      --border-accent: #3b82f6;
+      --text-main: #f1f5f9;
       --text-muted: #94a3b8;
       --text-dark: #64748b;
       --accent: #2563eb;
       --accent-hover: #1d4ed8;
+      --accent-active: #1e40af;
+      --accent-glow: rgba(37, 99, 235, 0.15);
+      --danger: #ef4444;
+      --success: #10b981;
       --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }
 
@@ -54,318 +61,542 @@
       padding: 0;
     }
 
+    html {
+      scroll-behavior: smooth;
+    }
+
     body {
-      background-color: var(--bg);
+      background-color: var(--bg-body);
       color: var(--text-main);
       font-family: var(--font-family);
       line-height: 1.6;
       -webkit-font-smoothing: antialiased;
-      padding-bottom: 90px;
+      padding-bottom: 80px;
     }
 
     .container {
-      max-width: 960px;
+      max-width: 1140px;
       margin: 0 auto;
       padding: 0 24px;
     }
 
+    /* ========================================================= */
+    /* NAVEGACIÓN Y HEADER CORPORATIVO CON LOGO Y MENÚ */
+    /* ========================================================= */
     header {
-      border-bottom: 1px solid var(--surface-border);
-      padding: 20px 0;
-      background: rgba(12, 14, 18, 0.85);
-      backdrop-filter: blur(8px);
       position: sticky;
       top: 0;
-      z-index: 40;
+      z-index: 100;
+      background: var(--bg-header);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-subtle);
     }
 
-    .header-content {
+    .nav-wrapper {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 0;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+
+    .brand-group .logo-shield {
+      width: 36px;
+      height: 36px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      color: var(--accent);
+      font-size: 1rem;
+      letter-spacing: -0.05em;
+    }
+
+    .brand-text h1 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: #ffffff;
+      margin: 0;
+      line-height: 1.1;
+    }
+
+    .brand-text span {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .main-nav {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .nav-link {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.88rem;
+      font-weight: 500;
+      padding: 8px 14px;
+      border-radius: 4px;
+      transition: all 0.15s ease;
+    }
+
+    .nav-link:hover, .nav-link.active {
+      color: #ffffff;
+      background: var(--surface-card);
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+      padding: 8px 16px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      border-radius: 5px;
+      text-decoration: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .btn-secondary:hover {
+      background: var(--surface-card);
+      color: #ffffff;
+      border-color: var(--text-dark);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #ffffff;
+      border: 1px solid transparent;
+      padding: 9px 18px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border-radius: 5px;
+      text-decoration: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s ease;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+
+    /* Sub-barra de migas y jurisdicción */
+    .jurisdiction-strip {
+      background: #0d1117;
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 8px 0;
+      font-size: 0.75rem;
+      color: var(--text-dark);
+    }
+
+    .jurisdiction-strip .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    /* ========================================================= */
+    /* HERO CON DASHBOARD FORENSE INTEGRADO */
+    /* ========================================================= */
+    .hero-section {
+      padding: 64px 0 52px;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 36px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 900px) {
+      .hero-grid {
+        grid-template-columns: 1fr;
+      }
+      .main-nav {
+        display: none;
+      }
+    }
+
+    .hero-copy {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .hero-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-subtle);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+      width: fit-content;
+    }
+
+    .hero-title {
+      font-size: 2.6rem;
+      line-height: 1.15;
+      font-weight: 800;
+      color: #ffffff;
+      margin-bottom: 18px;
+      letter-spacing: -0.03em;
+    }
+
+    .hero-subtitle {
+      font-size: 1.12rem;
+      line-height: 1.55;
+      font-weight: 400;
+      color: var(--text-muted);
+      margin-bottom: 30px;
+    }
+
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    /* Tarjeta de Control Procesal en Hero */
+    .dossier-card {
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .dossier-header {
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 14px;
+      margin-bottom: 18px;
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
 
-    .brand-logo {
-      font-size: 1.1rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      color: #fff;
-    }
-
-    .brand-jurisdiction {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
-
-    /* Hero */
-    .hero {
-      padding: 72px 0 48px;
-    }
-
-    .badge {
-      display: inline-block;
-      padding: 4px 10px;
-      background: var(--surface-alt);
-      border: 1px solid var(--surface-border);
-      border-radius: 4px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      letter-spacing: 0.08em;
-      color: var(--text-muted);
-      margin-bottom: 20px;
+    .dossier-header h3 {
+      font-size: 0.9rem;
       text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #ffffff;
     }
 
-    h1 {
-      font-size: 2.3rem;
-      line-height: 1.2;
+    .dossier-meta-item {
+      margin-bottom: 14px;
+    }
+
+    .dossier-meta-item label {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--text-dark);
+      text-transform: uppercase;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      margin-bottom: 2px;
+    }
+
+    .dossier-meta-item span {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* ========================================================= */
+    /* SECCIONES Y ENCABEZADOS DE BLOQUE */
+    /* ========================================================= */
+    section {
+      padding: 56px 0;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .section-header {
+      margin-bottom: 32px;
+    }
+
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 6px;
+    }
+
+    .section-title {
+      font-size: 1.7rem;
       font-weight: 700;
       color: #ffffff;
-      margin-bottom: 16px;
       letter-spacing: -0.02em;
     }
 
-    h2.hero-sub {
-      font-size: 1.15rem;
-      font-weight: 400;
-      color: var(--text-muted);
-      margin-bottom: 28px;
-      max-width: 760px;
-      line-height: 1.5;
-    }
-
-    .btn-primary {
-      display: inline-block;
-      background-color: var(--accent);
-      color: #fff;
-      padding: 12px 24px;
-      font-size: 0.95rem;
-      font-weight: 600;
-      text-decoration: none;
-      border-radius: 6px;
-      border: none;
-      cursor: pointer;
-      transition: background-color 0.15s ease;
-    }
-
-    .btn-primary:hover {
-      background-color: var(--accent-hover);
-    }
-
-    /* Sections */
-    section {
-      padding: 44px 0;
-      border-top: 1px solid var(--surface-border);
-    }
-
-    .section-tag {
-      font-size: 0.8rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--text-dark);
-      margin-bottom: 16px;
-    }
-
-    .methodology-text {
-      font-size: 1.02rem;
-      color: var(--text-muted);
-      text-align: justify;
-      line-height: 1.75;
-    }
-
-    /* Grid Areas */
-    .areas-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 20px;
-      margin-top: 16px;
-    }
-
-    .area-card {
-      background: var(--surface);
-      border: 1px solid var(--surface-border);
-      border-radius: 6px;
-      padding: 24px;
-    }
-
-    .area-card h3 {
-      font-size: 1.05rem;
-      color: #fff;
-      margin-bottom: 12px;
-      font-weight: 600;
-    }
-
-    .area-card p {
-      font-size: 0.9rem;
-      color: var(--text-muted);
-      line-height: 1.55;
-    }
-
-    /* Formulario */
-    .form-wrapper {
-      background: var(--surface);
-      border: 1px solid var(--surface-border);
+    .methodology-box {
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
       border-radius: 8px;
       padding: 32px;
-      margin-top: 16px;
     }
 
-    .form-title {
-      font-size: 1.2rem;
-      font-weight: 600;
-      color: #fff;
-      margin-bottom: 8px;
-    }
-
-    .form-subtitle {
-      font-size: 0.88rem;
+    .methodology-p {
+      font-size: 1.05rem;
       color: var(--text-muted);
-      margin-bottom: 24px;
+      line-height: 1.8;
+      text-align: justify;
     }
 
-    .form-row {
+    /* ========================================================= */
+    /* GRID DE ÁREAS DE PRÁCTICA CON DETALLE TÉCNICO */
+    /* ========================================================= */
+    .areas-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 24px;
+    }
+
+    .area-box {
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 28px;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .area-box:hover {
+      border-color: var(--border-accent);
+      transform: translateY(-2px);
+    }
+
+    .area-badge {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--text-dark);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+    }
+
+    .area-box h3 {
+      font-size: 1.2rem;
+      color: #ffffff;
+      margin-bottom: 12px;
+      font-weight: 700;
+    }
+
+    .area-box p {
+      font-size: 0.92rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+
+    .area-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 16px;
+    }
+
+    .mini-pill {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-subtle);
+      padding: 3px 8px;
+      border-radius: 3px;
+      font-size: 0.75rem;
+      color: var(--text-dark);
+    }
+
+    /* ========================================================= */
+    /* TRIAGE Y EVALUADOR INTERACTIVO CON LEY 1581 */
+    /* ========================================================= */
+    .form-card {
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 36px;
+      max-width: 880px;
+      margin: 0 auto;
+    }
+
+    .form-grid-2 {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 16px;
-      margin-bottom: 16px;
+      gap: 20px;
+      margin-bottom: 20px;
     }
 
-    @media (max-width: 640px) {
-      .form-row {
+    @media (max-width: 680px) {
+      .form-grid-2 {
         grid-template-columns: 1fr;
       }
     }
 
     .form-group {
-      margin-bottom: 16px;
+      margin-bottom: 20px;
     }
 
     .form-group label {
       display: block;
       font-size: 0.85rem;
-      font-weight: 500;
-      color: var(--text-muted);
-      margin-bottom: 6px;
-    }
-
-    .form-group input,
-    .form-group textarea {
-      width: 100%;
-      background: var(--bg);
-      border: 1px solid var(--surface-border);
-      border-radius: 4px;
-      padding: 10px 14px;
+      font-weight: 600;
       color: var(--text-main);
-      font-size: 0.9rem;
-      font-family: inherit;
+      margin-bottom: 8px;
     }
 
-    .form-group input:focus,
-    .form-group textarea:focus {
+    .form-control {
+      width: 100%;
+      background: var(--bg-body);
+      border: 1px solid var(--border-subtle);
+      border-radius: 5px;
+      padding: 12px 14px;
+      color: var(--text-main);
+      font-size: 0.92rem;
+      font-family: inherit;
+      transition: border-color 0.15s ease;
+    }
+
+    .form-control:focus {
       outline: none;
       border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
     }
 
-    .privacy-notice-box {
-      background: var(--surface-alt);
-      border: 1px solid var(--surface-border);
+    .checkbox-box {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border-subtle);
       border-radius: 6px;
-      padding: 14px;
-      margin-bottom: 20px;
+      padding: 16px;
       display: flex;
       align-items: flex-start;
-      gap: 12px;
+      gap: 14px;
+      margin-bottom: 24px;
     }
 
-    .privacy-notice-box input[type="checkbox"] {
+    .checkbox-box input[type="checkbox"] {
       margin-top: 4px;
-      width: 16px;
-      height: 16px;
+      width: 18px;
+      height: 18px;
       accent-color: var(--accent);
       cursor: pointer;
     }
 
-    .privacy-text {
+    .checkbox-label {
       font-size: 0.82rem;
       color: var(--text-muted);
       line-height: 1.5;
     }
 
-    .privacy-text strong {
-      color: var(--text-main);
+    .checkbox-label strong {
+      color: #ffffff;
     }
 
-    .form-actions {
+    .form-footer {
       display: flex;
       justify-content: space-between;
       align-items: center;
       flex-wrap: wrap;
-      gap: 12px;
+      gap: 14px;
     }
 
-    .legal-note {
-      font-size: 0.8rem;
-      color: var(--text-dark);
+    /* ========================================================= */
+    /* EXENCIÓN DE RESPONSABILIDAD (DISCLAIMER) */
+    /* ========================================================= */
+    .disclaimer-card {
+      background: var(--surface-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 32px;
     }
 
-    /* Disclaimer */
-    .disclaimer-box {
-      background: var(--surface);
-      border: 1px solid var(--surface-border);
-      border-radius: 6px;
-      padding: 24px;
-    }
-
-    .disclaimer-box h4 {
-      font-size: 0.9rem;
-      color: var(--text-main);
-      margin-bottom: 12px;
+    .disclaimer-card h4 {
+      font-size: 0.95rem;
+      color: #ffffff;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.08em;
+      margin-bottom: 16px;
     }
 
-    .disclaimer-item {
-      margin-bottom: 14px;
+    .disclaimer-block {
+      margin-bottom: 16px;
     }
 
-    .disclaimer-item:last-child {
+    .disclaimer-block:last-child {
       margin-bottom: 0;
     }
 
-    .disclaimer-item strong {
+    .disclaimer-block strong {
       display: block;
-      color: var(--text-muted);
-      font-size: 0.85rem;
+      color: var(--text-main);
+      font-size: 0.88rem;
       margin-bottom: 4px;
     }
 
-    .disclaimer-item p {
-      font-size: 0.82rem;
-      color: var(--text-dark);
-      line-height: 1.55;
+    .disclaimer-block p {
+      font-size: 0.84rem;
+      color: var(--text-muted);
+      line-height: 1.6;
     }
 
-    /* Banner Cookies */
+    /* ========================================================= */
+    /* BANNER DE COOKIES CON ACCIÓN AFIRMATIVA (SIC) */
+    /* ========================================================= */
     #cookie-banner {
       position: fixed;
       bottom: 0;
       left: 0;
       right: 0;
-      background: var(--surface);
-      border-top: 1px solid var(--surface-border);
+      background: var(--surface-card);
+      border-top: 1px solid var(--border-subtle);
       padding: 16px 24px;
-      z-index: 50;
-      box-shadow: 0 -4px 16px rgba(0,0,0,0.4);
+      z-index: 1000;
+      box-shadow: 0 -8px 24px rgba(0,0,0,0.5);
     }
 
-    .cookie-container {
-      max-width: 960px;
+    .cookie-inner {
+      max-width: 1140px;
       margin: 0 auto;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 20px;
+      gap: 24px;
       flex-wrap: wrap;
     }
 
@@ -373,193 +604,380 @@
       font-size: 0.85rem;
       color: var(--text-muted);
       flex: 1;
-      min-width: 280px;
+      min-width: 300px;
       line-height: 1.5;
     }
 
     .cookie-text strong {
-      color: #fff;
+      color: #ffffff;
     }
 
-    .cookie-buttons {
-      display: flex;
-      gap: 10px;
-    }
-
-    .btn-secondary {
-      background: var(--surface-alt);
-      color: var(--text-main);
-      border: 1px solid var(--surface-border);
-      padding: 8px 16px;
-      font-size: 0.85rem;
-      font-weight: 500;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-
-    .btn-secondary:hover {
-      background: var(--surface-border);
-    }
-
-    .btn-sm-primary {
-      background: var(--accent);
-      color: #fff;
-      border: none;
-      padding: 8px 16px;
-      font-size: 0.85rem;
-      font-weight: 600;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-
-    .btn-sm-primary:hover {
-      background: var(--accent-hover);
-    }
-
-    /* Footer */
+    /* ========================================================= */
+    /* FOOTER CORPORATIVO MULTICOLUMNA */
+    /* ========================================================= */
     footer {
-      padding: 32px 0;
-      border-top: 1px solid var(--surface-border);
+      background: #080a0d;
+      border-top: 1px solid var(--border-subtle);
+      padding: 48px 0 24px;
+      margin-top: 60px;
+    }
+
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 32px;
+      margin-bottom: 40px;
+    }
+
+    @media (max-width: 800px) {
+      .footer-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .footer-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .footer-col h5 {
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #ffffff;
+      margin-bottom: 16px;
+      font-weight: 700;
+    }
+
+    .footer-col p {
       font-size: 0.82rem;
       color: var(--text-dark);
+      line-height: 1.6;
     }
 
-    .footer-content {
+    .footer-col ul {
+      list-style: none;
+    }
+
+    .footer-col ul li {
+      margin-bottom: 10px;
+    }
+
+    .footer-col ul li a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.82rem;
+      transition: color 0.15s ease;
+    }
+
+    .footer-col ul li a:hover {
+      color: #ffffff;
+    }
+
+    .footer-bottom {
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 20px;
       display: flex;
       justify-content: space-between;
+      align-items: center;
       flex-wrap: wrap;
       gap: 12px;
+      font-size: 0.78rem;
+      color: var(--text-dark);
     }
   </style>
 </head>
 <body>
 
+  <!-- Sub-barra informativa superior -->
+  <div class="jurisdiction-strip">
+    <div class="container">
+      <div>Jurisdicción Ordinaria y Arbitral · Tribunal Superior del Distrito Judicial de Pereira</div>
+      <div>Atención Profesional Previa Cita · Contacto: contacto@gestionlegal.co</div>
+    </div>
+  </div>
+
+  <!-- Encabezado Principal y Menú de Navegación -->
   <header>
-    <div class="container header-content">
-      <div>
-        <div class="brand-logo">GESTIONLEGAL.CO</div>
-        <div class="brand-jurisdiction">Diego Alejandro Paredes García · Pereira, Risaralda</div>
-      </div>
-      <div>
-        <a href="#contacto" class="btn-primary" style="padding: 8px 16px; font-size: 0.85rem;">Consulta Previa</a>
+    <div class="container nav-wrapper">
+      <a href="#inicio" class="brand-group">
+        <div class="logo-shield">GL</div>
+        <div class="brand-text">
+          <h1>GESTIÓN LEGAL</h1>
+          <span>Diego Alejandro Paredes García</span>
+        </div>
+      </a>
+
+      <!-- Menú Estructural Completo -->
+      <nav class="main-nav">
+        <a href="#inicio" class="nav-link active">Inicio</a>
+        <a href="#areas" class="nav-link">Áreas de Práctica</a>
+        <a href="#metodologia" class="nav-link">Metodología</a>
+        <a href="#evaluacion" class="nav-link">Evaluador de Caso</a>
+        <a href="#normativo" class="nav-link">Centro Normativo</a>
+      </nav>
+
+      <div class="nav-actions">
+        <a href="/login" class="btn-secondary" title="Acceso al sistema judicial de expedientes">Portal Clientes ERP</a>
+        <a href="#evaluacion" class="btn-primary">Iniciar Evaluación</a>
       </div>
     </div>
   </header>
 
-  <main class="container">
-    
-    <!-- Hero Section -->
-    <div class="hero">
-      <div class="badge">Jurisdicción Ordinaria · Distrito Judicial de Pereira</div>
-      <h1>Litigio Estratégico y Representación Corporativa</h1>
-      <h2 class="hero-sub">Control procesal y defensa patrimonial para empresas y copropiedades en Pereira y el departamento de Risaralda.</h2>
-      <a href="#contacto" class="btn-primary">Iniciar Evaluación de Caso</a>
+  <main>
+    <!-- HERO SECTION -->
+    <div class="hero-section" id="inicio">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <div class="hero-tag">Distrito Judicial de Pereira · Risaralda</div>
+          <h2 class="hero-title">Litigio Estratégico y Representación Corporativa</h2>
+          <p class="hero-subtitle">Control procesal y defensa patrimonial para empresas y copropiedades en Pereira y el departamento de Risaralda.</p>
+          <div class="hero-actions">
+            <a href="#evaluacion" class="btn-primary" style="padding: 12px 24px; font-size: 0.95rem;">Iniciar Evaluación de Caso</a>
+            <a href="#areas" class="btn-secondary" style="padding: 12px 20px; font-size: 0.95rem;">Examinar Especialidades</a>
+          </div>
+        </div>
+
+        <!-- Ficha Técnica de Despacho (Dossier) -->
+        <div class="dossier-card">
+          <div>
+            <div class="dossier-header">
+              <h3>Ficha de Control Forense</h3>
+              <span class="mini-pill">LEY 1123 / 2007</span>
+            </div>
+            <div class="dossier-meta-item">
+              <label>Titular del Despacho:</label>
+              <span>Diego Alejandro Paredes García</span>
+            </div>
+            <div class="dossier-meta-item">
+              <label>Sede Principal:</label>
+              <span>Pereira, Risaralda, República de Colombia</span>
+            </div>
+            <div class="dossier-meta-item">
+              <label>Foco Jurisdiccional:</label>
+              <span>Juzgados Civiles Municipales, del Circuito y Tribunal Superior</span>
+            </div>
+            <div class="dossier-meta-item">
+              <label>Régimen Disciplinario:</label>
+              <span>Obligación de medio formalizada mediante contrato y poder</span>
+            </div>
+          </div>
+          <div style="border-top: 1px solid var(--border-subtle); padding-top: 14px; font-size: 0.78rem; color: var(--text-dark);">
+            * No se garantiza resultado anticipado conforme al Art. 34 de la Ley 1123 de 2007.
+          </div>
+        </div>
+      </div>
     </div>
 
-    <!-- Metodología de Intervención -->
-    <section>
-      <div class="section-tag">Metodología de Intervención Procesal</div>
-      <p class="methodology-text">
-        El proceso judicial depende de la suficiencia del acervo probatorio incorporado oportunamente a los autos. Ninguna pretensión prospera sin documentos idóneos o peritajes controvertidos con rigor técnico. Cada controversia exige verificar caducidades, legitimaciones en la causa y jurisprudencia vinculante de las altas cortes. La obligación profesional del litigante es de medio, nunca de resultado. El artículo 34 de la Ley 1123 de 2007 prohíbe asegurar sentencias favorables o garantizar indemnizaciones anticipadas. La gestión jurídica consiste en estructurar defensas formales y desvirtuar los cargos de la contraparte mediante las cargas del Código General del Proceso. Las decisiones de fondo las adopta el juez.
-      </p>
-    </section>
-
-    <!-- Áreas de Práctica -->
-    <section>
-      <div class="section-tag">Áreas de Práctica Especializada</div>
-      <div class="areas-grid">
-        <div class="area-card">
-          <h3>Derecho Civil y Comercial</h3>
-          <p>Representación procesal en litigios contractuales y responsabilidad civil extracontractual mercantil. Sustentamos recursos de apelación y excepciones de mérito ante juzgados civiles municipales y del circuito del Distrito Judicial de Pereira.</p>
+    <!-- SECCIÓN: METODOLOGÍA PROCESAL -->
+    <section id="metodologia">
+      <div class="container">
+        <div class="section-header">
+          <div class="section-label">Rigor Probatorio y Deontología</div>
+          <h2 class="section-title">Metodología de Intervención Procesal</h2>
         </div>
-        <div class="area-card">
-          <h3>Gestión y Cobro de Cartera</h3>
-          <p>Recaudación prejudicial y judicial de obligaciones respaldadas en títulos valores y contratos bilaterales. Solicitamos medidas cautelares de embargo y secuestro para salvaguardar la efectividad patrimonial del cobro judicial.</p>
-        </div>
-        <div class="area-card">
-          <h3>Propiedad Horizontal</h3>
-          <p>Defensa jurídica y asesoría procesal bajo los mandatos de la Ley 675 de 2001 para administradores y copropietarios. Tramitamos procesos ejecutivos por expensas comunes adeudadas y resolvemos discrepancias relativas a la impugnación de actas de asamblea.</p>
+        <div class="methodology-box">
+          <p class="methodology-p">
+            El proceso judicial depende de la suficiencia del acervo probatorio incorporado oportunamente a los autos. Ninguna pretensión prospera sin documentos idóneos o peritajes controvertidos con rigor técnico. Cada controversia exige verificar caducidades, legitimaciones en la causa y jurisprudencia vinculante de las altas cortes. La obligación profesional del litigante es de medio, nunca de resultado. El artículo 34 de la Ley 1123 de 2007 prohíbe asegurar sentencias favorables o garantizar indemnizaciones anticipadas. La gestión jurídica consiste en estructurar defensas formales y desvirtuar los cargos de la contraparte mediante las cargas del Código General del Proceso. Las decisiones de fondo las adopta el juez.
+          </p>
         </div>
       </div>
     </section>
 
-    <!-- Formulario de Evaluación con Aviso Ley 1581 -->
-    <section id="contacto">
-      <div class="section-tag">Canal de Contacto y Evaluación Preliminar</div>
-      <div class="form-wrapper">
-        <div class="form-title">Evaluación Preliminar de Viabilidad Procesal</div>
-        <div class="form-subtitle">Diligencie los campos requeridos para evaluar la procedencia jurídica del asunto.</div>
-        
-        <form onsubmit="event.preventDefault(); alert('Solicitud registrada para estudio preliminar.');">
-          <div class="form-row">
-            <div class="form-group">
-              <label for="nombre">Nombre Completo o Razón Social</label>
-              <input type="text" id="nombre" placeholder="Ej. Comercializadora del Eje S.A.S." required>
+    <!-- SECCIÓN: ÁREAS DE PRÁCTICA -->
+    <section id="areas">
+      <div class="container">
+        <div class="section-header">
+          <div class="section-label">Materias Judiciales y Extrajudiciales</div>
+          <h2 class="section-title">Áreas de Práctica Especializada</h2>
+        </div>
+
+        <div class="areas-grid">
+          <div class="area-box">
+            <div>
+              <div class="area-badge">Litigio Mercantil y Civil</div>
+              <h3>Derecho Civil y Comercial</h3>
+              <p>Representación procesal en litigios contractuales y responsabilidad civil extracontractual mercantil. Sustentamos recursos de apelación y excepciones de mérito ante juzgados civiles municipales y del circuito del Distrito Judicial de Pereira.</p>
             </div>
-            <div class="form-group">
-              <label for="email">Correo Electrónico de Contacto</label>
-              <input type="email" id="email" placeholder="contacto@empresa.com" required>
+            <div class="area-pills">
+              <span class="mini-pill">Incumplimiento Contractual</span>
+              <span class="mini-pill">Resolución de Negocios</span>
+              <span class="mini-pill">Recursos de Apelación</span>
             </div>
           </div>
 
-          <div class="form-group">
-            <label for="hechos">Resumen Fáctico de la Controversia</label>
-            <textarea id="hechos" rows="4" placeholder="Describa sucintamente los hechos, cuantía o títulos base de la reclamación..." required></textarea>
+          <div class="area-box">
+            <div>
+              <div class="area-badge">Recuperación de Activos</div>
+              <h3>Gestión y Cobro de Cartera</h3>
+              <p>Recaudación prejudicial y judicial de obligaciones respaldadas en títulos valores y contratos bilaterales. Solicitamos medidas cautelares de embargo y secuestro para salvaguardar la efectividad patrimonial del cobro judicial.</p>
+            </div>
+            <div class="area-pills">
+              <span class="mini-pill">Procesos Ejecutivos</span>
+              <span class="mini-pill">Títulos Valores</span>
+              <span class="mini-pill">Medidas Cautelares</span>
+            </div>
           </div>
 
-          <!-- Checkbox Aviso de Privacidad Ley 1581 -->
-          <div class="privacy-notice-box">
-            <input type="checkbox" id="habeas-data" required>
-            <label for="habeas-data" class="privacy-text">
-              <strong>Autorización de Datos Personales (Ley 1581 de 2012):</strong> 
-              Autorizo a Diego Alejandro Paredes García (Gestión Legal) para recolectar y almacenar mis datos de contacto con el fin de coordinar mi agendamiento y evaluar preliminarmente la viabilidad procesal del asunto. Conservo el derecho a conocer, actualizar, rectificar y suprimir mis datos mediante escrito remitido a contacto@gestionlegal.co. Por expresa advertencia legal, no debo incorporar en este formulario datos sensibles vinculados a mi estado de salud, antecedentes penales ni información financiera clasificada.
-            </label>
+          <div class="area-box">
+            <div>
+              <div class="area-badge">Régimen Especial Ley 675</div>
+              <h3>Propiedad Horizontal</h3>
+              <p>Defensa jurídica y asesoría procesal bajo los mandatos de la Ley 675 de 2001 para administradores y copropietarios. Tramitamos procesos ejecutivos por expensas comunes adeudadas y resolvemos discrepancias relativas a la impugnación de actas de asamblea.</p>
+            </div>
+            <div class="area-pills">
+              <span class="mini-pill">Expensas en Mora</span>
+              <span class="mini-pill">Impugnación de Actas</span>
+              <span class="mini-pill">Comités de Convivencia</span>
+            </div>
           </div>
-
-          <div class="form-actions">
-            <div class="legal-note">* Toda intervención judicial formal requiere suscripción de contrato de mandato y otorgamiento de poder.</div>
-            <button type="submit" class="btn-primary">Remitir Consulta Previa</button>
-          </div>
-        </form>
-      </div>
-    </section>
-
-    <!-- Exención de Responsabilidad Legal -->
-    <section>
-      <div class="disclaimer-box">
-        <h4>Exención de Responsabilidad Legal (Disclaimer)</h4>
-        
-        <div class="disclaimer-item">
-          <strong>1. Inexistencia de Relación Abogado-Cliente:</strong>
-          <p>La consulta de este portal web, la lectura de sus notas jurídicas o la remisión de información mediante formularios electrónicos no perfeccionan contrato de mandato ni configuran un vínculo profesional entre el usuario y Diego Alejandro Paredes García. La relación contractual queda formalizada únicamente tras la suscripción de un contrato formal de prestación de servicios profesionales y el otorgamiento del respectivo poder conforme al Código General del Proceso.</p>
-        </div>
-
-        <div class="disclaimer-item">
-          <strong>2. Alcance Estrictamente Doctrinal del Contenido:</strong>
-          <p>Los textos alojados en el dominio gestionlegal.co constituyen opiniones jurídicas de carácter general y formativo. Ningún fragmento de esta web debe tomarse como concepto legal, dictamen técnico ni instrucción para iniciar trámites judiciales. Las situaciones procesales demandan análisis individualizado sobre documentos específicos; el usuario asume la responsabilidad exclusiva si adopta decisiones jurídicas sin contratar asistencia letrada directa.</p>
         </div>
       </div>
     </section>
 
+    <!-- SECCIÓN: EVALUADOR Y FORMULARIO -->
+    <section id="evaluacion">
+      <div class="container">
+        <div class="section-header" style="text-align: center; max-width: 680px; margin-left: auto; margin-right: auto;">
+          <div class="section-label">Canal de Precalificación de Caso</div>
+          <h2 class="section-title">Evaluación Preliminar de Viabilidad Procesal</h2>
+          <p style="color: var(--text-muted); font-size: 0.95rem; margin-top: 8px;">Diligencie los campos requeridos para coordinar una sesión de estudio preliminar sobre el asunto litigioso o corporativo.</p>
+        </div>
+
+        <div class="form-card">
+          <form onsubmit="event.preventDefault(); alert('Solicitud registrada con reserva legal. Un profesional evaluará la viabilidad probatoria del caso.');">
+            <div class="form-grid-2">
+              <div class="form-group">
+                <label for="materia">Materia de la Controversia</label>
+                <select id="materia" class="form-control" required>
+                  <option value="civil">Derecho Civil y Comercial</option>
+                  <option value="cartera">Cobro Ejecutivo de Cartera</option>
+                  <option value="ph">Propiedad Horizontal (Ley 675)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="etapa">Etapa Actual del Asunto</label>
+                <select id="etapa" class="form-control" required>
+                  <option value="prejudicial">Fase Prejudicial (Sin radicar)</option>
+                  <option value="notificacion">Demanda Radicada / Pendiente Notificación</option>
+                  <option value="audiencia">En Curso de Excepciones o Audiencia</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-grid-2">
+              <div class="form-group">
+                <label for="nombre">Nombre Completo o Razón Social</label>
+                <input type="text" id="nombre" class="form-control" placeholder="Ej. Comercializadora del Café S.A.S." required>
+              </div>
+              <div class="form-group">
+                <label for="email">Correo Electrónico de Notificación</label>
+                <input type="email" id="email" class="form-control" placeholder="contacto@empresa.com" required>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="hechos">Resumen Fáctico de la Controversia</label>
+              <textarea id="hechos" rows="4" class="form-control" placeholder="Indique sucintamente los hechos, cuantía o títulos base de la reclamación..." required></textarea>
+            </div>
+
+            <!-- Checkbox Ley 1581 -->
+            <div class="checkbox-box">
+              <input type="checkbox" id="habeas-data" required>
+              <label for="habeas-data" class="checkbox-label">
+                <strong>Autorización de Datos Personales (Ley 1581 de 2012):</strong> 
+                Autorizo a Diego Alejandro Paredes García (Gestión Legal) para recolectar y almacenar mis datos de contacto con el fin de coordinar mi agendamiento y evaluar preliminarmente la viabilidad procesal del asunto. Conservo el derecho a conocer, actualizar, rectificar y suprimir mis datos mediante escrito remitido a contacto@gestionlegal.co. Por expresa advertencia legal, no debo incorporar en este formulario datos sensibles vinculados a mi estado de salud, antecedentes penales ni información financiera clasificada.
+              </label>
+            </div>
+
+            <div class="form-footer">
+              <div style="font-size: 0.78rem; color: var(--text-dark); max-width: 480px;">
+                * Toda representación procesal requiere suscripción de contrato de mandato y otorgamiento de poder.
+              </div>
+              <button type="submit" class="btn-primary" style="padding: 12px 24px;">Remitir Consulta Previa</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECCIÓN: CENTRO NORMATIVO Y EXENCIÓN -->
+    <section id="normativo">
+      <div class="container">
+        <div class="section-header">
+          <div class="section-label">Transparencia y Régimen Deontológico</div>
+          <h2 class="section-title">Centro Normativo y Exención de Responsabilidad</h2>
+        </div>
+
+        <div class="disclaimer-card">
+          <h4>Exención de Responsabilidad Legal (Disclaimer)</h4>
+          <div class="disclaimer-block">
+            <strong>1. Inexistencia de Relación Abogado-Cliente:</strong>
+            <p>La consulta de este portal web, la lectura de sus notas jurídicas o la remisión de información mediante formularios electrónicos no perfeccionan contrato de mandato ni configuran un vínculo profesional entre el usuario y Diego Alejandro Paredes García. La relación contractual queda formalizada únicamente tras la suscripción de un contrato formal de prestación de servicios profesionales y el otorgamiento del respectivo poder conforme al Código General del Proceso.</p>
+          </div>
+          <div class="disclaimer-block">
+            <strong>2. Alcance Estrictamente Doctrinal del Contenido:</strong>
+            <p>Los textos alojados en el dominio gestionlegal.co constituyen opiniones jurídicas de carácter general y formativo. Ningún fragmento de esta web debe tomarse como concepto legal, dictamen técnico ni instrucción para iniciar trámites judiciales. Las situaciones procesales demandan análisis individualizado sobre documentos específicos; el usuario asume la responsabilidad exclusiva si adopta decisiones jurídicas sin contratar asistencia letrada directa.</p>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- Banner de Cookies SIC -->
   <div id="cookie-banner">
-    <div class="cookie-container">
+    <div class="cookie-inner">
       <div class="cookie-text">
-        <strong>Aviso de Almacenamiento Local:</strong> Este sitio web utiliza cookies técnicas para garantizar la navegación segura y cookies analíticas para registrar métricas de uso del servidor. El desplazamiento por la página o la inacción del usuario no autorizan la descarga de archivos de seguimiento. Seleccione su preferencia antes de continuar.
+        <strong>Aviso de Almacenamiento Local (Circular 002 SIC):</strong> Este sitio web utiliza cookies técnicas para garantizar la navegación segura y cookies analíticas para registrar métricas de uso del servidor. El desplazamiento por la página o la inacción del usuario no autorizan la descarga de archivos de seguimiento. Seleccione su preferencia antes de continuar.
       </div>
-      <div class="cookie-buttons">
+      <div style="display: flex; gap: 8px;">
         <button class="btn-secondary" onclick="document.getElementById('cookie-banner').style.display='none'">Rechazar No Esenciales</button>
-        <button class="btn-sm-primary" onclick="document.getElementById('cookie-banner').style.display='none'">Aceptar Analíticas</button>
+        <button class="btn-primary" style="padding: 8px 16px; font-size: 0.82rem;" onclick="document.getElementById('cookie-banner').style.display='none'">Aceptar Analíticas</button>
       </div>
     </div>
   </div>
 
+  <!-- FOOTER CORPORATIVO -->
   <footer>
-    <div class="container footer-content">
-      <div>© 2026 Diego Alejandro Paredes García · Pereira, Risaralda, Colombia</div>
-      <div>Sujeto a las disposiciones de la Ley 1123 de 2007 (Código Disciplinario del Abogado)</div>
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-col">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+            <div class="logo-shield" style="width: 28px; height: 28px; font-size: 0.8rem;">GL</div>
+            <h5 style="margin: 0;">GESTIÓN LEGAL</h5>
+          </div>
+          <p>Diego Alejandro Paredes García · Litigio forense, representación de acreedores y asesoría a administraciones de propiedad horizontal en Pereira y el Eje Cafetero.</p>
+        </div>
+
+        <div class="footer-col">
+          <h5>Especialidades</h5>
+          <ul>
+            <li><a href="#areas">Derecho Civil y Comercial</a></li>
+            <li><a href="#areas">Cobro de Cartera Coactivo</a></li>
+            <li><a href="#areas">Propiedad Horizontal (Ley 675)</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h5>Regulación</h5>
+          <ul>
+            <li><a href="#metodologia">Ley 1123 de 2007 (Deontología)</a></li>
+            <li><a href="#normativo">Ley 1581 de 2012 (Hábeas Data)</a></li>
+            <li><a href="#normativo">Circular 002 SIC (Cookies)</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h5>Sede Forense</h5>
+          <p>Pereira, Risaralda, Colombia<br>Distrito Judicial de Pereira<br><span style="color: var(--accent);">contacto@gestionlegal.co</span></p>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <div>© 2026 Diego Alejandro Paredes García · Dominio gestionlegal.co · Todos los derechos reservados.</div>
+        <div>Sujeto al Código Disciplinario del Abogado (Obligación de Medio - Art. 34 Ley 1123 de 2007).</div>
+      </div>
     </div>
   </footer>
 
