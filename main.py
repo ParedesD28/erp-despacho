@@ -113,7 +113,7 @@ observability.install_exception_handling(app)
 # MIDDLEWARE DE SEGURIDAD PRODUCTIVA
 # ==============================================================================
 def _is_public_path(path: str) -> bool:
-    if path in ("/login", "/health"):
+    if path in ("/login", "/health", "/landing"):
         return True
     # PDFs sensibles: nunca públicos vía StaticFiles (usar /pdfs/ o /api/bot/pdf/).
     if path.startswith("/static/pdfs/"):
@@ -2500,6 +2500,12 @@ async def vista_consulta_proceso(request: Request, radicado: str = ""):
         ctx["error"] = "No fue posible completar la consulta. Intente de nuevo."
 
     return render_template("consulta_proceso.html", ctx)
+
+
+@app.get("/landing")
+def vista_landing_gestionlegal(request: Request):
+    """Página institucional pública de Gestión Legal."""
+    return render_template("landing_gestionlegal.html", {"request": request})
 
 
 @app.get("/phasecob")
