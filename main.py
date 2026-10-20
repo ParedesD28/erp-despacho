@@ -73,6 +73,7 @@ import permisos
 import usuarios_service
 import usuarios_router
 import portal_ph_router
+import sync_rama_router
 
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
@@ -80,6 +81,7 @@ templates = Jinja2Templates(directory="templates")
 import api_recaudos
 
 app.include_router(api_recaudos.router)
+app.include_router(sync_rama_router.router)
 
 def render_template(name: str, context: dict, status_code: int = 200):
     """Renderiza plantillas Jinja2 siendo compatible con cualquier versión de Starlette/FastAPI."""
@@ -118,6 +120,9 @@ def _is_public_path(path: str) -> bool:
     if path.startswith("/static/") or path.startswith("/api/bot/"):
         return True
     if path.startswith("/sms/api/"):
+        return True
+    # Cron Render: auth propia vía X-Cron-Secret (no cookie de sesión).
+    if path.startswith("/api/v1/cron/"):
         return True
     return False
 
@@ -452,6 +457,14 @@ def vista_dashboard(request: Request):
                 """)
                 terminos_proximos = [dict(r) for r in cur.fetchall()]
 
+            # 4b. Alertas de sync Rama (in-ERP)
+            import sync_procesos_service
+
+            alertas_sync_unread = sync_procesos_service.contar_alertas_no_leidas(cur)
+            alertas_sync_recientes = sync_procesos_service.listar_alertas_recientes(
+                cur, limit=5, solo_no_leidas=True
+            )
+
         # 5. Totales de cartera: snapshot (sin liquidar en cada refresh).
         try:
             totales_cartera = obligacion_saldo_service.leer_snapshot_cartera()
@@ -485,6 +498,8 @@ def vista_dashboard(request: Request):
                 "acuerdos_proximos": acuerdos_proximos,
                 "monto_acuerdos_vigentes": monto_acuerdos_vigentes,
                 "terminos_proximos": terminos_proximos,
+                "alertas_sync_unread": alertas_sync_unread,
+                "alertas_sync_recientes": alertas_sync_recientes,
                 "totales_cartera": totales_cartera,
                 "hoy": str(hoy),
             },
@@ -900,6 +915,21 @@ def detalle_expediente(request: Request, radicado: str):
                 demandantes = expedientes_service._get_demandantes(cur, proceso)
                 demandados = expedientes_service._get_demandados(cur, radicado)
                 actuaciones = expedientes_service._get_actuaciones(cur, radicado)
+                import sync_procesos_service
+
+                alertas_expediente = []
+                if sync_procesos_service._table_exists(cur, "alertas_seguimiento"):
+                    cur.execute(
+                        """
+                        SELECT id, titulo, detalle, leida, atendida, created_at
+                        FROM alertas_seguimiento
+                        WHERE radicado_interno = %s
+                        ORDER BY created_at DESC
+                        LIMIT 20
+                        """,
+                        (radicado,),
+                    )
+                    alertas_expediente = [dict(r) for r in cur.fetchall()]
                 contactos_opts = expedientes_service._contact_options(cur)
                 abogados_opts = expedientes_service._get_abogados(cur)
                 obligaciones = obligaciones_service.obtener_obligaciones_proceso(cur, radicado)
@@ -931,6 +961,7 @@ def detalle_expediente(request: Request, radicado: str):
                         "contactos": contactos_opts,
                         "abogados": abogados_opts,
                         "actuaciones": actuaciones,
+                        "alertas_expediente": alertas_expediente,
                         "acuerdos_crm": acuerdos,
                         "audit_ediciones": audit,
                         "conjuntos": conjuntos,

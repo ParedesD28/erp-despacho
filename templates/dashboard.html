@@ -17,6 +17,10 @@
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
+            <a href="/alertas-seguimiento" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl {% if alertas_sync_unread %}bg-amber-500 hover:bg-amber-600 text-white{% else %}bg-white border border-slate-200 text-slate-700 hover:bg-slate-50{% endif %} font-bold text-xs shadow-xs transition-all">
+                <i data-lucide="bell" class="w-4 h-4"></i>
+                <span>Novedades Rama{% if alertas_sync_unread %} ({{ alertas_sync_unread }}){% endif %}</span>
+            </a>
             <a href="/supervision-agente" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all">
                 <i data-lucide="bot" class="w-4 h-4"></i>
                 <span>Supervisión Agente WhatsApp</span>
@@ -27,6 +31,23 @@
             </a>
         </div>
     </header>
+
+    {% if alertas_sync_unread %}
+    <section class="bg-amber-50 border border-amber-200 rounded-2xl p-4 md:p-5 shadow-xs">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <h2 class="text-sm font-bold text-amber-900">Novedades judiciales sin revisar ({{ alertas_sync_unread }})</h2>
+            <a href="/alertas-seguimiento" class="text-xs font-bold text-amber-800 hover:text-amber-950">Ver todas →</a>
+        </div>
+        <ul class="space-y-2">
+            {% for a in alertas_sync_recientes %}
+            <li class="text-xs text-amber-950">
+                <a href="/expediente/{{ a.radicado_interno }}" class="font-bold underline decoration-amber-300 hover:decoration-amber-600">{{ a.radicado_interno }}</a>
+                — {{ a.titulo }}
+            </li>
+            {% endfor %}
+        </ul>
+    </section>
+    {% endif %}
 
     <!-- CARTERA ACTUALIZADA -->
     <section class="space-y-3">
