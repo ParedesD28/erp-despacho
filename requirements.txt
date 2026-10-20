@@ -23,3 +23,4 @@ tenacity
 respx
 google-auth>=2.0.0
 google-api-python-client>=2.100.0
+cryptography>=41.0.0

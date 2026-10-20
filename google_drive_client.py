@@ -58,7 +58,13 @@ def _oauth_client_secret() -> str:
 
 
 def _oauth_refresh_token() -> str:
-    return (os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN") or "").strip()
+    """Env GOOGLE_OAUTH_REFRESH_TOKEN, o token cifrado en app_settings (post-OAuth)."""
+    try:
+        from app_settings import get_google_oauth_refresh_token
+
+        return (get_google_oauth_refresh_token() or "").strip()
+    except Exception:
+        return (os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN") or "").strip()
 
 
 def oauth_ready() -> bool:
