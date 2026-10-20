@@ -34,6 +34,23 @@ def _set_env(**overrides: str) -> None:
 
 
 class OriginRefererHeadersTests(unittest.TestCase):
+    def test_base_path_y_joined_sin_host(self) -> None:
+        from external_legal_client import (
+            _base_path_from_url,
+            _joined_path_examples,
+        )
+
+        self.assertEqual(
+            _base_path_from_url("https://api.ejemplo.invalid/api/v1"),
+            "/api/v1",
+        )
+        joined = _joined_path_examples("https://api.ejemplo.invalid/api/v1")
+        self.assertIn("/api/v1/Procesos/Consulta/NumRadicado", joined)
+        self.assertIn("/api/v1/Proceso/Detalle/0", joined)
+        dumped = " ".join(joined)
+        self.assertNotIn("ejemplo.invalid", dumped)
+        self.assertNotIn("://", dumped)
+
     def test_origin_referer_desde_base_con_path(self) -> None:
         from external_legal_client import _origin_referer_from_base_url
 
@@ -282,11 +299,14 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         detail = str(ctx.exception.detail)
         self.assertIn("HTML", detail)
         self.assertIn("LEGAL_API_BASE_URL", detail)
-        self.assertIn("REST", detail)
+        self.assertIn("/api/v2", detail)
+        self.assertIn("base_path=", detail)
+        self.assertIn("request_path=/Procesos/Consulta/NumRadicado", detail)
         self.assertIn("HTTP 200", detail)
         self.assertIn("Content-Type:", detail)
         self.assertIn("text/html", detail)
         self.assertIn("Cuerpo:", detail)
+        self.assertNotIn("://", detail)
 
     @respx.mock
     async def test_respuesta_no_json_incluye_diagnostico(self) -> None:
