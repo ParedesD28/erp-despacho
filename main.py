@@ -2175,7 +2175,9 @@ async def vista_consulta_proceso(request: Request, radicado: str = ""):
         }
     except HTTPException as exc:
         detail = exc.detail
-        if isinstance(detail, str) and "LEGAL_API_BASE_URL" in detail:
+        # Solo el detail exacto de _base_url_from_env. Mensajes que mencionan
+        # LEGAL_API_BASE_URL (p. ej. HTML/WAF) NO deben mapearse a "Falta configurar…".
+        if isinstance(detail, str) and detail.strip() == "LEGAL_API_BASE_URL no configurada":
             ctx["error"] = "Falta configurar LEGAL_API_BASE_URL"
         else:
             ctx["error"] = detail if isinstance(detail, str) else "Error al consultar el proceso"
