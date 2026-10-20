@@ -2098,6 +2098,76 @@ def vista_estado_cuenta_pdf(request: Request):
     )
 
 
+def _legal_api_configurada() -> bool:
+    return bool((os.environ.get("LEGAL_API_BASE_URL") or "").strip())
+
+
+def _detalle_filas_consulta(detalle) -> list[tuple[str, Any]]:
+    """Pares etiqueta/valor para la tabla de detalle en la UI."""
+    return [
+        ("Juzgado / despacho", detalle.juzgado),
+        ("Estado", detalle.estado),
+        ("Ponente", detalle.ponente),
+        ("Llave proceso", detalle.llave_proceso),
+        ("Departamento", detalle.departamento),
+        ("Tipo de proceso", detalle.tipo_proceso),
+        ("Clase", detalle.clase_proceso),
+        ("Subclase", detalle.subclase_proceso),
+        ("Recurso", detalle.recurso),
+        ("Ubicación", detalle.ubicacion),
+        ("Fecha creación", detalle.fecha_creacion),
+        ("Última actuación", detalle.fecha_ultima_actuacion),
+        ("Contenido radicación", detalle.contenido_radicacion),
+    ]
+
+
+@app.get("/herramientas/consulta-proceso")
+async def vista_consulta_proceso(request: Request, radicado: str = ""):
+    """Herramienta: consulta detalle/actuaciones/sujetos vía LegalAPIClient."""
+    from external_legal_client import LegalAPIClient
+
+    radicado_limpio = (radicado or "").strip()
+    api_ok = _legal_api_configurada()
+    ctx: dict[str, Any] = {
+        "request": request,
+        "radicado": radicado_limpio,
+        "api_configurada": api_ok,
+        "error": None,
+        "resultado": None,
+    }
+
+    if not radicado_limpio:
+        return render_template("consulta_proceso.html", ctx)
+
+    if not api_ok:
+        ctx["error"] = "Falta configurar LEGAL_API_BASE_URL"
+        return render_template("consulta_proceso.html", ctx)
+
+    try:
+        async with LegalAPIClient() as client:
+            id_interno = await client.consultar_id_por_radicado(radicado_limpio)
+            detalle = await client.obtener_detalle(id_interno)
+            actuaciones = await client.obtener_actuaciones(id_interno)
+            sujetos = await client.obtener_sujetos(id_interno)
+        ctx["resultado"] = {
+            "id_interno": id_interno,
+            "detalle_filas": _detalle_filas_consulta(detalle),
+            "actuaciones": [a.model_dump() for a in actuaciones],
+            "sujetos": [s.model_dump() for s in sujetos],
+        }
+    except HTTPException as exc:
+        detail = exc.detail
+        if isinstance(detail, str) and "LEGAL_API_BASE_URL" in detail:
+            ctx["error"] = "Falta configurar LEGAL_API_BASE_URL"
+        else:
+            ctx["error"] = detail if isinstance(detail, str) else "Error al consultar el proceso"
+    except Exception as exc:
+        _json_log("ERROR", "consulta_proceso_fallo", error=type(exc).__name__)
+        ctx["error"] = "No fue posible completar la consulta. Intente de nuevo."
+
+    return render_template("consulta_proceso.html", ctx)
+
+
 @app.get("/phasecob")
 def vista_phasecob(request: Request):
     """
