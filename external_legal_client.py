@@ -58,13 +58,17 @@ RETRYABLE_STATUS = frozenset({502, 503, 504})
 _ERROR_BODY_SNIPPET_LIMIT = 240
 _NON_JSON_SNIPPET_LIMIT = 300
 # Paths relativos al LEGAL_API_BASE_URL (que ya debe incluir /api/vN).
-# No se añade versión aquí: la versión vive solo en la base env.
+# Contrato CPNU SPA backend (paths only; host/versión en env):
+#   GET …/Procesos/Consulta/NumeroRadicacion?numero=&SoloActivos=&pagina=
+#   GET …/Proceso/Detalle|{Actuaciones|Sujetos}/{id}
 RELATIVE_ENDPOINT_TEMPLATES: tuple[str, ...] = (
-    "/Procesos/Consulta/NumRadicado",
+    "/Procesos/Consulta/NumeroRadicacion",
     "/Proceso/Detalle/{id_interno}",
     "/Proceso/Actuaciones/{id_interno}",
-    "/Proceso/SujetosProcesales/{id_interno}",
+    "/Proceso/Sujetos/{id_interno}",
 )
+# Query keys del endpoint de búsqueda (valores no se exponen en debug).
+BUSCAR_QUERY_KEYS: tuple[str, ...] = ("numero", "SoloActivos", "pagina")
 # Claves candidatas para id interno en búsqueda por radicado (snake / camel / genéricas).
 _ID_INTERNO_KEYS: tuple[str, ...] = (
     "id_interno",
@@ -565,15 +569,19 @@ class LegalAPIClient:
     # --- API pública ---
 
     async def consultar_id_por_radicado(self, radicado: str) -> int:
-        """GET /Procesos/Consulta/NumRadicado — retorna id interno del proceso."""
+        """GET /Procesos/Consulta/NumeroRadicacion — retorna id interno del proceso."""
         numero = (radicado or "").strip()
         if not numero:
             raise HTTPException(status_code=400, detail="radicado vacío")
 
         data = await self._request_json(
             "GET",
-            "/Procesos/Consulta/NumRadicado",
-            params={"numero": numero, "SoloActivos": "false"},
+            "/Procesos/Consulta/NumeroRadicacion",
+            params={
+                "numero": numero,
+                "SoloActivos": "false",
+                "pagina": "1",
+            },
         )
         parsed = self._parse_busqueda(data)
         return parsed.id_interno
@@ -602,14 +610,20 @@ class LegalAPIClient:
         return self._parse_list(items, ActuacionResponse, "actuaciones")
 
     async def obtener_sujetos(self, id_interno: int) -> list[SujetoResponse]:
-        """GET /Proceso/SujetosProcesales/{id_interno}."""
+        """GET /Proceso/Sujetos/{id_interno}."""
         data = await self._request_json(
             "GET",
-            f"/Proceso/SujetosProcesales/{id_interno}",
+            f"/Proceso/Sujetos/{id_interno}",
         )
         items = self._unwrap_list(
             data,
-            keys=("sujetos", "SujetosProcesales", "sujetosProcesales", "data"),
+            keys=(
+                "sujetos",
+                "Sujetos",
+                "SujetosProcesales",
+                "sujetosProcesales",
+                "data",
+            ),
         )
         return self._parse_list(items, SujetoResponse, "sujetos")
 

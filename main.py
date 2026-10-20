@@ -16,7 +16,7 @@ import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, List, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -2105,6 +2105,7 @@ def _legal_api_configurada() -> bool:
 def _legal_api_env_debug_payload() -> dict[str, Any]:
     """Metadatos seguros de LEGAL_API_BASE_URL (nunca la URL ni el host)."""
     from external_legal_client import (
+        BUSCAR_QUERY_KEYS,
         RELATIVE_ENDPOINT_TEMPLATES,
         _base_path_from_url,
         _joined_path_examples,
@@ -2112,12 +2113,15 @@ def _legal_api_env_debug_payload() -> dict[str, Any]:
 
     stripped = (os.environ.get("LEGAL_API_BASE_URL") or "").strip()
     base_path = _base_path_from_url(stripped) if stripped else ""
+    has_port = bool(urlparse(stripped).port) if stripped else False
     return {
         "legal_api_base_url_present": bool(stripped),
         "legal_api_base_url_len": len(stripped),
         "startswith_https": stripped.lower().startswith("https://"),
         "base_path": base_path,
+        "base_has_explicit_port": has_port,
         "relative_endpoints": list(RELATIVE_ENDPOINT_TEMPLATES),
+        "buscar_query_keys": list(BUSCAR_QUERY_KEYS),
         "joined_path_examples": _joined_path_examples(stripped) if stripped else [],
     }
 

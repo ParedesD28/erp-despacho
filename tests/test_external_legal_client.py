@@ -45,7 +45,7 @@ class OriginRefererHeadersTests(unittest.TestCase):
             "/api/v1",
         )
         joined = _joined_path_examples("https://api.ejemplo.invalid/api/v1")
-        self.assertIn("/api/v1/Procesos/Consulta/NumRadicado", joined)
+        self.assertIn("/api/v1/Procesos/Consulta/NumeroRadicacion", joined)
         self.assertIn("/api/v1/Proceso/Detalle/0", joined)
         dumped = " ".join(joined)
         self.assertNotIn("ejemplo.invalid", dumped)
@@ -157,8 +157,8 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         from external_legal_client import LegalAPIClient
 
         route = respx.get(
-            f"{TEST_BASE}/Procesos/Consulta/NumRadicado",
-            params={"numero": "11001400300120210012300", "SoloActivos": "false"},
+            f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion",
+            params={"numero": "11001400300120210012300", "SoloActivos": "false", "pagina": "1"},
         ).mock(
             return_value=httpx.Response(
                 200,
@@ -206,7 +206,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("*/*", DEFAULT_ACCEPT)
 
         route = respx.get(
-            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado"
+            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion"
         ).mock(
             return_value=httpx.Response(
                 200,
@@ -231,7 +231,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Chrome/", DEFAULT_USER_AGENT)
 
         route = respx.get(
-            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado"
+            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion"
         ).mock(
             return_value=httpx.Response(
                 200,
@@ -262,7 +262,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_http_406_incluye_snippet_del_cuerpo(self) -> None:
         from external_legal_client import LegalAPIClient
 
-        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion").mock(
             return_value=httpx.Response(
                 406,
                 text="Not Acceptable: only text/html supported",
@@ -285,7 +285,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
             "<!DOCTYPE html><html><head><title>Login</title></head>"
             "<body><form>Iniciar sesión</form></body></html>"
         )
-        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion").mock(
             return_value=httpx.Response(
                 200,
                 text=html,
@@ -301,7 +301,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("LEGAL_API_BASE_URL", detail)
         self.assertIn("/api/v2", detail)
         self.assertIn("base_path=", detail)
-        self.assertIn("request_path=/Procesos/Consulta/NumRadicado", detail)
+        self.assertIn("request_path=/Procesos/Consulta/NumeroRadicacion", detail)
         self.assertIn("HTTP 200", detail)
         self.assertIn("Content-Type:", detail)
         self.assertIn("text/html", detail)
@@ -313,7 +313,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         from external_legal_client import LegalAPIClient
 
         body = "Gateway Timeout — upstream closed connection unexpectedly " + ("x" * 400)
-        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion").mock(
             return_value=httpx.Response(
                 200,
                 text=body,
@@ -335,7 +335,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_busqueda_array_raiz_y_aliases_id(self) -> None:
         from external_legal_client import LegalAPIClient
 
-        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion").mock(
             return_value=httpx.Response(
                 200,
                 json=[{"id": "555666777", "llaveProceso": "abc"}],
@@ -351,7 +351,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_busqueda_objeto_con_id_top_level(self) -> None:
         from external_legal_client import LegalAPIClient
 
-        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion").mock(
             return_value=httpx.Response(
                 200,
                 json={"id_interno": 112233, "llaveProceso": "z"},
@@ -371,7 +371,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
             LEGAL_API_EXTRA_HEADERS='{"Origin":"https://override.ejemplo.invalid"}'
         )
         route = respx.get(
-            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado"
+            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion"
         ).mock(
             return_value=httpx.Response(
                 200,
@@ -393,7 +393,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
             LEGAL_API_EXTRA_HEADERS='{"Authorization":"Bearer test-token","X-Api-Key":"k1"}'
         )
         route = respx.get(
-            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado"
+            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion"
         ).mock(
             return_value=httpx.Response(
                 200,
@@ -421,7 +421,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_consultar_sin_resultados(self) -> None:
         from external_legal_client import LegalAPIClient
 
-        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumeroRadicacion").mock(
             return_value=httpx.Response(
                 200,
                 json={"procesos": [], "paginacion": {"cantidadRegistros": 0}},
@@ -464,7 +464,7 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
         )
-        respx.get(f"{TEST_BASE}/Proceso/SujetosProcesales/{pid}").mock(
+        respx.get(f"{TEST_BASE}/Proceso/Sujetos/{pid}").mock(
             return_value=httpx.Response(
                 200,
                 json=[
