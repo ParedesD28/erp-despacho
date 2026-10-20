@@ -1,21 +1,31 @@
 """UI /herramientas/consulta-proceso — auth y mensaje sin LEGAL_API_BASE_URL."""
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+os.environ.setdefault("ERP_SESSION_SECRET", "x" * 32)
 
 import permisos
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# URL ficticia solo para tests (nunca un host real de gobierno).
+_TEST_BASE = "https://ejemplo.invalid/api/v1"
+
 
 class TestConsultaProcesoUi(unittest.TestCase):
     def test_ruta_y_plantilla_existen(self) -> None:
         main_src = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn('@app.get("/herramientas/consulta-proceso")', main_src)
+        self.assertIn(
+            '@app.get("/herramientas/consulta-proceso/debug-env")',
+            main_src,
+        )
         self.assertIn("LegalAPIClient", main_src)
         self.assertTrue((ROOT / "templates" / "consulta_proceso.html").is_file())
         informes = (ROOT / "templates" / "informes.html").read_text(encoding="utf-8")
@@ -38,6 +48,11 @@ class TestConsultaProcesoUi(unittest.TestCase):
         )
         self.assertTrue(
             permisos.denegar_acceso(sin_informes, "GET", "/herramientas/consulta-proceso")
+        )
+        self.assertFalse(
+            permisos.denegar_acceso(
+                consulta, "GET", "/herramientas/consulta-proceso/debug-env"
+            )
         )
 
     def test_sin_env_muestra_mensaje(self) -> None:
@@ -69,6 +84,58 @@ class TestConsultaProcesoUi(unittest.TestCase):
             captured["context"]["error"],
             "Falta configurar LEGAL_API_BASE_URL",
         )
+
+    def test_debug_env_payload_sin_url(self) -> None:
+        import main as erp_main
+
+        with patch.dict(os.environ, {"LEGAL_API_BASE_URL": _TEST_BASE}, clear=False):
+            payload = erp_main._legal_api_env_debug_payload()
+        self.assertEqual(
+            set(payload),
+            {
+                "legal_api_base_url_present",
+                "legal_api_base_url_len",
+                "startswith_https",
+            },
+        )
+        self.assertTrue(payload["legal_api_base_url_present"])
+        self.assertEqual(payload["legal_api_base_url_len"], len(_TEST_BASE))
+        self.assertTrue(payload["startswith_https"])
+        dumped = json.dumps(payload)
+        self.assertNotIn("ejemplo.invalid", dumped)
+        self.assertNotIn(_TEST_BASE, dumped)
+        self.assertNotIn("://", dumped)
+
+    def test_debug_env_payload_ausente(self) -> None:
+        import main as erp_main
+
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k != "LEGAL_API_BASE_URL"
+        }
+        with patch.dict(os.environ, env, clear=True):
+            payload = erp_main._legal_api_env_debug_payload()
+        self.assertFalse(payload["legal_api_base_url_present"])
+        self.assertEqual(payload["legal_api_base_url_len"], 0)
+        self.assertFalse(payload["startswith_https"])
+
+    def test_debug_env_solo_admin(self) -> None:
+        import main as erp_main
+
+        req_admin = MagicMock()
+        req_admin.state.perfil_codigo = permisos.PERFIL_ADMIN
+        with patch.dict(os.environ, {"LEGAL_API_BASE_URL": _TEST_BASE}, clear=False):
+            resp = erp_main.debug_legal_api_env(req_admin)
+        self.assertEqual(resp.status_code, 200)
+        body = json.loads(resp.body.decode("utf-8"))
+        self.assertTrue(body["legal_api_base_url_present"])
+        self.assertNotIn("ejemplo.invalid", json.dumps(body))
+
+        req_abogado = MagicMock()
+        req_abogado.state.perfil_codigo = permisos.PERFIL_ABOGADO
+        resp_deny = erp_main.debug_legal_api_env(req_abogado)
+        self.assertEqual(resp_deny.status_code, 403)
 
 
 if __name__ == "__main__":

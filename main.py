@@ -2102,6 +2102,16 @@ def _legal_api_configurada() -> bool:
     return bool((os.environ.get("LEGAL_API_BASE_URL") or "").strip())
 
 
+def _legal_api_env_debug_payload() -> dict[str, Any]:
+    """Metadatos seguros de LEGAL_API_BASE_URL (nunca la URL ni el host)."""
+    stripped = (os.environ.get("LEGAL_API_BASE_URL") or "").strip()
+    return {
+        "legal_api_base_url_present": bool(stripped),
+        "legal_api_base_url_len": len(stripped),
+        "startswith_https": stripped.lower().startswith("https://"),
+    }
+
+
 def _detalle_filas_consulta(detalle) -> list[tuple[str, Any]]:
     """Pares etiqueta/valor para la tabla de detalle en la UI."""
     return [
@@ -2119,6 +2129,14 @@ def _detalle_filas_consulta(detalle) -> list[tuple[str, Any]]:
         ("Última actuación", detalle.fecha_ultima_actuacion),
         ("Contenido radicación", detalle.contenido_radicacion),
     ]
+
+
+@app.get("/herramientas/consulta-proceso/debug-env")
+def debug_legal_api_env(request: Request):
+    """Admin only: present/len/https flag de LEGAL_API_BASE_URL sin filtrar secretos."""
+    if getattr(request.state, "perfil_codigo", None) != permisos.PERFIL_ADMIN:
+        return JSONResponse({"error": "No autorizado"}, status_code=403)
+    return JSONResponse(_legal_api_env_debug_payload())
 
 
 @app.get("/herramientas/consulta-proceso")
