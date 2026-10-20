@@ -24,9 +24,11 @@ def _set_env(**overrides: str) -> None:
     os.environ["LEGAL_API_MAX_ATTEMPTS"] = "3"
     os.environ["LEGAL_API_RETRY_MIN_WAIT_S"] = "0.01"
     os.environ["LEGAL_API_RETRY_MAX_WAIT_S"] = "0.05"
-    # Limpiar headers extra salvo que el test los pase explícitamente.
+    # Limpiar headers extra / UA salvo que el test los pase explícitamente.
     if "LEGAL_API_EXTRA_HEADERS" not in overrides:
         os.environ.pop("LEGAL_API_EXTRA_HEADERS", None)
+    if "LEGAL_API_USER_AGENT" not in overrides:
+        os.environ.pop("LEGAL_API_USER_AGENT", None)
     for key, value in overrides.items():
         os.environ[key] = value
 
@@ -122,8 +124,10 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("*/*", accept)
         self.assertIn("application/json", accept)
         self.assertNotIn("Content-Type", req.headers)
-        self.assertEqual(req.headers.get("Accept-Language"), "es-CO,es;q=0.9")
-        self.assertIn("ERPLegalClient", req.headers.get("User-Agent", ""))
+        self.assertEqual(req.headers.get("Accept-Language"), "es-ES,es;q=0.9")
+        ua = req.headers.get("User-Agent", "")
+        self.assertIn("Mozilla/", ua)
+        self.assertIn("Chrome/", ua)
 
     @respx.mock
     async def test_accept_header_flexible_negotiation(self) -> None:
@@ -148,6 +152,42 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             accept.startswith("application/json") or "application/json" in accept
         )
+
+    @respx.mock
+    async def test_default_user_agent_browser_like(self) -> None:
+        """Default UA estilo navegador (Mozilla/Chrome); override vía LEGAL_API_USER_AGENT."""
+        from external_legal_client import DEFAULT_USER_AGENT, LegalAPIClient
+
+        self.assertIn("Mozilla/", DEFAULT_USER_AGENT)
+        self.assertIn("Chrome/", DEFAULT_USER_AGENT)
+
+        route = respx.get(
+            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={"procesos": [{"idProceso": 42}]},
+            )
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            await client.consultar_id_por_radicado("11001400300120210012300")
+
+        ua = route.calls.last.request.headers.get("User-Agent", "")
+        self.assertIn("Mozilla/", ua)
+        self.assertIn("Chrome/", ua)
+
+        with patch.dict(
+            os.environ,
+            {"LEGAL_API_USER_AGENT": "CustomLegalAgent/2.0"},
+            clear=False,
+        ):
+            route.reset()
+            async with LegalAPIClient(base_url=TEST_BASE) as client:
+                await client.consultar_id_por_radicado("11001400300120210012300")
+            self.assertEqual(
+                route.calls.last.request.headers.get("User-Agent"),
+                "CustomLegalAgent/2.0",
+            )
 
     @respx.mock
     async def test_http_406_incluye_snippet_del_cuerpo(self) -> None:
