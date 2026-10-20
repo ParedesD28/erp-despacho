@@ -297,6 +297,15 @@ class ProcesoDetalleResponse(_IgnoreExtra):
 
 
 class ActuacionResponse(_IgnoreExtra):
+    id_actuacion: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "id_actuacion",
+            "idActuacion",
+            "idRegActuacion",
+            "id",
+        ),
+    )
     fecha_actuacion: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -330,6 +339,13 @@ class ActuacionResponse(_IgnoreExtra):
         default=None,
         validation_alias=AliasChoices("con_documentos", "conDocumentos"),
     )
+
+    @field_validator("id_actuacion", mode="before")
+    @classmethod
+    def _id_actuacion_to_str(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return None
+        return str(value).strip() or None
 
 
 class SujetoResponse(_IgnoreExtra):
