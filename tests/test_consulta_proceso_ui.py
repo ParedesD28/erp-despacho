@@ -18,6 +18,55 @@ ROOT = Path(__file__).resolve().parents[1]
 _TEST_BASE = "https://ejemplo.invalid/api/v1"
 
 
+class TestConsultaProcesoFechasDisplay(unittest.TestCase):
+    def test_fecha_display_quita_hora_iso(self) -> None:
+        import main as erp_main
+
+        self.assertEqual(
+            erp_main._fecha_display_consulta("2026-03-17T00:00:00"),
+            "2026-03-17",
+        )
+        self.assertEqual(
+            erp_main._fecha_display_consulta("2026-03-17T15:30:00"),
+            "2026-03-17",
+        )
+        self.assertEqual(
+            erp_main._fecha_display_consulta("2026-03-17"),
+            "2026-03-17",
+        )
+        self.assertEqual(
+            erp_main._fecha_display_consulta("2026-03-17T00:00:00Z"),
+            "2026-03-17",
+        )
+        # No fecha → intacto
+        self.assertEqual(
+            erp_main._fecha_display_consulta("Sin Tipo de Recurso"),
+            "Sin Tipo de Recurso",
+        )
+        self.assertIsNone(erp_main._fecha_display_consulta(None))
+
+    def test_actuacion_display_dict_formatea_fechas(self) -> None:
+        import main as erp_main
+
+        class FakeAct:
+            def model_dump(self):
+                return {
+                    "fecha_actuacion": "2026-03-17T00:00:00",
+                    "inicio_termino": "2026-04-01T12:00:00",
+                    "fin_termino": None,
+                    "fecha_registro": "2026-03-18T00:00:00.000",
+                    "actuacion": "Auto",
+                    "anotacion": "texto",
+                }
+
+        out = erp_main._actuacion_display_dict(FakeAct())
+        self.assertEqual(out["fecha_actuacion"], "2026-03-17")
+        self.assertEqual(out["inicio_termino"], "2026-04-01")
+        self.assertIsNone(out["fin_termino"])
+        self.assertEqual(out["fecha_registro"], "2026-03-18")
+        self.assertEqual(out["actuacion"], "Auto")
+
+
 class TestConsultaProcesoUi(unittest.TestCase):
     def test_ruta_y_plantilla_existen(self) -> None:
         main_src = (ROOT / "main.py").read_text(encoding="utf-8")

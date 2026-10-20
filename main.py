@@ -2126,6 +2126,36 @@ def _legal_api_env_debug_payload() -> dict[str, Any]:
     }
 
 
+# ISO date or datetime → solo YYYY-MM-DD para UI consulta-proceso.
+_ISO_FECHA_DISPLAY_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})"
+    r"(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$"
+)
+_ACTUACION_FECHA_KEYS = (
+    "fecha_actuacion",
+    "inicio_termino",
+    "fin_termino",
+    "fecha_registro",
+)
+
+
+def _fecha_display_consulta(value: Any) -> Any:
+    """Quita la hora de ISO datetimes para mostrar solo la fecha (YYYY-MM-DD)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if not text:
+        return value
+    match = _ISO_FECHA_DISPLAY_RE.match(text)
+    if match:
+        return match.group(1)
+    return value
+
+
 def _detalle_filas_consulta(detalle) -> list[tuple[str, Any]]:
     """Pares etiqueta/valor para la tabla de detalle en la UI."""
     return [
@@ -2139,10 +2169,22 @@ def _detalle_filas_consulta(detalle) -> list[tuple[str, Any]]:
         ("Subclase", detalle.subclase_proceso),
         ("Recurso", detalle.recurso),
         ("Ubicación", detalle.ubicacion),
-        ("Fecha creación", detalle.fecha_creacion),
-        ("Última actuación", detalle.fecha_ultima_actuacion),
+        ("Fecha creación", _fecha_display_consulta(detalle.fecha_creacion)),
+        (
+            "Última actuación",
+            _fecha_display_consulta(detalle.fecha_ultima_actuacion),
+        ),
         ("Contenido radicación", detalle.contenido_radicacion),
     ]
+
+
+def _actuacion_display_dict(actuacion: Any) -> dict[str, Any]:
+    """model_dump de actuación con fechas solo-día para la plantilla."""
+    data = actuacion.model_dump() if hasattr(actuacion, "model_dump") else dict(actuacion)
+    for key in _ACTUACION_FECHA_KEYS:
+        if key in data:
+            data[key] = _fecha_display_consulta(data.get(key))
+    return data
 
 
 @app.get("/herramientas/consulta-proceso/debug-env")
@@ -2184,7 +2226,7 @@ async def vista_consulta_proceso(request: Request, radicado: str = ""):
         ctx["resultado"] = {
             "id_interno": id_interno,
             "detalle_filas": _detalle_filas_consulta(detalle),
-            "actuaciones": [a.model_dump() for a in actuaciones],
+            "actuaciones": [_actuacion_display_dict(a) for a in actuaciones],
             "sujetos": [s.model_dump() for s in sujetos],
         }
     except HTTPException as exc:
