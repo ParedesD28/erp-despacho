@@ -113,7 +113,7 @@ observability.install_exception_handling(app)
 # MIDDLEWARE DE SEGURIDAD PRODUCTIVA
 # ==============================================================================
 def _is_public_path(path: str) -> bool:
-    if path in ("/login", "/health"):
+    if path in ("/", "/login", "/health", "/landing"):
         return True
     # PDFs sensibles: nunca públicos vía StaticFiles (usar /pdfs/ o /api/bot/pdf/).
     if path.startswith("/static/pdfs/"):
@@ -207,6 +207,13 @@ async def production_security_middleware(request: Request, call_next):
                 getattr(request.state, "perfil_codigo", None)
             )
             return _redirect(home, error="No tienes permiso para esa pantalla")
+    else:
+        # Si es ruta pública pero tiene cookie válida, hidrata permisos para permitir vistas condicionales
+        token = request.cookies.get(SESSION_COOKIE)
+        if token:
+            user_id = verify_session(token)
+            if user_id:
+                _aplicar_contexto_permisos(request, user_id)
 
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -317,10 +324,18 @@ def sumar_dias_habiles(fecha_inicial: date, dias: int) -> date:
 # ==============================================================================
 @app.get("/", include_in_schema=False)
 def root_compat(request: Request):
-    destino = permisos.home_path_para_perfil(
-        getattr(request.state, "perfil_codigo", None)
-    )
-    return RedirectResponse(url=destino, status_code=303)
+    """
+    Ruta raíz: Si el usuario ya cuenta con sesión activa autenticada,
+    lo redirige a su módulo correspondiente del ERP. Si no ha iniciado
+    sesión (público general / visitantes de gestionlegal.co), muestra el portal institucional.
+    """
+    user_id = verify_session(request.cookies.get(SESSION_COOKIE))
+    if user_id:
+        destino = permisos.home_path_para_perfil(
+            getattr(request.state, "perfil_codigo", None)
+        )
+        return RedirectResponse(url=destino, status_code=303)
+    return render_template("landing_gestionlegal.html", {"request": request})
 
 
 @app.get("/health")
@@ -2500,6 +2515,12 @@ async def vista_consulta_proceso(request: Request, radicado: str = ""):
         ctx["error"] = "No fue posible completar la consulta. Intente de nuevo."
 
     return render_template("consulta_proceso.html", ctx)
+
+
+@app.get("/landing")
+def vista_landing_gestionlegal(request: Request):
+    """Página institucional pública de Gestión Legal."""
+    return render_template("landing_gestionlegal.html", {"request": request})
 
 
 @app.get("/phasecob")

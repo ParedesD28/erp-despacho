@@ -80,6 +80,7 @@
  {% if 'nav.admin_usuarios' in perms %}
  <a href="/admin/usuarios" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/admin/usuarios' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="users" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Usuarios</span></a>
  {% endif %}
+ <a href="/landing" target="_blank" rel="noopener noreferrer" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap hover:bg-slate-800 hover:text-white"><i data-lucide="globe" class="w-5 h-5 flex-shrink-0 text-teal-400"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Web Pública</span></a>
  <a href="/logout" class="relative z-30 flex items-center px-3 py-3 mt-8 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-lg transition-colors font-medium border border-transparent hover:border-red-100 whitespace-nowrap"><i data-lucide="log-out" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Cerrar Sesión</span></a>
  </nav>
  </aside>
