@@ -33,6 +33,55 @@ def _set_env(**overrides: str) -> None:
         os.environ[key] = value
 
 
+class OriginRefererHeadersTests(unittest.TestCase):
+    def test_origin_referer_desde_base_con_path(self) -> None:
+        from external_legal_client import _origin_referer_from_base_url
+
+        origin, referer = _origin_referer_from_base_url(
+            "https://api.ejemplo.invalid/api/v1"
+        )
+        self.assertEqual(origin, "https://api.ejemplo.invalid")
+        self.assertEqual(referer, "https://api.ejemplo.invalid/")
+
+    def test_origin_referer_tolera_slash_final(self) -> None:
+        from external_legal_client import _origin_referer_from_base_url
+
+        origin, referer = _origin_referer_from_base_url(
+            "https://api.ejemplo.invalid/api/v1/"
+        )
+        self.assertEqual(origin, "https://api.ejemplo.invalid")
+        self.assertEqual(referer, "https://api.ejemplo.invalid/")
+
+    def test_origin_referer_sin_scheme_o_host(self) -> None:
+        from external_legal_client import _origin_referer_from_base_url
+
+        self.assertEqual(_origin_referer_from_base_url(""), (None, None))
+        self.assertEqual(_origin_referer_from_base_url("/solo/path"), (None, None))
+
+    def test_default_request_headers_ajax(self) -> None:
+        from external_legal_client import (
+            DEFAULT_ACCEPT,
+            DEFAULT_USER_AGENT,
+            _default_request_headers,
+        )
+
+        headers = _default_request_headers(
+            base_url="https://api.ejemplo.invalid/api/v1",
+            user_agent=DEFAULT_USER_AGENT,
+        )
+        self.assertEqual(headers["Accept"], DEFAULT_ACCEPT)
+        self.assertIn("*/*", headers["Accept"])
+        self.assertEqual(headers["User-Agent"], DEFAULT_USER_AGENT)
+        self.assertEqual(headers["X-Requested-With"], "XMLHttpRequest")
+        self.assertEqual(headers["Origin"], "https://api.ejemplo.invalid")
+        self.assertEqual(headers["Referer"], "https://api.ejemplo.invalid/")
+        # Sin hostname gubernamental hardcodeado en helpers.
+        src = Path(__file__).resolve().parents[1] / "external_legal_client.py"
+        text = src.read_text(encoding="utf-8")
+        self.assertNotIn("consultaprocesos", text.lower())
+        self.assertNotIn(".gov.co", text.lower())
+
+
 class ModelosTests(unittest.TestCase):
     def test_detalle_aliases_y_extra_ignore(self):
         from external_legal_client import ProcesoDetalleResponse
@@ -128,6 +177,9 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         ua = req.headers.get("User-Agent", "")
         self.assertIn("Mozilla/", ua)
         self.assertIn("Chrome/", ua)
+        self.assertEqual(req.headers.get("X-Requested-With"), "XMLHttpRequest")
+        self.assertEqual(req.headers.get("Origin"), "https://legal-api.test.local")
+        self.assertEqual(req.headers.get("Referer"), "https://legal-api.test.local/")
 
     @respx.mock
     async def test_accept_header_flexible_negotiation(self) -> None:
@@ -290,6 +342,28 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
                 "11001400300120210012300"
             )
         self.assertEqual(id_interno, 112233)
+
+    @respx.mock
+    async def test_extra_headers_pueden_sobrescribir_origin(self) -> None:
+        from external_legal_client import LegalAPIClient
+
+        _set_env(
+            LEGAL_API_EXTRA_HEADERS='{"Origin":"https://override.ejemplo.invalid"}'
+        )
+        route = respx.get(
+            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={"procesos": [{"idProceso": 7}]},
+            )
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            await client.consultar_id_por_radicado("11001400300120210012300")
+        headers = route.calls.last.request.headers
+        self.assertEqual(headers.get("Origin"), "https://override.ejemplo.invalid")
+        self.assertEqual(headers.get("Referer"), "https://legal-api.test.local/")
+        self.assertEqual(headers.get("X-Requested-With"), "XMLHttpRequest")
 
     @respx.mock
     async def test_extra_headers_desde_env(self) -> None:

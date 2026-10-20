@@ -10,6 +10,7 @@ import logging
 import os
 import re
 from typing import Any, Optional, Sequence, TypeVar
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
@@ -112,6 +113,35 @@ def _base_url_from_env() -> str:
             detail="LEGAL_API_BASE_URL no configurada",
         )
     return base
+
+
+def _origin_referer_from_base_url(base_url: str) -> tuple[Optional[str], Optional[str]]:
+    """Deriva Origin y Referer desde el base URL (sin hardcodear host).
+
+    Origin = scheme + netloc. Referer = Origin + "/".
+    Tolera slash final y paths tipo /api/v1.
+    """
+    parsed = urlparse((base_url or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        return None, None
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return origin, f"{origin}/"
+
+
+def _default_request_headers(*, base_url: str, user_agent: str) -> dict[str, str]:
+    """Headers estilo navegador/AJAX para WAF/LB. Host solo desde base_url."""
+    headers: dict[str, str] = {
+        "Accept": DEFAULT_ACCEPT,
+        "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
+        "User-Agent": user_agent,
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    origin, referer = _origin_referer_from_base_url(base_url)
+    if origin:
+        headers["Origin"] = origin
+    if referer:
+        headers["Referer"] = referer
+    return headers
 
 
 def _extra_headers_from_env() -> dict[str, str]:
@@ -466,11 +496,7 @@ class LegalAPIClient:
             ua = user_agent.strip()
         ua = ua or DEFAULT_USER_AGENT
 
-        headers: dict[str, str] = {
-            "Accept": DEFAULT_ACCEPT,
-            "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
-            "User-Agent": ua,
-        }
+        headers = _default_request_headers(base_url=self._base_url, user_agent=ua)
         # Extra headers (Authorization / api-key) sobrescriben defaults si coincide la clave.
         headers.update(_extra_headers_from_env())
 
