@@ -192,7 +192,9 @@ class TestConsultaProcesoUi(unittest.TestCase):
                 "legal_api_base_url_len",
                 "startswith_https",
                 "base_path",
+                "base_has_explicit_port",
                 "relative_endpoints",
+                "buscar_query_keys",
                 "joined_path_examples",
             },
         )
@@ -200,9 +202,14 @@ class TestConsultaProcesoUi(unittest.TestCase):
         self.assertEqual(payload["legal_api_base_url_len"], len(_TEST_BASE))
         self.assertTrue(payload["startswith_https"])
         self.assertEqual(payload["base_path"], "/api/v1")
+        self.assertFalse(payload["base_has_explicit_port"])
+        self.assertEqual(
+            payload["buscar_query_keys"],
+            ["numero", "SoloActivos", "pagina"],
+        )
         self.assertTrue(
             any(
-                p.startswith("/api/v1/Procesos/")
+                "NumeroRadicacion" in p
                 for p in payload["joined_path_examples"]
             )
         )
