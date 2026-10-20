@@ -42,7 +42,11 @@ DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_RETRY_MIN_WAIT_S = 0.5
 DEFAULT_RETRY_MAX_WAIT_S = 8.0
 DEFAULT_USER_AGENT = "ERPLegalClient/1.0"
+# Negociación flexible: varias APIs legales rechazan Accept estricto application/json (HTTP 406).
+DEFAULT_ACCEPT = "application/json, text/plain, */*"
+DEFAULT_ACCEPT_LANGUAGE = "es-CO,es;q=0.9"
 RETRYABLE_STATUS = frozenset({502, 503, 504})
+_ERROR_BODY_SNIPPET_LIMIT = 240
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -257,6 +261,47 @@ def _http_exception_after_retries(exc: BaseException) -> HTTPException:
     )
 
 
+def _safe_response_snippet(
+    response: httpx.Response,
+    *,
+    limit: int = _ERROR_BODY_SNIPPET_LIMIT,
+) -> str:
+    """Texto corto del cuerpo para depurar 406/errores; sin datos binarios largos."""
+    try:
+        text = (response.text or "").strip()
+    except Exception:  # noqa: BLE001 — body ilegible
+        return ""
+    if not text:
+        return ""
+    # Colapsar whitespace / saltos (HTML o plaintext de gateways).
+    text = " ".join(text.split())
+    if len(text) > limit:
+        return text[: limit - 1] + "…"
+    return text
+
+
+def _detail_for_http_error(response: httpx.Response) -> str:
+    detail = f"API legal externa respondió HTTP {response.status_code}"
+    structured: Optional[str] = None
+    try:
+        body = response.json()
+        if isinstance(body, dict):
+            msg = body.get("message") or body.get("detail") or body.get("error")
+            if msg is not None:
+                structured = str(msg).strip() or None
+                if structured:
+                    detail = f"{detail}: {structured}"
+    except Exception:  # noqa: BLE001 — cuerpo no JSON
+        pass
+
+    # 406 Not Acceptable: incluir snippet del body si no hubo mensaje estructurado.
+    if response.status_code == 406 and not structured:
+        snippet = _safe_response_snippet(response)
+        if snippet:
+            detail = f"{detail}: {snippet}"
+    return detail
+
+
 # ---------------------------------------------------------------------------
 # Cliente
 # ---------------------------------------------------------------------------
@@ -319,11 +364,13 @@ class LegalAPIClient:
         ua = ua or DEFAULT_USER_AGENT
 
         self._owns_client = client is None
+        # Sin Content-Type por defecto: los GET no deben forzar application/json.
         self._client = client or httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(timeout_s, connect=connect_s),
             headers={
-                "Accept": "application/json",
+                "Accept": DEFAULT_ACCEPT,
+                "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
                 "User-Agent": ua,
             },
             follow_redirects=True,
@@ -468,16 +515,10 @@ class LegalAPIClient:
             )
 
         if response.status_code >= 400:
-            detail = f"API legal externa respondió HTTP {response.status_code}"
-            try:
-                body = response.json()
-                if isinstance(body, dict):
-                    msg = body.get("message") or body.get("detail") or body.get("error")
-                    if msg:
-                        detail = f"{detail}: {msg}"
-            except Exception:  # noqa: BLE001 — cuerpo no JSON
-                pass
-            raise HTTPException(status_code=502, detail=detail)
+            raise HTTPException(
+                status_code=502,
+                detail=_detail_for_http_error(response),
+            )
 
         if not response.content:
             return {}

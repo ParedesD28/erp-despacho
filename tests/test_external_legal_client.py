@@ -115,8 +115,55 @@ class LegalAPIClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(id_interno, 987654321)
         self.assertTrue(route.called)
         req = route.calls.last.request
-        self.assertEqual(req.headers.get("Accept"), "application/json")
+        accept = req.headers.get("Accept", "")
+        self.assertIn("*/*", accept)
+        self.assertIn("application/json", accept)
+        self.assertNotIn("Content-Type", req.headers)
+        self.assertEqual(req.headers.get("Accept-Language"), "es-CO,es;q=0.9")
         self.assertIn("ERPLegalClient", req.headers.get("User-Agent", ""))
+
+    @respx.mock
+    async def test_accept_header_flexible_negotiation(self) -> None:
+        """El cliente debe negociar Accept con */* (evita 406 en APIs estrictas)."""
+        from external_legal_client import DEFAULT_ACCEPT, LegalAPIClient
+
+        self.assertIn("*/*", DEFAULT_ACCEPT)
+
+        route = respx.get(
+            url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={"procesos": [{"idProceso": 1}]},
+            )
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            await client.consultar_id_por_radicado("11001400300120210012300")
+
+        accept = route.calls.last.request.headers.get("Accept", "")
+        self.assertIn("*/*", accept)
+        self.assertTrue(
+            accept.startswith("application/json") or "application/json" in accept
+        )
+
+    @respx.mock
+    async def test_http_406_incluye_snippet_del_cuerpo(self) -> None:
+        from external_legal_client import LegalAPIClient
+
+        respx.get(url__startswith=f"{TEST_BASE}/Procesos/Consulta/NumRadicado").mock(
+            return_value=httpx.Response(
+                406,
+                text="Not Acceptable: only text/html supported",
+                headers={"Content-Type": "text/plain"},
+            )
+        )
+        async with LegalAPIClient(base_url=TEST_BASE) as client:
+            with self.assertRaises(HTTPException) as ctx:
+                await client.consultar_id_por_radicado("11001400300120210012300")
+        self.assertEqual(ctx.exception.status_code, 502)
+        detail = str(ctx.exception.detail)
+        self.assertIn("HTTP 406", detail)
+        self.assertIn("Not Acceptable", detail)
 
     @respx.mock
     async def test_consultar_radicado_vacio(self) -> None:
