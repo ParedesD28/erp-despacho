@@ -37,17 +37,22 @@ logger = logging.getLogger(__name__)
 # LEGAL_API_MAX_ATTEMPTS      — intentos totales ante timeout/502/503/504 (default 3)
 # LEGAL_API_RETRY_MIN_WAIT_S  — espera mínima backoff (default 0.5)
 # LEGAL_API_RETRY_MAX_WAIT_S  — espera máxima backoff (default 8)
-# LEGAL_API_USER_AGENT        — User-Agent genérico (default ERPLegalClient/1.0)
+# LEGAL_API_USER_AGENT        — User-Agent (default estilo navegador; override opcional)
 # LEGAL_API_EXTRA_HEADERS     — objeto JSON opcional de headers extra (Authorization, api-key, …)
 
 DEFAULT_TIMEOUT_S = 20.0
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_RETRY_MIN_WAIT_S = 0.5
 DEFAULT_RETRY_MAX_WAIT_S = 8.0
-DEFAULT_USER_AGENT = "ERPLegalClient/1.0"
+# Estilo navegador: algunos WAF bloquean User-Agent genéricos de librería/cliente.
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 # Negociación flexible: varias APIs legales rechazan Accept estricto application/json (HTTP 406).
 DEFAULT_ACCEPT = "application/json, text/plain, */*"
-DEFAULT_ACCEPT_LANGUAGE = "es-CO,es;q=0.9"
+DEFAULT_ACCEPT_LANGUAGE = "es-ES,es;q=0.9"
 RETRYABLE_STATUS = frozenset({502, 503, 504})
 _ERROR_BODY_SNIPPET_LIMIT = 240
 _NON_JSON_SNIPPET_LIMIT = 300
