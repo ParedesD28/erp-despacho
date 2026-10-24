@@ -113,7 +113,7 @@ observability.install_exception_handling(app)
 # MIDDLEWARE DE SEGURIDAD PRODUCTIVA
 # ==============================================================================
 def _is_public_path(path: str) -> bool:
-    if path in ("/", "/login", "/health", "/landing"):
+    if path in ("/", "/login", "/health", "/landing", "/politica-de-datos"):
         return True
     # PDFs sensibles: nunca públicos vía StaticFiles (usar /pdfs/ o /api/bot/pdf/).
     if path.startswith("/static/pdfs/"):
@@ -2521,6 +2521,12 @@ async def vista_consulta_proceso(request: Request, radicado: str = ""):
 def vista_landing_gestionlegal(request: Request):
     """Página institucional pública de Gestión Legal."""
     return render_template("landing_gestionlegal.html", {"request": request})
+
+
+@app.get("/politica-de-datos", include_in_schema=False)
+def vista_politica_datos(request: Request):
+    """Política de tratamiento de datos de la página pública."""
+    return render_template("politica_datos.html", {"request": request})
 
 
 @app.get("/phasecob")

@@ -20,6 +20,7 @@
     "name": "Gestión Legal — Diego Alejandro Paredes García",
     "url": "https://gestionlegal.co",
     "email": "contacto@gestionlegal.co",
+    "telephone": "+573202937064",
     "address": {
       "@type": "PostalAddress",
       "addressLocality": "Pereira",
@@ -257,6 +258,8 @@
       text-underline-offset: 0.28em;
     }
 
+    .wa-float { display: none; }
+
     @media (max-width: 1023px) {
       .menu {
         display: none;
@@ -270,6 +273,23 @@
         border-top: 1px solid var(--line);
       }
       .menu .btn { margin-top: 0.85rem; width: 100%; }
+      body { padding-bottom: 5.25rem; }
+      html { scroll-padding-bottom: 5.25rem; }
+      .wa-float {
+        display: inline-flex;
+        position: fixed;
+        right: 1rem;
+        bottom: 1rem;
+        z-index: 15;
+        min-height: 3rem;
+        padding: 0.7rem 1rem;
+        background: var(--navy);
+        color: #f7f3ea;
+        text-decoration: none;
+        font-weight: 650;
+        border: 1px solid var(--navy);
+      }
+      .form-actions .btn { max-width: calc(100% - 7.75rem); }
     }
 
     @media (min-width: 1024px) {
@@ -309,17 +329,13 @@
     .cookie-strip button:hover { background: var(--navy); color: var(--paper); }
 
     .hero { padding: 2.75rem 0 3.5rem; }
-    .hero-grid {
-      display: grid;
-      gap: 2.5rem;
-      align-items: center;
-    }
     @media (min-width: 900px) {
-      .hero { padding: 4.25rem 0 5rem; }
-      .hero-grid {
-        grid-template-columns: minmax(0, 1.25fr) minmax(16rem, 0.75fr);
-        gap: 4rem;
-      }
+      .hero { padding: 4.5rem 0 5rem; }
+    }
+    .hero-block {
+      max-width: 40rem;
+      padding-left: 1.15rem;
+      border-left: 2px solid var(--navy);
     }
 
     h1 {
@@ -331,12 +347,11 @@
     }
     h1 span { display: block; }
 
-    .role {
-      margin: 0 0 1.15rem;
-      font-family: var(--serif);
-      font-style: italic;
-      font-weight: 500;
-      font-size: 1.45rem;
+    .credential {
+      margin: 0.15rem 0 1.25rem;
+      font-size: 1rem;
+      font-weight: 650;
+      letter-spacing: 0.08em;
       color: var(--navy);
     }
 
@@ -366,42 +381,6 @@
       font-size: 1.05rem;
     }
     .contact-line a { font-weight: 650; }
-
-    .portrait {
-      margin: 0 auto;
-      max-width: 16.5rem;
-    }
-    @media (min-width: 900px) {
-      .portrait { margin: 0 0 0 auto; max-width: 20rem; }
-    }
-    .portrait-placeholder {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      aspect-ratio: 1 / 1;
-      padding: 1.5rem;
-      text-align: center;
-      background: #e8e0d2;
-      color: var(--navy);
-      border: 1px solid var(--navy);
-      box-shadow:
-        inset 0 0 0 1px var(--navy),
-        inset 0 0 0 11px #e8e0d2,
-        inset 0 0 0 12px rgba(28, 51, 72, 0.55);
-      font-family: var(--serif);
-      font-style: italic;
-      font-weight: 500;
-      font-size: clamp(1.5rem, 3vw, 1.85rem);
-      line-height: 1.2;
-    }
-    @media (min-width: 900px) {
-      .portrait-placeholder { aspect-ratio: 4 / 5; }
-    }
-    .portrait figcaption {
-      margin-top: 0.85rem;
-      font-size: 0.98rem;
-      font-weight: 600;
-    }
 
     .section { padding: 4.25rem 0; }
     @media (min-width: 900px) {
@@ -499,33 +478,87 @@
     .ph-list p { margin: 0.15rem 0 0; }
 
     #metodo { border-top: 1px solid var(--line); }
-    .steps {
+    .linea {
       list-style: none;
       margin: 0;
       padding: 0;
+      max-width: 42rem;
+    }
+    .linea li {
       display: grid;
-      gap: 2rem;
+      grid-template-columns: 2.6rem minmax(0, 1fr);
+      gap: 0.35rem 1rem;
+      position: relative;
+      padding-bottom: 1.45rem;
     }
-    @media (min-width: 800px) {
-      .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2.25rem; }
+    .linea li::before {
+      content: "";
+      position: absolute;
+      left: 1.2rem;
+      top: 2.35rem;
+      bottom: 0;
+      width: 1px;
+      background: var(--line-strong);
     }
-    .steps li { margin: 0; }
-    .step-num {
-      display: block;
-      margin-bottom: 0.7rem;
-      font-family: var(--serif);
-      font-size: 2rem;
+    .linea li:last-child::before { content: none; }
+    .linea-n {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 2.4rem;
+      height: 2.4rem;
+      border: 1px solid var(--navy);
+      background: var(--paper);
       color: var(--navy);
-      line-height: 1;
+      font-family: var(--serif);
+      font-size: 1.15rem;
+      position: relative;
+      z-index: 1;
     }
-    .steps h3 { margin: 0 0 0.55rem; font-size: 1.6rem; }
-    .steps p { margin: 0; }
+    .linea h3 { margin: 0.25rem 0 0.35rem; font-size: 1.55rem; }
+    .linea p { margin: 0; }
     .method-note {
-      max-width: 40rem;
-      margin: 2.4rem 0 0;
+      max-width: 42rem;
+      margin: 0.6rem 0 0;
       padding-top: 1.2rem;
       border-top: 1px solid var(--line-strong);
     }
+    .method-note + .method-note { border-top: 0; padding-top: 0; }
+
+    #administradores { background: var(--paper-deep); }
+    .admin-grid { display: grid; gap: 2rem; }
+    @media (min-width: 800px) {
+      .admin-grid {
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+        gap: 3rem;
+        align-items: start;
+      }
+    }
+    .doc-list { margin: 0.4rem 0 1.2rem; padding-left: 1.2rem; }
+    .doc-list li { margin: 0.35rem 0; }
+
+    #calculadora { border-top: 1px solid var(--line); }
+    .calc-grid { display: grid; gap: 2rem; }
+    @media (min-width: 900px) {
+      .calc-grid {
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+        gap: 3rem;
+        align-items: start;
+      }
+    }
+    .help {
+      margin: 0.4rem 0 0;
+      font-size: 0.98rem;
+    }
+    .calc-result {
+      margin: 1rem 0 0;
+      padding: 0.9rem 1rem;
+      background: var(--paper);
+      border: 1px solid var(--line-strong);
+    }
+    .calc-result p { margin: 0 0 0.45rem; }
+    .calc-result p:last-child { margin: 0; }
+    .calc-error { color: #6d2b22; }
 
     #contacto { background: var(--paper-deep); border-top: 1px solid var(--line); }
     .contact-grid {
@@ -654,8 +687,7 @@
     }
   </style>
 </head>
-<!-- WhatsApp del despacho: escriba el número en data-whatsapp, solo dígitos e indicativo 57. Vacío: el botón abre el correo. -->
-<body data-whatsapp="">
+<body data-whatsapp="573202937064">
   <a class="skip" href="#contenido">Saltar al contenido</a>
 
   <header>
@@ -675,7 +707,7 @@
         <a href="#metodo">Cómo trabajo</a>
         <a href="#contacto">Contacto</a>
         <a href="/login">Portal de clientes</a>
-        <a class="btn js-whatsapp" href="mailto:contacto@gestionlegal.co?subject=Consulta%20desde%20gestionlegal.co">Escribir al despacho</a>
+        <a class="btn js-whatsapp" href="https://wa.me/573202937064" target="_blank" rel="noopener noreferrer">WhatsApp</a>
       </nav>
     </div>
   </header>
@@ -689,27 +721,21 @@
 
   <main id="contenido">
     <section class="hero" id="inicio">
-      <div class="wrap hero-grid">
-        <div>
+      <div class="wrap">
+        <div class="hero-block">
           <p class="kicker">Pereira, Risaralda</p>
           <h1>
             <span>Diego Alejandro</span>
             <span>Paredes García</span>
           </h1>
-          <p class="role">Abogado litigante</p>
+          <p class="credential">L.T. No. 44.872</p>
           <p class="lead">Ayudo a cobrar lo que le deben, a ordenar los asuntos de un conjunto y a defender contratos ante los juzgados civiles de Pereira.</p>
           <div class="hero-actions">
-            <a class="btn js-whatsapp" href="mailto:contacto@gestionlegal.co?subject=Consulta%20desde%20gestionlegal.co">Escribir al despacho</a>
-            <a class="text-link" href="#servicios">Ver en qué puedo ayudar</a>
+            <a class="btn js-whatsapp" href="https://wa.me/573202937064" target="_blank" rel="noopener noreferrer">Escribir por WhatsApp</a>
+            <a class="text-link" href="mailto:contacto@gestionlegal.co">contacto@gestionlegal.co</a>
           </div>
-          <p class="contact-line"><a href="mailto:contacto@gestionlegal.co">contacto@gestionlegal.co</a></p>
+          <p class="contact-line">También atiendo por correo y por cita virtual.</p>
         </div>
-
-        <!-- Marcador de posición. Reemplazar por la foto del abogado cuando la entregue. No usar una foto de archivo ni de otra persona. -->
-        <figure class="portrait">
-          <div class="portrait-placeholder">Aquí va la fotografía</div>
-          <figcaption>Espacio reservado para la foto profesional.</figcaption>
-        </figure>
       </div>
     </section>
 
@@ -790,27 +816,114 @@
     <section class="section" id="metodo">
       <div class="wrap">
         <div class="sec-head">
-          <p class="kicker">Manera de trabajar</p>
+          <p class="kicker">Cobro de cartera</p>
           <h2>Cómo trabajo</h2>
+          <p class="sec-intro">El cobro sigue estos pasos. No todos los casos pasan por todos. También atiendo asuntos comerciales y civiles.</p>
         </div>
-        <ol class="steps">
+        <ol class="linea">
           <li>
-            <span class="step-num">01</span>
-            <h3>Me escribe</h3>
-            <p>Cuénteme qué pasó, en qué va el asunto y un teléfono donde pueda responderle.</p>
+            <span class="linea-n">1</span>
+            <div>
+              <h3>Análisis de cartera</h3>
+              <p>Reviso qué se debe, desde cuándo y con qué documentos. Ahí se ve si el cobro tiene camino.</p>
+            </div>
           </li>
           <li>
-            <span class="step-num">02</span>
-            <h3>Reviso el caso</h3>
-            <p>Miro documentos, plazos y si hay camino ante los juzgados de Pereira. Sin pruebas es difícil sostener una pretensión.</p>
+            <span class="linea-n">2</span>
+            <div>
+              <h3>Cobro prejudicial</h3>
+              <p>Antes de demandar, requiero el pago por escrito. Es el cobro directo, con el título y la cuenta a la vista.</p>
+            </div>
           </li>
           <li>
-            <span class="step-num">03</span>
-            <h3>Si seguimos</h3>
-            <p>Firmamos el contrato de servicios y usted otorga el poder. Solo a partir de ahí hay representación.</p>
+            <span class="linea-n">3</span>
+            <div>
+              <h3>Demanda ejecutiva</h3>
+              <p>Si el título lo permite, presento la demanda ejecutiva y pido medidas cautelares, como embargo o secuestro, para proteger el recaudo.</p>
+            </div>
+          </li>
+          <li>
+            <span class="linea-n">4</span>
+            <div>
+              <h3>Proceso de insolvencia</h3>
+              <p>Si el deudor está en insolvencia, presento el crédito y hago seguimiento al trámite. No aseguro que se recupere la deuda.</p>
+            </div>
+          </li>
+          <li>
+            <span class="linea-n">5</span>
+            <div>
+              <h3>Centrales de riesgo</h3>
+              <p>Cuando la ley y los documentos lo permiten, gestiono el reporte ante las centrales de riesgo. No reporto lo que la norma no autoriza.</p>
+            </div>
+          </li>
+          <li>
+            <span class="linea-n">6</span>
+            <div>
+              <h3>Restitución del inmueble</h3>
+              <p>Tramito la restitución cuando hay que recuperar un bien inmueble, por ejemplo un local o un apartamento que no se entrega.</p>
+            </div>
           </li>
         </ol>
-        <p class="method-note">No prometo el resultado del proceso: lo decide el juez.</p>
+        <p class="method-note">También atiendo asuntos comerciales y civiles: contratos que no se cumplen, resolución de negocios, apelaciones y excepciones de mérito ante los juzgados de Pereira.</p>
+        <p class="method-note">El seguimiento de la cartera y los informes periódicos se apoyan en soluciones tecnológicas que desarrollo para el despacho, con apoyo de inteligencia artificial. Sirven para ordenar la información y el reporte. La decisión del caso sigue siendo mía, sobre los documentos. No prometo un resultado.</p>
+      </div>
+    </section>
+
+    <section class="section" id="administradores">
+      <div class="wrap admin-grid">
+        <div>
+          <p class="kicker">Propiedad horizontal</p>
+          <h2>Si administra un conjunto</h2>
+          <p>Para abrir el cobro de cuotas de administración necesito la certificación de deuda y el poder. Con eso empiezo. Durante el trámite entrego informes periódicos del estado de la cartera.</p>
+          <p>No fijo aquí un plazo ni un valor de recaudo. Cada conjunto y cada deuda son distintos.</p>
+        </div>
+        <div>
+          <h3>Qué enviarme</h3>
+          <ol class="doc-list">
+            <li>Certificación de deuda.</li>
+            <li>Poder.</li>
+          </ol>
+          <h3>Qué recibe</h3>
+          <p>Informes periódicos sobre el avance del cobro. El detalle depende de los documentos del conjunto y de lo que vaya ocurriendo en el trámite.</p>
+          <p><a class="text-link" href="#calculadora">Estimar el interés de mora de una cuota</a></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="calculadora">
+      <div class="wrap calc-grid">
+        <div>
+          <p class="kicker">Estimación</p>
+          <h2>Interés de mora de una cuota</h2>
+          <p>Calcula el interés de mora de una cuota de administración entre dos fechas. Usted escribe el interés bancario corriente. La herramienta aplica una y media veces esa tasa.</p>
+          <p>El artículo 30 de la Ley 675 de 2001 dice que el retardo en el pago de expensas causa intereses de mora equivalentes a una y media veces el interés bancario corriente certificado por la Superintendencia Bancaria, hoy Superintendencia Financiera, salvo que la asamblea, con el quórum del reglamento, haya fijado un interés inferior.</p>
+          <p>Este resultado es una estimación de una sola cuota. No es una liquidación ni una certificación de la deuda. Si la asamblea fijó un interés menor, este cálculo no lo usa.</p>
+        </div>
+        <form class="sheet" id="form-mora">
+          <div class="field">
+            <label for="cuota">Valor de la cuota</label>
+            <input id="cuota" name="cuota" type="number" inputmode="decimal" min="1" step="1" required placeholder="Sin puntos de miles">
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label for="vencimiento">Fecha de vencimiento</label>
+              <input id="vencimiento" name="vencimiento" type="date" required>
+            </div>
+            <div class="field">
+              <label for="corte">Fecha de corte</label>
+              <input id="corte" name="corte" type="date" required>
+            </div>
+          </div>
+          <div class="field">
+            <label for="tasa-ibc">Interés bancario corriente, efectivo anual (%)</label>
+            <input id="tasa-ibc" name="tasa" type="text" inputmode="decimal" autocomplete="off" required aria-describedby="ayuda-tasa">
+            <p class="help" id="ayuda-tasa">Consulte la certificación vigente en superfinanciera.gov.co, bajo interés bancario corriente. Escriba el porcentaje efectivo anual tal como aparece, con coma o punto decimal. No escriba la tasa de usura: aquí se toma el interés bancario corriente y se multiplica por una y media.</p>
+          </div>
+          <div class="form-actions">
+            <button class="btn" type="submit">Calcular</button>
+          </div>
+          <div class="calc-result" id="resultado-mora" role="status" hidden></div>
+        </form>
       </div>
     </section>
 
@@ -819,15 +932,21 @@
         <div>
           <p class="kicker">Contacto</p>
           <h2>Cuénteme su caso</h2>
-          <p>Escríbame para coordinar una revisión inicial. La respuesta a este formulario no es un concepto jurídico.</p>
+          <p>Escríbame para coordinar una revisión inicial. Atiendo en Pereira, por WhatsApp, por correo y por cita virtual. La respuesta a este formulario no es un concepto jurídico.</p>
+          <!-- Dirección física: no publicar todavía.
+               Cuando el despacho confirme calle y oficina, agregarlas en este bloque. -->
           <dl class="facts">
+            <div>
+              <dt>WhatsApp</dt>
+              <dd><a href="https://wa.me/573202937064" target="_blank" rel="noopener noreferrer">320 293 7064</a></dd>
+            </div>
             <div>
               <dt>Correo</dt>
               <dd><a href="mailto:contacto@gestionlegal.co">contacto@gestionlegal.co</a></dd>
             </div>
             <div>
-              <dt>Lugar</dt>
-              <dd>Pereira, Risaralda<br>Distrito Judicial de Pereira</dd>
+              <dt>Atención</dt>
+              <dd>Pereira, Risaralda. Distrito Judicial de Pereira. También por cita virtual.</dd>
             </div>
           </dl>
         </div>
@@ -871,7 +990,7 @@
           </div>
           <div class="consent">
             <input id="autorizacion" name="Autorizacion Ley 1581 de 2012" type="checkbox" value="Sí, autorizo el tratamiento de mis datos de contacto" required>
-            <label class="consent-label" for="autorizacion">Autorizo a Diego Alejandro Paredes García (Gestión Legal) a usar mis datos de contacto para responder esta consulta, conforme a la Ley 1581 de 2012. Puedo pedir conocer, actualizar, corregir o suprimir mis datos escribiendo a contacto@gestionlegal.co. No incluya datos de salud, antecedentes penales ni información financiera sensible.</label>
+            <label class="consent-label" for="autorizacion">Autorizo a Diego Alejandro Paredes García (Gestión Legal) a usar mis datos de contacto para responder esta consulta, conforme a la Ley 1581 de 2012. Puedo pedir conocer, actualizar, corregir o suprimir mis datos escribiendo a contacto@gestionlegal.co. La política de tratamiento está en <a href="/politica-de-datos">esta página</a>. No incluya datos de salud, antecedentes penales ni información financiera sensible.</label>
           </div>
           <div class="form-actions">
             <button class="btn" type="submit">Enviar consulta</button>
@@ -894,31 +1013,35 @@
           <ul>
             <li><a href="#servicios">Derecho civil y comercial</a></li>
             <li><a href="#servicios">Cobro de cartera</a></li>
-            <li><a href="#servicios">Propiedad horizontal</a></li>
+            <li><a href="#administradores">Administradores de conjuntos</a></li>
+            <li><a href="#calculadora">Interés de mora de una cuota</a></li>
           </ul>
         </div>
         <div>
           <p class="footer-label">Contacto</p>
           <ul>
+            <li><a href="https://wa.me/573202937064" target="_blank" rel="noopener noreferrer">WhatsApp 320 293 7064</a></li>
             <li><a href="mailto:contacto@gestionlegal.co">contacto@gestionlegal.co</a></li>
-            <li>Pereira, Risaralda</li>
+            <li>Pereira, Risaralda. Cita virtual.</li>
+            <li><a href="/politica-de-datos">Política de datos</a></li>
             <li><a href="/login">Portal de clientes</a></li>
           </ul>
         </div>
       </div>
-      <p class="legal-note">La información de este sitio es general: no es un concepto ni una instrucción para demandar. Escribir por esta página no crea una relación abogado-cliente. Esa relación empieza solo cuando se firma el contrato de servicios y se otorga el poder. La obligación profesional es de medio, no de resultado: no se asegura el sentido de una sentencia ni una indemnización (art. 34 de la Ley 1123 de 2007). Datos personales: Ley 1581 de 2012, contacto@gestionlegal.co.</p>
+      <p class="legal-note">La información de este sitio es general: no es un concepto ni una instrucción para demandar. Escribir por esta página no crea una relación abogado-cliente. Esa relación empieza solo cuando se firma el contrato de servicios y se otorga el poder. La obligación profesional es de medio, no de resultado: no se asegura el sentido de una sentencia ni una indemnización (art. 34 de la Ley 1123 de 2007). Datos personales: <a href="/politica-de-datos">Ley 1581 de 2012</a>, contacto@gestionlegal.co.</p>
       <p class="copy">© 2026 Diego Alejandro Paredes García · gestionlegal.co</p>
     </div>
   </footer>
+
+  <a class="wa-float" href="https://wa.me/573202937064" target="_blank" rel="noopener noreferrer">WhatsApp</a>
 
   <script>
     (function () {
       var numero = (document.body.getAttribute("data-whatsapp") || "").replace(/\D/g, "");
       if (numero.length >= 10 && numero.length <= 15) {
-        var destino = "https://wa.me/" + numero + "?text=" + encodeURIComponent("Buenas. Quisiera consultar un caso con Gestión Legal.");
+        var destino = "https://wa.me/" + numero;
         document.querySelectorAll(".js-whatsapp").forEach(function (enlace) {
           enlace.href = destino;
-          enlace.textContent = "Escribir por WhatsApp";
         });
       }
 
@@ -974,6 +1097,110 @@
           aviso.textContent = "Se abrirá su correo para enviar la consulta a contacto@gestionlegal.co. Si no se abre, escríbale directo a ese correo.";
         }
         window.location.href = enlace;
+      });
+
+      var formMora = document.getElementById("form-mora");
+      if (!formMora) return;
+
+      function parseFecha(valor) {
+        var partes = String(valor || "").split("-");
+        if (partes.length !== 3) return null;
+        var anio = Number(partes[0]);
+        var mes = Number(partes[1]);
+        var dia = Number(partes[2]);
+        var fecha = new Date(Date.UTC(anio, mes - 1, dia));
+        if (fecha.getUTCFullYear() !== anio || fecha.getUTCMonth() !== mes - 1 || fecha.getUTCDate() !== dia) return null;
+        return fecha;
+      }
+
+      function partesCalendario(desde, hasta) {
+        var anios = hasta.getUTCFullYear() - desde.getUTCFullYear();
+        var meses = hasta.getUTCMonth() - desde.getUTCMonth();
+        var dias = hasta.getUTCDate() - desde.getUTCDate();
+        if (dias < 0) {
+          meses -= 1;
+          dias += new Date(Date.UTC(hasta.getUTCFullYear(), hasta.getUTCMonth(), 0)).getUTCDate();
+        }
+        if (meses < 0) {
+          anios -= 1;
+          meses += 12;
+        }
+        return { anios: anios, meses: meses, dias: dias };
+      }
+
+      function fraseTiempo(partes) {
+        var items = [];
+        if (partes.anios) items.push(partes.anios + (partes.anios === 1 ? " año" : " años"));
+        if (partes.meses) items.push(partes.meses + (partes.meses === 1 ? " mes" : " meses"));
+        if (partes.dias) items.push(partes.dias + (partes.dias === 1 ? " día" : " días"));
+        if (!items.length) return "0 días";
+        if (items.length === 1) return items[0];
+        return items.slice(0, -1).join(", ") + " y " + items[items.length - 1];
+      }
+
+      function pesos(valor) {
+        return new Intl.NumberFormat("es-CO", {
+          style: "currency",
+          currency: "COP",
+          maximumFractionDigits: 0
+        }).format(Math.round(valor));
+      }
+
+      function porcentaje(valor) {
+        return new Intl.NumberFormat("es-CO", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        }).format(valor);
+      }
+
+      formMora.addEventListener("submit", function (evento) {
+        evento.preventDefault();
+        var salida = document.getElementById("resultado-mora");
+        var cuota = Number(document.getElementById("cuota").value);
+        var tasa = Number(String(document.getElementById("tasa-ibc").value).replace(",", "."));
+        var desde = parseFecha(document.getElementById("vencimiento").value);
+        var hasta = parseFecha(document.getElementById("corte").value);
+        salida.hidden = false;
+        salida.replaceChildren();
+
+        function linea(texto, esError) {
+          salida.className = esError ? "calc-result calc-error" : "calc-result";
+          var parrafo = document.createElement("p");
+          parrafo.textContent = texto;
+          salida.appendChild(parrafo);
+        }
+
+        if (!cuota || cuota <= 0) {
+          linea("Escriba el valor de la cuota, mayor que cero.", true);
+          return;
+        }
+        if (!desde || !hasta) {
+          linea("Revise las dos fechas.", true);
+          return;
+        }
+        if (!(tasa > 0) || tasa > 100) {
+          linea("Escriba el interés bancario corriente como porcentaje efectivo anual, mayor que cero y no superior a 100.", true);
+          return;
+        }
+
+        var dias = Math.round((hasta.getTime() - desde.getTime()) / 86400000);
+        if (dias < 0) {
+          linea("La fecha de corte es anterior al vencimiento. Así no hay mora en este cálculo.", true);
+          return;
+        }
+        if (dias === 0) {
+          linea("Entre esas dos fechas hay 0 días. El interés estimado es " + pesos(0) + ".", false);
+          return;
+        }
+
+        var mora = (tasa / 100) * 1.5;
+        var interes = cuota * (Math.pow(1 + mora, dias / 365) - 1);
+        var partes = partesCalendario(desde, hasta);
+        salida.className = "calc-result";
+        linea("Días de mora: " + dias + " (" + fraseTiempo(partes) + ").");
+        linea("Tasa de mora usada: " + porcentaje(mora * 100) + " % efectivo anual. Es una y media veces el " + porcentaje(tasa) + " % que usted escribió.");
+        linea("Interés estimado: " + pesos(interes) + ". Cuota más interés: " + pesos(cuota + interes) + ".");
+        linea("Cálculo: cuota × [(1 + tasa de mora) ^ (días / 365) − 1], con año de 365 días. Es una estimación de una sola cuota, no una certificación de la deuda.");
       });
     })();
   </script>

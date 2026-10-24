@@ -60,7 +60,15 @@ class TestLandingPublica(unittest.TestCase):
             "art. 34 de la Ley 1123 de 2007",
             "Circular 002 de la SIC",
             "Teléfono o WhatsApp",
-            "Aquí va la fotografía",
+            "L.T. No. 44.872",
+            "Cobro prejudicial",
+            "Restitución del inmueble",
+            "Certificación de deuda",
+            "artículo 30 de la Ley 675 de 2001",
+            "inteligencia artificial",
+            "https://wa.me/573202937064",
+            'data-whatsapp="573202937064"',
+            'href="/politica-de-datos"',
             'href="/login"',
         ):
             self.assertIn(texto, self.html, texto)
@@ -79,16 +87,21 @@ class TestLandingPublica(unittest.TestCase):
             "testimonio",
             "Testimonio",
             "premio",
-            "wa.me/57",
-            "position: fixed",
-            "position:fixed",
+            "Escribir al despacho",
+            "Aquí va la fotografía",
+            "soluciones integrales",
         )
         for texto in prohibido:
             self.assertNotIn(texto, self.html, texto)
+        self.assertEqual(self.html.count("position: fixed"), 1)
+        self.assertNotIn("position:fixed", self.html)
+        self.assertNotRegex(self.html, r'id="tasa-ibc"[^>]*\svalue=')
 
-    def test_whatsapp_queda_apagado_hasta_tener_numero(self) -> None:
-        self.assertIn('data-whatsapp=""', self.html)
+    def test_whatsapp_usa_el_numero_del_despacho(self) -> None:
+        self.assertIn('data-whatsapp="573202937064"', self.html)
         self.assertIn("mailto:contacto@gestionlegal.co", self.html)
+        self.assertEqual(self.html.count("https://wa.me/573202937064"), 5)
+        self.assertIn('class="wa-float"', self.html)
 
     def test_fuentes_autoalojadas_existen(self) -> None:
         for nombre in (
@@ -114,6 +127,19 @@ class TestLandingPublica(unittest.TestCase):
         for nombre, (frente, fondo) in pares.items():
             relacion = _contraste(frente, fondo)
             self.assertGreaterEqual(relacion, 7, f"{nombre}: {relacion:.2f}")
+
+    def test_politica_de_datos_sin_inventar_direccion(self) -> None:
+        politica = (ROOT / "templates" / "politica_datos.html").read_text(encoding="utf-8")
+        for texto in (
+            "Diego Alejandro Paredes García",
+            "contacto@gestionlegal.co",
+            "Ley 1581 de 2012",
+            "Pereira",
+        ):
+            self.assertIn(texto, politica, texto)
+        self.assertNotIn("T.P.", politica)
+        self.assertNotIn("Calle", politica)
+        self.assertNotIn("[DIRECCION", politica)
 
     def test_copia_estatica_no_sirve_el_diseno_viejo(self) -> None:
         estatica = ESTATICA.read_text(encoding="utf-8")
