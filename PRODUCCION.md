@@ -7,6 +7,7 @@ ERP:
 - `ERP_SESSION_SECRET` — secreto aleatorio largo (mínimo 32 caracteres). Es obligatorio y no se usa como fallback ninguna otra variable.
 - `BOT_API_KEY`, `RECAUDOS_API_KEY`, `BOT_PDF_PUBLIC_SECRET`, `AGENT_SUPERVISION_KEY` — llaves M2M independientes (una por propósito). Ver runbook de llaves separadas.
 - `LIQUIDADOR_API_KEY` — llave compartida HEREDADA; solo durante la transición (el ERP la acepta junto a las nuevas). Retirarla borrándola o con `M2M_LEGACY_KEY_ENABLED=false`.
+- `DRIVE_TOKEN_KEY` — llave propia (>= 32 caracteres) que cifra el refresh token de Drive en la base. Recomendada: permite rotar `ERP_SESSION_SECRET` sin reconectar Drive. Si falta, se usa la derivada de `ERP_SESSION_SECRET` (descifra con ambas y re-cifra con la propia al leer).
 - `PUBLIC_BASE_URL` — URL pública del servicio ERP, por ejemplo `https://gestionjudicial.onrender.com`.
 - `GEMINI_API_KEY` — recomendada; primer proveedor gratis del pool PDF (visión nativa) en `/herramientas/estado-cuenta` cuando no hay texto seleccionable. Key: https://aistudio.google.com/apikey.
 - `GROQ_API_KEY` — opcional gratis; visión por imágenes (PDF→JPEG). https://console.groq.com/

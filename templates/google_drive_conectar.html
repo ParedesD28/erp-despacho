@@ -66,7 +66,7 @@
             <div class="rounded-lg bg-slate-50 border border-slate-100 p-3">
                 <dt class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Refresh token</dt>
                 <dd class="mt-1 font-semibold {% if status.refresh_token_present %}text-emerald-700{% else %}text-slate-600{% endif %}">
-                    {% if status.refresh_token_source == 'db' %}En base (cifrado)
+                    {% if status.refresh_token_source == 'db' %}En base (cifrado{% if status.refresh_token_cipher == 'dedicada' %}, llave propia DRIVE_TOKEN_KEY{% elif status.refresh_token_cipher == 'derivada' %}, aún con la llave derivada de la sesión{% endif %})
                     {% elif status.refresh_token_source == 'env' %}En Render env
                     {% elif status.refresh_token_present %}Presente
                     {% else %}Pendiente (usar Conectar){% endif %}

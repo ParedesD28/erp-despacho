@@ -113,13 +113,20 @@ observability.install_exception_handling(app)
 # ==============================================================================
 # MIDDLEWARE DE SEGURIDAD PRODUCTIVA
 # ==============================================================================
+# Prefijos sin sesión de navegador: TODA ruta registrada bajo ellos debe autenticarse
+# por sí misma (llave M2M o firma HMAC). tests/test_m2m_rutas_publicas.py lo verifica.
+_M2M_PUBLIC_PREFIXES: tuple[str, ...] = ("/api/bot/", "/api/recaudos/bot/")
+
+
 def _is_public_path(path: str) -> bool:
     if path in ("/", "/login", "/health", "/landing"):
         return True
     # PDFs sensibles: nunca públicos vía StaticFiles (usar /pdfs/ o /api/bot/pdf/).
     if path.startswith("/static/pdfs/"):
         return False
-    if path.startswith("/static/") or path.startswith("/api/bot/"):
+    if path.startswith("/static/"):
+        return True
+    if path.startswith(_M2M_PUBLIC_PREFIXES):
         return True
     if path.startswith("/sms/api/"):
         return True

@@ -177,6 +177,8 @@ _ROUTE_RULES: tuple[tuple[str, str], ...] = (
     ("/informes", NAV_INFORMES),
     ("/herramientas", NAV_INFORMES),
     ("/phasecob", NAV_INFORMES),
+    # /api/recaudos/bot/ es M2M público (llave propia) y no pasa por estas reglas.
+    ("/api/recaudos", NAV_INFORMES),
     ("/contactos", NAV_CONTACTOS),
     ("/conjuntos", NAV_CONJUNTOS),
     ("/procesos", NAV_PROCESOS),
