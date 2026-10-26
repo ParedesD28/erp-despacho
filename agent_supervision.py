@@ -98,9 +98,18 @@ def _proxy(method, path, *, json=None, params=None):
         }, 503
 
 
-def _usuario(request: Request):
-    token = request.cookies.get("token_erp")
-    return str(token or "Supervisor ERP")
+def _usuario(request: Request) -> str:
+    """Identidad legible para logs/bot. Nunca la cookie de sesión (`token_erp`)."""
+    nombre = str(getattr(request.state, "user_nombre", None) or "").strip()
+    if nombre:
+        return nombre[:160]
+    email = str(getattr(request.state, "user_email", None) or "").strip()
+    if email:
+        return email[:160]
+    uid = getattr(request.state, "user_id", None)
+    if uid is not None and str(uid).strip():
+        return f"user:{str(uid).strip()}"
+    return "Supervisor ERP"
 
 
 def normalizar_telefono_digits(value: Any) -> str:
@@ -747,7 +756,8 @@ def supervision_control(telefono: str):
 @router.post("/supervision-agente/api/tomar-control")
 async def supervision_tomar_control(request: Request):
     payload = await request.json()
-    payload["usuario"] = payload.get("usuario") or _usuario(request)
+    # Identidad solo desde sesión hidratada (nunca cookie ni body del cliente).
+    payload["usuario"] = _usuario(request)
     data, status = _proxy("POST", "/control/tomar", json=payload)
     return JSONResponse(data, status_code=status)
 
@@ -755,7 +765,7 @@ async def supervision_tomar_control(request: Request):
 @router.post("/supervision-agente/api/devolver-agente")
 async def supervision_devolver_agente(request: Request):
     payload = await request.json()
-    usuario = payload.get("usuario") or _usuario(request)
+    usuario = _usuario(request)
     payload["usuario"] = usuario
     data, status = _proxy("POST", "/control/devolver", json=payload)
     if status < 400:
@@ -775,7 +785,7 @@ async def supervision_devolver_agente(request: Request):
 @router.post("/supervision-agente/api/mensaje")
 async def supervision_mensaje(request: Request):
     payload = await request.json()
-    payload["usuario"] = payload.get("usuario") or _usuario(request)
+    payload["usuario"] = _usuario(request)
     if not payload.get("texto") and payload.get("mensaje"):
         payload["texto"] = payload["mensaje"]
     data, status = _proxy("POST", "/control/mensaje", json=payload)

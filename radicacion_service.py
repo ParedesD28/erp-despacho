@@ -14,6 +14,7 @@ from psycopg2.extras import RealDictCursor
 
 import db
 import catalogos_service
+import etapas_procesales
 import expedientes_service
 import obligaciones_service
 
@@ -40,27 +41,14 @@ def _crear_actuacion_inicial(cur, radicado_interno: str) -> None:
     if not expedientes_service._table_exists(cur, "actuaciones"):
         return
 
-    act_cols = expedientes_service._cols(cur, "actuaciones")
-    payload = {
-        "radicado_interno": radicado_interno,
-        "fecha": date.today(),
-        "etapa": "Inicio",
-        "descripcion": "Presentación inicial de la demanda",
-        "usuario": "Sistema",
-        "tipificacion_sugerida": "Radicación",
-    }
-    use = [c for c in payload if c in act_cols]
-    if not use:
-        raise RuntimeError(
-            "La tabla actuaciones no contiene columnas compatibles para la actuación inicial"
-        )
-
-    cur.execute(
-        f"""
-        INSERT INTO actuaciones ({', '.join(use)})
-        VALUES ({', '.join(['%s'] * len(use))})
-        """,
-        [payload[c] for c in use],
+    expedientes_service.registrar_actuacion(
+        cur,
+        radicado_interno,
+        fecha=date.today(),
+        etapa=etapas_procesales.ETAPAS_PROCESALES[0],
+        descripcion="Presentación inicial de la demanda",
+        usuario="Sistema",
+        tipificacion="Radicación",
     )
 
 
@@ -395,7 +383,7 @@ def radicar_proceso(
                     "tipo_proceso_id": tipo_proceso["id"],
                     "naturaleza": naturaleza,
                     "etapa_actual": (
-                        "1. Presentación de la demanda"
+                        etapas_procesales.ETAPAS_PROCESALES[0]
                         if tipo_cartera == "JURIDICO"
                         else None
                     ),
