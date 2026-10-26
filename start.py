@@ -18,7 +18,9 @@ load_dotenv()
 import agenda_service
 import db
 import main
+import migrate
 import security
+import session_store
 import schema_preflight
 import sms_cartera_runtime
 import sms_saldo_service
@@ -64,6 +66,10 @@ def _ejecutar_mantenimiento_segundo_plano() -> None:
         )
     except Exception as exc:
         log_msg("⚠️ [PERFILES]", f"Aviso al asegurar perfiles: {exc!r}")
+    try:
+        session_store.ensure_schema()
+    except Exception as exc:
+        log_msg("⚠️ [SESIONES]", f"Aviso al asegurar sesiones_revocadas: {exc!r}")
     log_msg("✅ [BACKGROUND]", "Mantenimiento no estructural completado")
 
 
@@ -73,6 +79,15 @@ if __name__ == "__main__":
     # El pool de PostgreSQL sigue siendo perezoso; esta llamada solo instala
     # la capa de acceso, no fuerza una conexión contra Neon.
     db.install_psycopg2_pool()
+
+    # Bloquea el despliegue (Render conserva la versión anterior) si hay
+    # migraciones pendientes o rotas. Ver MIGRATIONS_MODE en migrate.py.
+    log_msg("🧱 [MIGRACIONES]", "Verificando migraciones antes del tráfico...")
+    try:
+        migrate.ensure_up_to_date(log=lambda m: log_msg("🧱 [MIGRACIONES]", m))
+    except migrate.MigrationError as exc:
+        log_msg("❌ [MIGRACIONES]", f"Arranque abortado: {exc}")
+        raise SystemExit(1)
 
     log_msg("🔧 [SCHEMA PREFLIGHT]", "Verificando contrato estructural antes del tráfico...")
     schema_preflight.verify()

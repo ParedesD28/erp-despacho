@@ -17,6 +17,7 @@ from typing import Any, Optional
 from psycopg2.extras import RealDictCursor
 
 import db
+from dbrows import first_value, names_set, rows_as_dicts
 from observability import _json_log, log_msg
 
 # Pausa mínima entre llamadas HTTP a la API legal (por radicado y entre radicados).
@@ -108,7 +109,7 @@ def listar_expedientes_activos_con_radicado(cur) -> list[dict]:
         ORDER BY p.radicado_interno
         """
     )
-    rows = [dict(r) for r in cur.fetchall()]
+    rows = rows_as_dicts(cur)
     return [r for r in rows if es_radicado_rama_valido(r.get("radicado_rama"))]
 
 
@@ -134,7 +135,7 @@ def _cols(cur, table: str) -> set[str]:
         """,
         (table,),
     )
-    return {str(r[0]).lower() for r in cur.fetchall()}
+    return names_set(cur.fetchall(), "column_name")
 
 
 def _actuacion_ya_existe(cur, radicado_interno: str, *, id_actuacion: Optional[str], content_hash: str) -> bool:
@@ -206,7 +207,7 @@ def _insertar_actuacion(cur, row: dict) -> Optional[int]:
     got = cur.fetchone()
     if not got:
         return None
-    return int(got["id"] if isinstance(got, dict) else got[0])
+    return int(first_value(got, "id"))
 
 
 def _actualizar_drive_actuacion(
@@ -618,7 +619,7 @@ def contar_alertas_no_leidas(cur) -> int:
     row = cur.fetchone()
     if not row:
         return 0
-    return int(row["total"] if isinstance(row, dict) else row[0])
+    return int(first_value(row, "total"))
 
 
 def listar_alertas_recientes(cur, *, limit: int = 50, solo_no_leidas: bool = False) -> list[dict]:
@@ -659,7 +660,7 @@ def listar_alertas_recientes(cur, *, limit: int = 50, solo_no_leidas: bool = Fal
         """,
         (limit,),
     )
-    return [dict(r) for r in cur.fetchall()]
+    return rows_as_dicts(cur)
 
 
 def marcar_alerta_leida(cur, alerta_id: int) -> bool:

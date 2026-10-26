@@ -5,18 +5,43 @@ import base64
 import hashlib
 import hmac
 import os
+import secrets
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 import bcrypt
 
 
 SESSION_COOKIE = "token_erp"
-SESSION_TTL = int(os.getenv("ERP_SESSION_TTL", "28800"))
+SESSION_VERSION = "v2"
+SESSION_TTL_MIN = 300
+SESSION_TTL_MAX = 86400
+CLOCK_SKEW = 60
+
+
+def _ttl_desde_env() -> int:
+    try:
+        valor = int(os.getenv("ERP_SESSION_TTL", "28800"))
+    except (TypeError, ValueError):
+        valor = 28800
+    return max(SESSION_TTL_MIN, min(valor, SESSION_TTL_MAX))
+
+
+# Vigencia absoluta de la sesión (acotada entre 5 min y 24 h; por defecto 8 h).
+SESSION_TTL = _ttl_desde_env()
 SESSION_SECRET = (os.getenv("ERP_SESSION_SECRET") or "").strip()
 
 if len(SESSION_SECRET) < 32:
     raise RuntimeError("ERP_SESSION_SECRET debe estar configurado y tener al menos 32 caracteres")
+
+
+@dataclass(frozen=True)
+class SessionData:
+    user_id: str
+    issued_at: int
+    expires_at: int
+    sid: str
 
 
 def _b64(data: bytes) -> str:
@@ -27,54 +52,84 @@ def _b64decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def sign_session(user_id: str, expires_at: Optional[int] = None) -> str:
-    expiry = int(expires_at or (time.time() + SESSION_TTL))
-    payload = f"{str(user_id)}.{expiry}".encode("utf-8")
-    signature = hmac.new(SESSION_SECRET.encode("utf-8"), payload, hashlib.sha256).digest()
-    return f"v1.{_b64(payload)}.{_b64(signature)}"
+def _firmar(payload: bytes) -> bytes:
+    return hmac.new(SESSION_SECRET.encode("utf-8"), payload, hashlib.sha256).digest()
 
 
-def verify_session(token: Optional[str]) -> Optional[str]:
-    if not token:
+def new_session_id() -> str:
+    return secrets.token_hex(16)
+
+
+def sign_session(
+    user_id: str,
+    expires_at: Optional[int] = None,
+    *,
+    sid: Optional[str] = None,
+    issued_at: Optional[int] = None,
+) -> str:
+    """Token v2: payload `uid.iat.exp.sid` firmado con HMAC-SHA256.
+
+    Cada llamada sin `sid` genera un identificador de sesión nuevo (anti-fixation).
+    El token solo depende de ERP_SESSION_SECRET: rotarlo invalida todas las
+    sesiones y cada usuario solo debe iniciar sesión una vez más.
+    """
+    ahora = int(issued_at if issued_at is not None else time.time())
+    expiry = int(expires_at or (ahora + SESSION_TTL))
+    session_id = sid or new_session_id()
+    payload = f"{str(user_id)}.{ahora}.{expiry}.{session_id}".encode("utf-8")
+    return f"{SESSION_VERSION}.{_b64(payload)}.{_b64(_firmar(payload))}"
+
+
+def parse_session(token: Optional[str]) -> Optional[SessionData]:
+    """Valida versión, firma (tiempo constante), expiración y vigencia máxima."""
+    if not token or not isinstance(token, str) or len(token) > 512:
         return None
     try:
         version, payload_b64, signature_b64 = token.split(".", 2)
-        if version != "v1":
+        if not hmac.compare_digest(version.encode("ascii"), SESSION_VERSION.encode("ascii")):
             return None
         payload = _b64decode(payload_b64)
         supplied = _b64decode(signature_b64)
-        expected = hmac.new(SESSION_SECRET.encode("utf-8"), payload, hashlib.sha256).digest()
-        if not hmac.compare_digest(expected, supplied):
+        if not hmac.compare_digest(_firmar(payload), supplied):
             return None
-        user_id, expiry_text = payload.decode("utf-8").split(".", 1)
-        expiry = int(expiry_text)
-        if not user_id or expiry <= int(time.time()):
+        user_id, iat_text, exp_text, sid = payload.decode("utf-8").rsplit(".", 3)
+        issued_at = int(iat_text)
+        expires_at = int(exp_text)
+        ahora = int(time.time())
+        if not user_id or not sid or len(sid) != 32:
             return None
-        return user_id
-    except (ValueError, TypeError, UnicodeDecodeError):
+        if expires_at <= ahora or issued_at > ahora + CLOCK_SKEW:
+            return None
+        if expires_at - issued_at > SESSION_TTL_MAX:
+            return None
+        return SessionData(user_id=user_id, issued_at=issued_at, expires_at=expires_at, sid=sid)
+    except (ValueError, TypeError, UnicodeError):
         return None
 
 
-def set_session_cookie(response, user_id: str) -> None:
-    response.set_cookie(
-        key=SESSION_COOKIE,
-        value=sign_session(str(user_id)),
-        max_age=SESSION_TTL,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        path="/",
-    )
+def verify_session(token: Optional[str]) -> Optional[str]:
+    data = parse_session(token)
+    return data.user_id if data else None
+
+
+def session_id_from_token(token: Optional[str]) -> Optional[str]:
+    data = parse_session(token)
+    return data.sid if data else None
+
+
+def _cookie_kwargs() -> dict:
+    return {"path": "/", "secure": True, "httponly": True, "samesite": "lax"}
+
+
+def set_session_cookie(response, user_id: str) -> str:
+    """Emite una sesión nueva (sid fresco) y devuelve su token."""
+    token = sign_session(str(user_id))
+    response.set_cookie(key=SESSION_COOKIE, value=token, max_age=SESSION_TTL, **_cookie_kwargs())
+    return token
 
 
 def clear_session_cookie(response) -> None:
-    response.delete_cookie(
-        SESSION_COOKIE,
-        path="/",
-        secure=True,
-        httponly=True,
-        samesite="lax",
-    )
+    response.delete_cookie(SESSION_COOKIE, **_cookie_kwargs())
 
 
 def is_bcrypt_hash(value) -> bool:

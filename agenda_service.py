@@ -18,6 +18,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 import db
+from dbrows import names_set
 import main
 from vencimientos_estado import ESTADO_COMPLETADO, ESTADO_PENDIENTE, sql_abierto
 
@@ -94,7 +95,7 @@ def ensure_schema() -> None:
                     """,
                     (table,),
                 )
-                actual = {str(row[0]) for row in cur.fetchall()}
+                actual = names_set(cur.fetchall(), "column_name", lower=False)
                 if not actual:
                     raise RuntimeError(f"[AGENDA PREFLIGHT] Falta tabla: {table}")
                 missing = sorted(expected - actual)

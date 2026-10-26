@@ -23,6 +23,7 @@ import api_recaudos
 import bot_api
 import main as main_mod
 import permisos
+import rate_limit
 
 OLD = "old-shared-key-AAAAAAAAAAAAAAAAAAAA"
 NEW_REC = "new-recaudos-key-CCCCCCCCCCCCCCCCC"
@@ -104,8 +105,9 @@ class AuditoriaRutasPublicasTests(unittest.TestCase):
             )
 
     def test_prefijos_publicos_solo_los_esperados(self):
+        api_publicos = tuple(p for p in permisos.PUBLIC_PREFIXES if p.startswith("/api/"))
         self.assertEqual(
-            main_mod._M2M_PUBLIC_PREFIXES, ("/api/bot/", "/api/recaudos/bot/")
+            api_publicos, ("/api/bot/", "/api/recaudos/bot/", "/api/v1/cron/")
         )
 
     def test_rutas_recaudos_no_bot_siguen_con_sesion(self):
@@ -141,10 +143,19 @@ class AuditoriaRutasPublicasTests(unittest.TestCase):
         )
 
 
-class AbonoBotHttpTests(unittest.TestCase):
+class _LimitadorLimpio(unittest.TestCase):
+    """El limitador de main es global al proceso: se reinicia entre pruebas."""
+
+    def setUp(self):
+        rate_limit.limiter.reset()
+        self.addCleanup(rate_limit.limiter.reset)
+
+
+class AbonoBotHttpTests(_LimitadorLimpio):
     URL = "/api/recaudos/bot/abono"
 
     def setUp(self):
+        super().setUp()
         self.client = TestClient(main_mod.app)
 
     def _post(self, key=None, cookies=None):
@@ -219,8 +230,9 @@ class AbonoBotHttpTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 403)
 
 
-class RutasBotHttpTests(unittest.TestCase):
+class RutasBotHttpTests(_LimitadorLimpio):
     def setUp(self):
+        super().setUp()
         self.client = TestClient(main_mod.app)
 
     def test_endpoints_bot_exigen_llave_antes_de_validar_cuerpo(self):
@@ -244,6 +256,72 @@ class RutasBotHttpTests(unittest.TestCase):
                     "/api/bot/liquidar", json={}, headers={"X-API-Key": key}
                 )
                 self.assertEqual(resp.status_code, 422)
+
+
+class M2MSinCookieNiOriginTests(_LimitadorLimpio):
+    """El bot no envía cookie ni Origin: autentica solo por llave y no cae en CSRF/login."""
+
+    CASOS = (
+        ("/api/bot/liquidar", "BOT_API_KEY", NEW_BOT),
+        ("/api/recaudos/bot/abono", "RECAUDOS_API_KEY", NEW_REC),
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.client = TestClient(main_mod.app)
+
+    def test_llave_valida_sin_cookie_ni_origin(self):
+        for path, var, valor in self.CASOS:
+            with _env(**{var: valor}):
+                self.assertFalse(self.client.cookies)
+                resp = self.client.post(path, json={}, headers={"X-API-Key": valor})
+                self.assertEqual(resp.status_code, 422, path)
+                self.assertNotIn("origen no permitido", resp.text)
+
+    def test_sin_llave_401_sin_redirect_a_login(self):
+        for path, var, valor in self.CASOS:
+            with _env(**{var: valor}):
+                resp = self.client.post(path, json={}, follow_redirects=False)
+                self.assertEqual(resp.status_code, 401, path)
+                self.assertNotIn("location", resp.headers)
+
+    def test_llave_legacy_sin_cookie_ni_origin(self):
+        for path, var, valor in self.CASOS:
+            with _env(LIQUIDADOR_API_KEY=OLD, **{var: valor}):
+                resp = self.client.post(path, json={}, headers={"X-API-Key": OLD})
+                self.assertEqual(resp.status_code, 422, path)
+
+
+class LimiteDeIntentosM2MTests(_LimitadorLimpio):
+    def setUp(self):
+        super().setUp()
+        self.client = TestClient(main_mod.app)
+
+    def test_fallos_repetidos_bloquean_con_429(self):
+        for path, var, valor in M2MSinCookieNiOriginTests.CASOS:
+            rate_limit.limiter.reset()
+            with _env(**{var: valor}):
+                codigos = [
+                    self.client.post(path, json={}, headers={"X-API-Key": "mala"}).status_code
+                    for _ in range(rate_limit.API_FAIL_LIMIT + 2)
+                ]
+                self.assertEqual(codigos[0], 401)
+                self.assertIn(429, codigos, path)
+                bloqueada = self.client.post(path, json={}, headers={"X-API-Key": valor})
+                self.assertEqual(bloqueada.status_code, 429)
+                self.assertIn("retry-after", bloqueada.headers)
+
+    def test_llave_valida_no_cuenta_como_fallo(self):
+        for path, var, valor in M2MSinCookieNiOriginTests.CASOS:
+            rate_limit.limiter.reset()
+            with _env(**{var: valor}):
+                for _ in range(rate_limit.API_FAIL_LIMIT + 5):
+                    resp = self.client.post(path, json={}, headers={"X-API-Key": valor})
+                    self.assertEqual(resp.status_code, 422, path)
+
+    def test_prefijos_m2m_estan_bajo_el_limite_estricto(self):
+        for path in ("/api/bot/liquidar", "/api/recaudos/bot/abono"):
+            self.assertTrue(path.startswith(rate_limit.API_KEY_PREFIXES), path)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,10 @@ PERFIL_AUXILIAR = "AUXILIAR_COBRO"
 PERFIL_CONSULTA = "CONSULTA"
 PERFIL_CLIENTE_PH = "CLIENTE_PH"
 
+# Perfil interno (nunca asignable ni guardado en BD): usuario sin perfil válido.
+# Sin permisos: la sesión se rechaza (fail-closed).
+PERFIL_SIN_ACCESO = "SIN_ACCESO"
+
 PERFILES_HUMANOS = (
     PERFIL_ADMIN,
     PERFIL_ABOGADO,
@@ -28,6 +32,7 @@ PERFIL_NOMBRES = {
     PERFIL_AUXILIAR: "Auxiliar de cobro",
     PERFIL_CONSULTA: "Solo consulta",
     PERFIL_CLIENTE_PH: "Cliente PH",
+    PERFIL_SIN_ACCESO: "Sin perfil (bloqueado)",
 }
 
 PERFIL_DESCRIPCIONES = {
@@ -127,16 +132,23 @@ PERMISOS_POR_PERFIL: dict[str, frozenset[str]] = {
 }
 
 
+def perfil_valido(codigo: Optional[str]) -> bool:
+    return str(codigo or "").strip().upper() in PERMISOS_POR_PERFIL
+
+
 def normalizar_perfil(codigo: Optional[str]) -> str:
-    """Devuelve un código de perfil válido; por defecto ADMIN (rollout seguro)."""
+    """Devuelve un código de perfil válido o PERFIL_SIN_ACCESO (fail-closed).
+
+    Un perfil ausente o desconocido NUNCA se eleva a ADMIN.
+    """
     valor = str(codigo or "").strip().upper()
     if valor in PERMISOS_POR_PERFIL:
         return valor
-    return PERFIL_ADMIN
+    return PERFIL_SIN_ACCESO
 
 
 def permisos_de_perfil(codigo: Optional[str]) -> frozenset[str]:
-    return PERMISOS_POR_PERFIL[normalizar_perfil(codigo)]
+    return PERMISOS_POR_PERFIL.get(normalizar_perfil(codigo), frozenset())
 
 
 def tiene_permiso(permisos: Optional[Iterable[str]], permiso: str) -> bool:
@@ -161,8 +173,39 @@ def puede_ver_cobro(permisos: Optional[Iterable[str]]) -> bool:
     )
 
 
-# Prefijos sensibles → permiso requerido (primer match gana).
-# Rutas públicas (/api/bot/, /sms/api/, /login, /static/) se excluyen antes.
+# Rutas públicas (sin sesión). Cada una se protege con su propio mecanismo:
+# login/landing/health son abiertas; /static no sirve PDFs sensibles;
+# /api/bot/ y /api/recaudos/bot/ usan llave M2M (m2m_keys); /sms/api/ usa token;
+# /api/v1/cron/ usa X-Cron-Secret. tests/test_m2m_rutas_publicas.py audita que toda
+# ruta registrada bajo estos prefijos se autentique por sí misma.
+PUBLIC_EXACT_PATHS: frozenset[str] = frozenset({"/", "/login", "/health", "/landing"})
+PUBLIC_PREFIXES: tuple[str, ...] = (
+    "/static/",
+    "/api/bot/",
+    "/api/recaudos/bot/",
+    "/sms/api/",
+    "/api/v1/cron/",
+)
+PUBLIC_EXCLUDED_PREFIXES: tuple[str, ...] = ("/static/pdfs/",)
+
+# Autenticadas pero válidas para cualquier perfil activo (cerrar sesión).
+AUTHENTICATED_ANY_PATHS: frozenset[str] = frozenset({"/logout"})
+
+# Sentinela: ruta sin clasificar => ningún perfil la posee (default-deny).
+PERMISO_DENEGADO = "__ruta_sin_clasificar__"
+
+
+def es_ruta_publica(path: str) -> bool:
+    ruta = path or "/"
+    if ruta in PUBLIC_EXACT_PATHS:
+        return True
+    if any(ruta.startswith(p) for p in PUBLIC_EXCLUDED_PREFIXES):
+        return False
+    return any(ruta.startswith(p) for p in PUBLIC_PREFIXES)
+
+
+# Prefijos autenticados → permiso requerido (primer match gana).
+# Toda ruta que no sea pública y no coincida con un prefijo se DENIEGA.
 _ROUTE_RULES: tuple[tuple[str, str], ...] = (
     ("/admin/usuarios", NAV_ADMIN_USUARIOS),
     ("/portal-ph", NAV_PORTAL_PH),
@@ -174,16 +217,40 @@ _ROUTE_RULES: tuple[tuple[str, str], ...] = (
     ("/vencimientos", NAV_COBRO_VENCIMIENTOS),
     ("/expedientes", NAV_EXPEDIENTES),
     ("/expediente", NAV_EXPEDIENTES),
+    ("/expediente-docs", NAV_EXPEDIENTES),
+    ("/actuacion", NAV_EXPEDIENTES),
+    ("/crear_expediente_completo", NAV_EXPEDIENTES),
+    ("/crear_proceso_cascada", NAV_EXPEDIENTES),
+    ("/alertas-seguimiento", NAV_EXPEDIENTES),
+    ("/pdfs", NAV_EXPEDIENTES),
     ("/informes", NAV_INFORMES),
     ("/herramientas", NAV_INFORMES),
     ("/phasecob", NAV_INFORMES),
     # /api/recaudos/bot/ es M2M público (llave propia) y no pasa por estas reglas.
+    ("/liquidador", NAV_INFORMES),
+    ("/descargar-excel", NAV_INFORMES),
     ("/api/recaudos", NAV_INFORMES),
     ("/contactos", NAV_CONTACTOS),
     ("/conjuntos", NAV_CONJUNTOS),
     ("/procesos", NAV_PROCESOS),
     ("/dashboard", NAV_DASHBOARD),
+    ("/__interno", NAV_ADMIN_USUARIOS),
+    # Documentación interactiva de la API: solo administradores.
+    ("/docs", NAV_ADMIN_USUARIOS),
+    ("/redoc", NAV_ADMIN_USUARIOS),
+    ("/openapi.json", NAV_ADMIN_USUARIOS),
 )
+
+
+def _coincide_prefijo(ruta: str, prefix: str) -> bool:
+    return ruta == prefix or ruta.startswith(prefix + "/")
+
+
+def _regla_para_ruta(ruta: str) -> Optional[tuple[str, str]]:
+    for prefix, perm in _ROUTE_RULES:
+        if _coincide_prefijo(ruta, prefix):
+            return prefix, perm
+    return None
 
 
 def home_path_para_perfil(codigo: Optional[str]) -> str:
@@ -205,30 +272,33 @@ _WRITE_RULES: tuple[tuple[str, str, str], ...] = (
 
 
 def permiso_requerido_para_ruta(method: str, path: str) -> Optional[str]:
-    """Devuelve el permiso necesario o None si la ruta no está restringida por perfil."""
+    """Permiso necesario para la ruta.
+
+    - None: ruta pública o permitida a cualquier sesión válida (/logout).
+    - PERMISO_DENEGADO: ruta sin clasificar (default-deny; nadie la posee).
+    - Cualquier otro valor: permiso que el perfil debe tener.
+    """
     metodo = (method or "GET").upper()
     ruta = path or "/"
 
+    if es_ruta_publica(ruta) or ruta in AUTHENTICATED_ANY_PATHS:
+        return None
+
     for m, prefix, perm in _WRITE_RULES:
-        if metodo == m and (ruta == prefix or ruta.startswith(prefix + "/")):
+        if metodo == m and _coincide_prefijo(ruta, prefix):
             return perm
 
-    # Consulta: bloquear mutaciones genéricas salvo logout/login.
+    regla = _regla_para_ruta(ruta)
+    if regla is None:
+        return PERMISO_DENEGADO
+    _, perm = regla
+
+    # Las mutaciones exigen al menos ACCION_EDITAR salvo permisos más fuertes ya propios.
     if metodo in ("POST", "PUT", "PATCH", "DELETE"):
-        if ruta in ("/login", "/logout"):
-            return None
-        # Las mutaciones exigen al menos ACCION_EDITAR; reglas más fuertes ya cubiertas.
-        for prefix, perm in _ROUTE_RULES:
-            if ruta == prefix or ruta.startswith(prefix + "/"):
-                if perm in (NAV_COBRO_SMS, NAV_COBRO_CARTAS, NAV_COBRO_SUPERVISION, NAV_ADMIN_USUARIOS):
-                    return perm
-                return ACCION_EDITAR
-        return ACCION_EDITAR
-
-    for prefix, perm in _ROUTE_RULES:
-        if ruta == prefix or ruta.startswith(prefix + "/"):
+        if perm in (NAV_COBRO_SMS, NAV_COBRO_CARTAS, NAV_COBRO_SUPERVISION, NAV_ADMIN_USUARIOS):
             return perm
-    return None
+        return ACCION_EDITAR
+    return perm
 
 
 def denegar_acceso(permisos: Optional[Iterable[str]], method: str, path: str) -> bool:
@@ -236,4 +306,6 @@ def denegar_acceso(permisos: Optional[Iterable[str]], method: str, path: str) ->
     requerido = permiso_requerido_para_ruta(method, path)
     if requerido is None:
         return False
+    if requerido == PERMISO_DENEGADO:
+        return True
     return not tiene_permiso(permisos, requerido)
