@@ -275,6 +275,52 @@ class ConversacionesEnrichmentTests(unittest.TestCase):
         self.assertEqual(out["conversaciones"][0]["nombre"], "María López")
 
 
+class UsuarioSesionSeguroTests(unittest.TestCase):
+    """C1: _usuario no debe devolver ni filtrar la cookie token_erp."""
+
+    def _request(self, *, cookie=None, nombre="", email="", user_id=None):
+        req = MagicMock()
+        req.cookies = {}
+        if cookie is not None:
+            req.cookies["token_erp"] = cookie
+        req.state = MagicMock()
+        req.state.user_nombre = nombre
+        req.state.user_email = email
+        req.state.user_id = user_id
+        return req
+
+    def test_usa_nombre_no_cookie(self):
+        import agent_supervision as sup
+
+        leaked = "v1.YWJj.ZGVm-signature-should-never-leak"
+        req = self._request(cookie=leaked, nombre="Ana Pérez", user_id="42")
+        out = sup._usuario(req)
+        self.assertEqual(out, "Ana Pérez")
+        self.assertNotIn("v1.", out)
+        self.assertNotEqual(out, leaked)
+
+    def test_fallback_email_luego_user_id(self):
+        import agent_supervision as sup
+
+        req = self._request(cookie="v1.x.y", email="ana@despacho.co", user_id="9")
+        self.assertEqual(sup._usuario(req), "ana@despacho.co")
+        req2 = self._request(cookie="v1.x.y", user_id="9")
+        self.assertEqual(sup._usuario(req2), "user:9")
+
+    def test_sin_estado_no_usa_cookie(self):
+        import agent_supervision as sup
+
+        req = self._request(cookie="v1.payload.sig")
+        self.assertEqual(sup._usuario(req), "Supervisor ERP")
+
+    def test_codigo_no_lee_token_erp_cookie(self):
+        src = (ROOT / "agent_supervision.py").read_text(encoding="utf-8")
+        # No debe haber lectura de la cookie de sesión para identidad.
+        self.assertNotIn('cookies.get("token_erp")', src)
+        self.assertNotIn("cookies.get('token_erp')", src)
+        self.assertIn("Nunca la cookie de sesión", src)
+
+
 class WebhookIaTests(unittest.TestCase):
     def test_webhook_no_op_sin_env(self):
         import agent_supervision as sup
@@ -333,6 +379,15 @@ class TemplateSupervisionTests(unittest.TestCase):
         self.assertIn('/supervision-agente/api/aviso-ia', self.src)
         self.assertIn("whatsapp_agenda", self.src)
         self.assertIn("SUPERVISION_IA_WEBHOOK_URL", self.src)
+
+    def test_post_control_fija_usuario_servidor(self):
+        """Los POST de control no reenvían `usuario` del body del cliente."""
+        self.assertIn('payload["usuario"] = _usuario(request)', self.src)
+        self.assertNotIn(
+            'payload.get("usuario") or _usuario(request)',
+            self.src,
+        )
+        self.assertIn("nunca cookie token_erp", self.tpl)
 
     def test_migracion_agenda_existe(self):
         mig = ROOT / "migrations" / "20261003_whatsapp_agenda.sql"

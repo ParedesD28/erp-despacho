@@ -1,6 +1,8 @@
 """La página pública de gestionlegal.co conserva los datos reales y el tono acordado."""
 from __future__ import annotations
 
+import os
+import sys
 import unittest
 from pathlib import Path
 
@@ -8,6 +10,14 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+os.environ.setdefault(
+    "ERP_SESSION_SECRET",
+    "ci-dummy-secret-not-used-in-production-000000",
+)
+
 PLANTILLA = ROOT / "templates" / "landing_gestionlegal.html"
 ESTATICA = ROOT / "static" / "landing.html"
 
@@ -146,6 +156,48 @@ class TestLandingPublica(unittest.TestCase):
         self.assertIn('url=/landing', estatica)
         self.assertNotIn("Ficha de control", estatica)
         self.assertNotIn("position: fixed", estatica)
+
+
+class TestLandingPublicaHttp(unittest.TestCase):
+    """Con default-deny RBAC, las páginas públicas deben abrir sin sesión."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from fastapi.testclient import TestClient
+
+        import main
+
+        cls.client = TestClient(main.app, follow_redirects=False)
+
+    def test_paginas_publicas_abren_sin_sesion(self) -> None:
+        for ruta, texto in (
+            ("/", "Diego Alejandro Paredes García"),
+            ("/landing", "Diego Alejandro Paredes García"),
+            ("/politica-de-datos", "Ley 1581 de 2012"),
+        ):
+            with self.subTest(ruta=ruta):
+                respuesta = self.client.get(ruta)
+                self.assertEqual(respuesta.status_code, 200)
+                self.assertIn(texto, respuesta.text)
+
+    def test_politica_de_datos_es_ruta_publica_explicita(self) -> None:
+        import permisos
+
+        self.assertTrue(permisos.es_ruta_publica("/politica-de-datos"))
+        self.assertFalse(permisos.es_ruta_publica("/politica-de-datos/x"))
+
+    def test_fuentes_se_sirven_sin_sesion(self) -> None:
+        for nombre in (
+            "fraunces-latin.woff2",
+            "fraunces-latin-italic.woff2",
+            "source-sans-3-latin.woff2",
+        ):
+            respuesta = self.client.get(f"/static/fonts/{nombre}")
+            self.assertEqual(respuesta.status_code, 200, nombre)
+
+    def test_no_hay_endpoints_de_escritura_en_la_pagina_publica(self) -> None:
+        for ruta in ("/landing", "/politica-de-datos"):
+            self.assertEqual(self.client.post(ruta).status_code, 405, ruta)
 
 
 if __name__ == "__main__":

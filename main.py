@@ -5,6 +5,7 @@ liquidador de expensas PH, supervisión de agente y administración de expedient
 """
 from __future__ import annotations
 
+from dbrows import first_value, names_set, rows_as_dicts
 import sms_router
 import cartas_cobro_router
 import certificados_deuda_router
@@ -35,6 +36,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     JSONResponse,
     RedirectResponse,
     StreamingResponse,
@@ -43,6 +45,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import db
+import rate_limit
+import csrf_guard
+import session_store
 import security
 from security import (
     SESSION_COOKIE,
@@ -62,6 +67,7 @@ import obligaciones_service
 import obligacion_saldo_service
 import radicacion_service
 import bot_api
+from vencimientos_estado import sql_abierto
 import agent_supervision
 import estado_cuenta_pdf_service
 from estado_cuenta_pdf_service import (
@@ -112,85 +118,178 @@ observability.install_exception_handling(app)
 # ==============================================================================
 # MIDDLEWARE DE SEGURIDAD PRODUCTIVA
 # ==============================================================================
+# La clasificación de rutas (públicas / permiso requerido / default-deny) vive en
+# permisos.py. Públicas: "/", "/login", "/health", "/landing", "/politica-de-datos",
+# /static/ (salvo /static/pdfs/), /api/bot/, /sms/api/ y /api/v1/cron/ (auth propia
+# por key/secreto).
+_SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+_JSON_PATH_PREFIXES = ("/api/", "/sms/api/", "/sms/wizard/", "/supervision-agente/api/")
+_DUMMY_BCRYPT_HASH = security.hash_password("dummy-password-for-timing-equalization")
+
+
 def _is_public_path(path: str) -> bool:
-    if path in ("/", "/login", "/health", "/landing", "/politica-de-datos"):
-        return True
-    # PDFs sensibles: nunca públicos vía StaticFiles (usar /pdfs/ o /api/bot/pdf/).
-    if path.startswith("/static/pdfs/"):
-        return False
-    if path.startswith("/static/") or path.startswith("/api/bot/"):
-        return True
-    if path.startswith("/sms/api/"):
-        return True
-    # Cron Render: auth propia vía X-Cron-Secret (no cookie de sesión).
-    if path.startswith("/api/v1/cron/"):
-        return True
-    return False
+    return permisos.es_ruta_publica(path)
+
+
+def _es_ruta_json(path: str) -> bool:
+    return path.startswith(_JSON_PATH_PREFIXES)
+
+
+def _client_ip(request: Request) -> str:
+    peer = request.client.host if request.client else None
+    try:
+        return rate_limit.client_ip(request.headers, str(peer) if peer else None)
+    except Exception:
+        return str(peer or "desconocida")
+
+
+def _respuesta_error(request: Request, status_code: int, mensaje: str, headers: Optional[dict] = None):
+    if _es_ruta_json(request.url.path):
+        return JSONResponse({"error": mensaje}, status_code=status_code, headers=headers)
+    return HTMLResponse(
+        f"<!doctype html><meta charset='utf-8'><title>{status_code}</title><p>{mensaje}</p>",
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+def _redirect_login(clear_cookie: bool = True) -> RedirectResponse:
+    response = RedirectResponse(url="/login", status_code=303)
+    if clear_cookie:
+        clear_session_cookie(response)
+    return response
 
 
 def _aplicar_contexto_permisos(request: Request, user_id: str) -> Optional[RedirectResponse]:
-    """Carga perfil/permisos en request.state. Devuelve redirect si la cuenta está inactiva."""
+    """Carga perfil/permisos en request.state (fail-closed).
+
+    Devuelve un redirect a /login (y borra la cookie) si el usuario no existe,
+    está inactivo o no tiene un perfil válido. Si la BD no responde propaga
+    ContextoAuthNoDisponible (el middleware contesta 503, nunca otorga acceso).
+    """
     ctx = usuarios_service.contexto_auth_usuario(user_id)
-    if not ctx.get("activo", True):
-        response = RedirectResponse(url="/login", status_code=303)
-        clear_session_cookie(response)
-        return response
+    if not ctx.get("activo", False) or ctx.get("bloqueado"):
+        _json_log("INFO", "sesion_bloqueada", motivo=ctx.get("motivo") or "inactivo")
+        return _redirect_login()
     request.state.user_id = ctx["user_id"]
     request.state.user_nombre = ctx.get("nombre") or ""
     request.state.user_email = ctx.get("email") or ""
-    request.state.perfil_codigo = ctx.get("perfil_codigo") or permisos.PERFIL_ADMIN
+    request.state.perfil_codigo = ctx.get("perfil_codigo") or permisos.PERFIL_SIN_ACCESO
     request.state.perfil_nombre = ctx.get("perfil_nombre") or ""
-    request.state.permisos = ctx.get("permisos") or permisos.permisos_de_perfil(permisos.PERFIL_ADMIN)
+    request.state.permisos = frozenset(ctx.get("permisos") or ())
     return None
 
 
-@app.middleware("http")
-async def production_security_middleware(request: Request, call_next):
+def _revocar_sesion_presentada(request: Request) -> None:
+    datos = security.parse_session(request.cookies.get(SESSION_COOKIE))
+    if datos:
+        if not session_store.revocar(datos.sid, datos.user_id, datos.expires_at):
+            _json_log("ERROR", "sesion_revocacion_fallida")
+
+
+def _login_error(request: Request, mensaje: str, status_code: int = 401, headers: Optional[dict] = None):
+    response = render_template("login.html", {"request": request, "error": mensaje}, status_code=status_code)
+    for k, v in (headers or {}).items():
+        response.headers[k] = v
+    return response
+
+
+async def _procesar_login(request: Request, ip: str):
+    try:
+        form = await request.form()
+        email = str(form.get("email") or "").strip().lower()
+        password = str(form.get("password") or "")
+        if not email or not password:
+            rate_limit.limiter.login_failure(ip, "")
+            return _login_error(request, "Credenciales incorrectas.")
+
+        espera = rate_limit.limiter.login_blocked_for(ip, email)
+        if espera:
+            _json_log("INFO", "login_rate_limited", ip=ip, espera=espera)
+            return _login_error(
+                request,
+                "Demasiados intentos. Espera unos minutos e inténtalo de nuevo.",
+                status_code=429,
+                headers={"Retry-After": str(espera)},
+            )
+
+        usuario = usuarios_service.obtener_usuario_por_email(email)
+        # Se verifica siempre un bcrypt (hash ficticio si no existe) para no
+        # revelar por tiempos si el correo está registrado.
+        hash_guardado = usuario.get("password") if usuario else _DUMMY_BCRYPT_HASH
+        password_ok = verify_password(password, hash_guardado)
+        if not usuario or not password_ok:
+            rate_limit.limiter.login_failure(ip, email)
+            _json_log("INFO", "login_failed", ip=ip)
+            return _login_error(request, "Credenciales incorrectas.")
+
+        if usuario.get("activo") is False:
+            _json_log("INFO", "login_inactive")
+            return _login_error(
+                request, "Esta cuenta está desactivada. Contacta al administrador."
+            )
+
+        if not permisos.perfil_valido(usuario.get("perfil_codigo")):
+            _json_log("WARNING", "login_sin_perfil", usuario_id=usuario.get("id"))
+            return _login_error(
+                request,
+                "Tu cuenta no tiene un perfil asignado. Contacta al administrador.",
+                status_code=403,
+            )
+
+        rate_limit.limiter.login_success(ip, email)
+        _revocar_sesion_presentada(request)
+        destino = permisos.home_path_para_perfil(usuario.get("perfil_codigo"))
+        response = RedirectResponse(url=destino, status_code=303)
+        set_session_cookie(response, str(usuario["id"]))
+        _json_log("INFO", "login_success", perfil=usuario.get("perfil_codigo"))
+        return response
+    except Exception as exc:
+        _json_log("ERROR", "login_error", error=repr(exc))
+        return _login_error(request, "No fue posible iniciar sesión.", status_code=500)
+
+
+async def _flujo_seguridad(request: Request, call_next):
     path = request.url.path
+    ip = _client_ip(request)
+    request.state.client_ip = ip
 
-    # Autenticación segura en /login
+    espera = rate_limit.limiter.check_request(ip, path)
+    if espera:
+        _json_log("INFO", "rate_limit_global", ip=ip, path=path)
+        return _respuesta_error(
+            request, 429, "Demasiadas solicitudes. Inténtalo de nuevo en unos segundos.",
+            headers={"Retry-After": str(espera)},
+        )
+
+    if (
+        request.method not in _SAFE_METHODS
+        and (path == "/login" or not _is_public_path(path))
+        and not csrf_guard.origen_permitido(request.headers)
+    ):
+        _json_log("WARNING", "csrf_origen_rechazado", path=path, method=request.method)
+        return _respuesta_error(request, 403, "Solicitud rechazada: origen no permitido.")
+
     if path == "/login" and request.method == "POST":
-        try:
-            form = await request.form()
-            email = str(form.get("email") or "").strip().lower()
-            password = str(form.get("password") or "")
-            if not email or not password:
-                return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
-
-            usuario = usuarios_service.obtener_usuario_por_email(email)
-            if not usuario or not verify_password(password, usuario.get("password")):
-                _json_log("INFO", "login_failed")
-                return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
-
-            if usuario.get("activo") is False:
-                _json_log("INFO", "login_inactive")
-                return render_template(
-                    "login.html",
-                    {"request": request, "error": "Esta cuenta está desactivada. Contacta al administrador."},
-                    status_code=401,
-                )
-
-            destino = permisos.home_path_para_perfil(usuario.get("perfil_codigo"))
-            response = RedirectResponse(url=destino, status_code=303)
-            set_session_cookie(response, str(usuario["id"]))
-            _json_log("INFO", "login_success", perfil=usuario.get("perfil_codigo") or "ADMIN")
-            return response
-        except Exception as exc:
-            _json_log("ERROR", "login_error", error=repr(exc))
-            return render_template("login.html", {"request": request, "error": "No fue posible iniciar sesión."}, status_code=500)
+        return await _procesar_login(request, ip)
 
     if path == "/logout":
-        response = RedirectResponse(url="/login", status_code=303)
-        clear_session_cookie(response)
-        return response
+        _revocar_sesion_presentada(request)
+        return _redirect_login()
 
     if not _is_public_path(path):
-        user_id = verify_session(request.cookies.get(SESSION_COOKIE))
+        token = request.cookies.get(SESSION_COOKIE)
+        user_id = verify_session(token)
         if not user_id:
-            response = RedirectResponse(url="/login", status_code=303)
-            clear_session_cookie(response)
-            return response
-        bloqueo = _aplicar_contexto_permisos(request, user_id)
+            return _redirect_login()
+        try:
+            sid = security.session_id_from_token(token)
+            if sid and session_store.esta_revocada(sid):
+                return _redirect_login()
+            bloqueo = _aplicar_contexto_permisos(request, user_id)
+        except (session_store.SesionNoVerificable, usuarios_service.ContextoAuthNoDisponible) as exc:
+            _json_log("ERROR", "auth_no_disponible", error=repr(exc))
+            return _respuesta_error(request, 503, "Servicio no disponible. Inténtalo de nuevo.")
         if bloqueo is not None:
             return bloqueo
         if permisos.denegar_acceso(request.state.permisos, request.method, path):
@@ -201,21 +300,32 @@ async def production_security_middleware(request: Request, call_next):
                 method=request.method,
                 perfil=getattr(request.state, "perfil_codigo", None),
             )
-            if path.startswith("/api/") or path.startswith("/sms/api/") or path.startswith("/sms/wizard/"):
+            if _es_ruta_json(path):
                 return JSONResponse({"error": "No autorizado"}, status_code=403)
             home = permisos.home_path_para_perfil(
                 getattr(request.state, "perfil_codigo", None)
             )
             return _redirect(home, error="No tienes permiso para esa pantalla")
-    else:
-        # Si es ruta pública pero tiene cookie válida, hidrata permisos para permitir vistas condicionales
+    elif path in permisos.PUBLIC_EXACT_PATHS:
+        # Ruta pública con sesión válida: hidrata permisos para vistas condicionales.
         token = request.cookies.get(SESSION_COOKIE)
-        if token:
-            user_id = verify_session(token)
-            if user_id:
-                _aplicar_contexto_permisos(request, user_id)
+        user_id = verify_session(token)
+        if user_id:
+            try:
+                sid = security.session_id_from_token(token)
+                if not (sid and session_store.esta_revocada(sid)):
+                    _aplicar_contexto_permisos(request, user_id)
+            except Exception as exc:
+                _json_log("WARNING", "hidratacion_publica_omitida", error=repr(exc))
 
     response = await call_next(request)
+    rate_limit.limiter.record_api_response(ip, path, response.status_code)
+    return response
+
+
+@app.middleware("http")
+async def production_security_middleware(request: Request, call_next):
+    response = await _flujo_seguridad(request, call_next)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -450,10 +560,11 @@ def vista_dashboard(request: Request):
             # 4. Términos Judiciales Próximos (excluye procesos inactivos)
             terminos_proximos = []
             if expedientes_service._table_exists(cur, "vencimientos"):
-                cur.execute("""
+                cur.execute(f"""
                     SELECT v.*
                     FROM vencimientos v
-                    WHERE v.completado = FALSE
+                    WHERE {sql_abierto('v')}
+                      AND COALESCE(v.anulado, FALSE) = FALSE
                       AND COALESCE(v.tipo, 'PROCESAL') = 'PROCESAL'
                       AND NOT EXISTS (
                           SELECT 1
@@ -966,7 +1077,7 @@ def detalle_expediente(request: Request, radicado: str):
                             """,
                             (radicado,),
                         )
-                    alertas_expediente = [dict(r) for r in cur.fetchall()]
+                    alertas_expediente = rows_as_dicts(cur)
                 contactos_opts = expedientes_service._contact_options(cur)
                 abogados_opts = expedientes_service._get_abogados(cur)
                 obligaciones = obligaciones_service.obtener_obligaciones_proceso(cur, radicado)
@@ -998,6 +1109,7 @@ def detalle_expediente(request: Request, radicado: str):
                         "contactos": contactos_opts,
                         "abogados": abogados_opts,
                         "actuaciones": actuaciones,
+                        "etapas_actuacion": expedientes_service.CANONICAL_STAGES,
                         "alertas_expediente": alertas_expediente,
                         "acuerdos_crm": acuerdos,
                         "audit_ediciones": audit,
@@ -1270,31 +1382,18 @@ async def guardar_expediente_estructurado(request: Request):
         conn.release()
 
 
-def _ensure_proceso_inactivaciones(cur) -> None:
-    """Garantiza historial auditable de inactivación (migración 20260919_fase15)."""
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS proceso_inactivaciones (
-            id BIGSERIAL PRIMARY KEY,
-            radicado_interno TEXT NOT NULL,
-            accion TEXT NOT NULL CHECK (accion IN ('INACTIVAR','ACTIVAR')),
-            motivo TEXT,
-            usuario TEXT,
-            fecha TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT chk_proceso_inactivacion_motivo
-                CHECK (
-                    accion = 'ACTIVAR'
-                    OR length(trim(COALESCE(motivo,''))) >= 5
-                )
+class HistorialInactivacionNoDisponible(RuntimeError):
+    """La tabla de historial no existe: la migración 20261021 no se aplicó."""
+
+
+def _exigir_tabla_proceso_inactivaciones(cur) -> None:
+    cur.execute("SELECT to_regclass('public.proceso_inactivaciones') IS NOT NULL AS existe")
+    row = cur.fetchone()
+    existe = first_value(row, "existe")
+    if not existe:
+        raise HistorialInactivacionNoDisponible(
+            "tabla proceso_inactivaciones inexistente (migración 20261021_proceso_inactivaciones pendiente)"
         )
-        """
-    )
-    cur.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_proceso_inactivaciones_radicado_fecha
-            ON proceso_inactivaciones (radicado_interno, fecha DESC)
-        """
-    )
 
 
 @app.post("/expediente/estado", include_in_schema=False)
@@ -1315,14 +1414,14 @@ def cambiar_estado_expediente(
 
     conn = db.get_connection()
     try:
+        # Una sola transacción: el UPDATE de estado y el registro en el
+        # historial se confirman juntos o se revierten juntos.
         with conn:
             with conn.cursor() as cur:
-                _ensure_proceso_inactivaciones(cur)
+                _exigir_tabla_proceso_inactivaciones(cur)
                 cols = expedientes_service._cols(cur, "procesos")
                 if "estado" not in cols:
-                    cur.execute(
-                        "ALTER TABLE procesos ADD COLUMN IF NOT EXISTS estado TEXT DEFAULT 'Activo'"
-                    )
+                    raise RuntimeError("procesos.estado no existe en el esquema")
                 cur.execute("SELECT estado FROM procesos WHERE radicado_interno=%s FOR UPDATE", (radicado,))
                 actual = cur.fetchone()
                 if not actual:
@@ -1356,9 +1455,18 @@ def cambiar_estado_expediente(
         return _redirect(f"/expediente/{radicado}", mensaje=msg)
     except HTTPException:
         raise
+    except HistorialInactivacionNoDisponible as exc:
+        print(f"[EXPEDIENTE][ESTADO] {radicado}: {exc}", flush=True)
+        return _redirect(
+            f"/expediente/{radicado}",
+            error="No se cambió el estado: el historial de inactivaciones no está disponible (falta aplicar una migración). Avise al administrador.",
+        )
     except Exception as exc:
         print(f"[EXPEDIENTE][ESTADO] Error {radicado}: {exc!r}", flush=True)
-        return _redirect(f"/expediente/{radicado}", error="No+fue+posible+cambiar+el+estado+del+expediente")
+        return _redirect(
+            f"/expediente/{radicado}",
+            error="No se cambió el estado del expediente: no fue posible registrar el historial. Intente de nuevo o avise al administrador.",
+        )
     finally:
         conn.release()
 
@@ -1373,24 +1481,21 @@ async def nueva_actuacion(request: Request):
     try:
         with conn:
             with conn.cursor() as cur:
-                if not expedientes_service._table_exists(cur, "actuaciones"):
-                    raise RuntimeError("No existe la tabla actuaciones")
-                cols = expedientes_service._cols(cur, "actuaciones")
-                payload = {
-                    "radicado_interno": radicado,
-                    "fecha": form.get("fecha") or date.today(),
-                    "etapa": str(form.get("etapa") or "Auto de Trámite / General").strip(),
-                    "descripcion": str(form.get("descripcion") or form.get("sub_etapa") or "Actuación registrada").strip(),
-                    "usuario": "ERP",
-                    "tipificacion_sugerida": str(form.get("sub_etapa") or "Observación").strip(),
-                }
-                use = [c for c in payload if c in cols]
-                cur.execute(
-                    f"INSERT INTO actuaciones ({', '.join(use)}) VALUES ({', '.join(['%s']*len(use))}) RETURNING id",
-                    [payload[c] for c in use],
+                nueva_id = expedientes_service.registrar_actuacion(
+                    cur,
+                    radicado,
+                    fecha=form.get("fecha") or date.today(),
+                    etapa=form.get("etapa"),
+                    descripcion=form.get("descripcion") or form.get("sub_etapa"),
+                    usuario="ERP",
+                    tipificacion=form.get("sub_etapa"),
                 )
-                expedientes_service._sync_stage(cur, radicado)
+                if nueva_id is None:
+                    raise ValueError("No se registran actuaciones en procesos prejurídicos")
         return _redirect(f"/expediente/{radicado}", mensaje="Actuación+registrada+y+etapa+actualizada")
+    except ValueError as exc:
+        print(f"[ACTUACION] Validación registrando {radicado}: {exc!r}", flush=True)
+        return _redirect(f"/expediente/{radicado}", error=str(exc))
     except Exception as exc:
         print(f"[ACTUACION] Error registrando {radicado}: {exc!r}", flush=True)
         return _redirect(f"/expediente/{radicado}", error="No+fue+posible+registrar+la+actuación")
@@ -1404,10 +1509,8 @@ def eliminar_actuacion(actuacion_id: int, radicado_interno: str):
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM actuaciones WHERE id=%s AND radicado_interno=%s", (actuacion_id, radicado_interno))
-                if cur.rowcount == 0:
+                if not expedientes_service.eliminar_actuacion(cur, radicado_interno, actuacion_id):
                     raise ValueError("Actuación no encontrada")
-                expedientes_service._sync_stage(cur, radicado_interno)
         return _redirect(f"/expediente/{radicado_interno}", mensaje="Actuación+eliminada+y+etapa+recalculada")
     except Exception as exc:
         print(f"[ACTUACION] Error eliminando {actuacion_id}: {exc!r}", flush=True)
@@ -1432,7 +1535,7 @@ def _ensure_crm_and_vencimientos_schema():
                 },
                 "vencimientos": {
                     "radicado_interno", "titulo", "fecha_vencimiento",
-                    "completado", "tipo", "valor", "inmueble_id",
+                    "estado", "tipo", "valor", "inmueble_id",
                     "anulado", "categoria", "abogado_id", "obligacion_id",
                 },
                 "acuerdos_pago": {
@@ -1450,7 +1553,7 @@ def _ensure_crm_and_vencimientos_schema():
                     """,
                     (table,),
                 )
-                actual = {str(row[0]) for row in cur.fetchall()}
+                actual = names_set(cur.fetchall(), "column_name", lower=False)
                 if not actual:
                     raise RuntimeError(f"Falta tabla requerida: {table}")
                 missing = sorted(expected - actual)

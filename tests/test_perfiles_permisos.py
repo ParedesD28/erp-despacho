@@ -59,9 +59,11 @@ class PermisosUnitTests(unittest.TestCase):
         self.assertNotIn(permisos.ACCION_EDITAR, p)
         self.assertNotIn(permisos.ACCION_BORRAR, p)
 
-    def test_perfil_invalido_cae_en_admin(self):
-        self.assertEqual(permisos.normalizar_perfil(None), permisos.PERFIL_ADMIN)
-        self.assertEqual(permisos.normalizar_perfil("xyz"), permisos.PERFIL_ADMIN)
+    def test_perfil_invalido_queda_bloqueado_no_admin(self):
+        self.assertEqual(permisos.normalizar_perfil(" admin "), permisos.PERFIL_ADMIN)
+        for valor in (None, "", "xyz", "SIN_ACCESO", "ADMIN;"):
+            self.assertEqual(permisos.normalizar_perfil(valor), permisos.PERFIL_SIN_ACCESO)
+            self.assertEqual(permisos.permisos_de_perfil(valor), frozenset())
 
     def test_guards_rutas_sensibles(self):
         consulta = permisos.permisos_de_perfil(permisos.PERFIL_CONSULTA)
@@ -193,12 +195,10 @@ class UsuariosServiceLogicTests(unittest.TestCase):
         self.assertEqual(user["email"], "demo@x.com")
         self.assertTrue(user["activo"])
 
-    def test_contexto_fallback_si_db_falla(self):
+    def test_contexto_db_falla_no_otorga_acceso(self):
         with patch.object(usuarios_service, "obtener_usuario_por_id", side_effect=RuntimeError("db")):
-            ctx = usuarios_service.contexto_auth_usuario("1")
-        self.assertTrue(ctx["activo"])
-        self.assertEqual(ctx["perfil_codigo"], permisos.PERFIL_ADMIN)
-        self.assertIn(permisos.NAV_ADMIN_USUARIOS, ctx["permisos"])
+            with self.assertRaises(usuarios_service.ContextoAuthNoDisponible):
+                usuarios_service.contexto_auth_usuario("1")
 
     def test_contexto_usuario_inactivo(self):
         with patch.object(
@@ -240,6 +240,9 @@ class LoginMiddlewareRegressionTests(unittest.IsolatedAsyncioTestCase):
         request = MagicMock()
         request.url.path = "/login"
         request.method = "POST"
+        request.headers = {}
+        request.cookies = {}
+        request.client = None
 
         async def _form():
             return {"email": email, "password": password}
@@ -247,8 +250,8 @@ class LoginMiddlewareRegressionTests(unittest.IsolatedAsyncioTestCase):
         request.form = _form
         return request
 
-    async def test_login_success_con_usuario_sin_perfil(self):
-        """Usuarios existentes sin columnas de perfil deben poder entrar."""
+    async def test_login_con_perfil_valido_entra(self):
+        """Un usuario con perfil válido entra y recibe su home."""
         import main as main_mod
 
         fake_user = {
@@ -257,8 +260,8 @@ class LoginMiddlewareRegressionTests(unittest.IsolatedAsyncioTestCase):
             "nombre": "Admin",
             "password": "hashed",
             "activo": True,
-            "perfil_codigo": None,
-            "perfil_nombre": None,
+            "perfil_codigo": "ADMIN",
+            "perfil_nombre": "Administrador",
         }
         request = self._login_request("admin@despacho.com", "secreto123")
 
@@ -383,7 +386,8 @@ class IntegracionWiringTests(unittest.TestCase):
 
     def test_sms_api_sigue_publico(self):
         main_src = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn('path.startswith("/sms/api/")', main_src)
+        self.assertIn("/sms/api/", (ROOT / "permisos.py").read_text(encoding="utf-8"))
+        self.assertTrue(permisos.es_ruta_publica("/sms/api/pendientes"))
 
     def test_migracion_sql_asigna_admin(self):
         sql = (ROOT / "migrations" / "20260922_perfiles_permisos.sql").read_text(encoding="utf-8")

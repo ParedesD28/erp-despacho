@@ -6,6 +6,7 @@ solo verifica que producción tenga el contrato que el código actual necesita.
 from __future__ import annotations
 
 import db
+from dbrows import names_set
 
 
 REQUIRED_COLUMNS = {
@@ -76,7 +77,7 @@ def _columns(cur, table: str) -> set[str]:
         """,
         (table,),
     )
-    return {str(row[0]).lower() for row in cur.fetchall()}
+    return names_set(cur.fetchall(), "column_name")
 
 
 def verify() -> None:
