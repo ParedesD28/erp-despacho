@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime, date, timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse
 from psycopg2.extras import RealDictCursor
 
@@ -130,9 +130,8 @@ def _generar_pdf_unificado(inmueble_id: int, fecha_corte: date, resultados: list
     return build_signed_pdf_url(filename, base)
 
 
-@router.post("/api/bot/liquidar")
+@router.post("/api/bot/liquidar", dependencies=[Depends(_require_api_key)])
 async def liquidar_para_bot(request: Request):
-    _require_api_key(request)
     try:
         payload = await request.json()
     except Exception:
@@ -268,10 +267,9 @@ def servir_pdf_bot(filename: str, expires: int, token: str):
     )
 
 
-@router.post("/api/bot/acuerdo")
+@router.post("/api/bot/acuerdo", dependencies=[Depends(_require_api_key)])
 async def registrar_acuerdo_bot(request: Request):
     """Registra un acuerdo vinculado a una obligación financiera."""
-    _require_api_key(request)
     try:
         payload = await request.json()
     except Exception:
@@ -480,10 +478,9 @@ async def registrar_acuerdo_bot(request: Request):
     finally:
         conn.release()
 
-@router.get("/api/bot/recordatorios/pendientes")
+@router.get("/api/bot/recordatorios/pendientes", dependencies=[Depends(_require_api_key)])
 def consultar_recordatorios_pendientes(request: Request, dias_anticipacion: int = 1):
     """Consulta acuerdos de pago próximos para disparar recordatorios programados."""
-    _require_api_key(request)
     import db
     from psycopg2.extras import RealDictCursor
     conn = db.get_connection()

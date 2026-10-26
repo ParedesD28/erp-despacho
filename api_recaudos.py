@@ -22,7 +22,7 @@ PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_UR
 def _require_bot_auth(request: Request):
     m2m_keys.require_api_key(m2m_keys.PURPOSE_RECAUDOS, request.headers.get("X-API-Key"))
 
-@router.post("/bot/abono")
+@router.post("/bot/abono", dependencies=[Depends(_require_bot_auth)])
 async def reportar_abono_agente(request: Request):
     """
     Registra un recaudo contra la obligación canónica.
@@ -33,7 +33,6 @@ async def reportar_abono_agente(request: Request):
       obligacion_movimientos.
     Nunca modifica procesos.pretensiones.
     """
-    _require_bot_auth(request)
     try:
         data = await request.json()
     except Exception:

@@ -164,6 +164,14 @@ def status_snapshot() -> dict[str, Any]:
         db_refresh = bool(get_setting(KEY_GOOGLE_OAUTH_REFRESH))
     except Exception:
         db_refresh = False
+    cipher = None
+    if db_refresh:
+        try:
+            from app_settings import cipher_status, KEY_GOOGLE_OAUTH_REFRESH as _K
+
+            cipher = cipher_status(_K)
+        except Exception:
+            cipher = None
     try:
         cb = redirect_uri()
     except ValueError as exc:
@@ -172,6 +180,7 @@ def status_snapshot() -> dict[str, Any]:
         "client_id_present": bool(client_id()),
         "client_secret_present": bool(client_secret()),
         "refresh_token_present": env_refresh or db_refresh,
+        "refresh_token_cipher": cipher,
         "refresh_token_source": (
             "env" if env_refresh else ("db" if db_refresh else None)
         ),

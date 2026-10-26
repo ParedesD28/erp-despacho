@@ -175,13 +175,16 @@ def puede_ver_cobro(permisos: Optional[Iterable[str]]) -> bool:
 
 # Rutas públicas (sin sesión). Cada una se protege con su propio mecanismo:
 # login/landing/health son abiertas; /static no sirve PDFs sensibles;
-# /api/bot/ y /sms/api/ usan API key/token; /api/v1/cron/ usa X-Cron-Secret.
+# /api/bot/ y /api/recaudos/bot/ usan llave M2M (m2m_keys); /sms/api/ usa token;
+# /api/v1/cron/ usa X-Cron-Secret. tests/test_m2m_rutas_publicas.py audita que toda
+# ruta registrada bajo estos prefijos se autentique por sí misma.
 PUBLIC_EXACT_PATHS: frozenset[str] = frozenset(
     {"/", "/login", "/health", "/landing", "/politica-de-datos"}
 )
 PUBLIC_PREFIXES: tuple[str, ...] = (
     "/static/",
     "/api/bot/",
+    "/api/recaudos/bot/",
     "/sms/api/",
     "/api/v1/cron/",
 )
@@ -225,6 +228,7 @@ _ROUTE_RULES: tuple[tuple[str, str], ...] = (
     ("/informes", NAV_INFORMES),
     ("/herramientas", NAV_INFORMES),
     ("/phasecob", NAV_INFORMES),
+    # /api/recaudos/bot/ es M2M público (llave propia) y no pasa por estas reglas.
     ("/liquidador", NAV_INFORMES),
     ("/descargar-excel", NAV_INFORMES),
     ("/api/recaudos", NAV_INFORMES),
