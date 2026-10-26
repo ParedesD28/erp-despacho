@@ -35,6 +35,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     JSONResponse,
     RedirectResponse,
     StreamingResponse,
@@ -43,6 +44,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import db
+import rate_limit
+import csrf_guard
+import session_store
 import security
 from security import (
     SESSION_COOKIE,
@@ -113,85 +117,177 @@ observability.install_exception_handling(app)
 # ==============================================================================
 # MIDDLEWARE DE SEGURIDAD PRODUCTIVA
 # ==============================================================================
+# La clasificación de rutas (públicas / permiso requerido / default-deny) vive en
+# permisos.py. Públicas: "/", "/login", "/health", "/landing", /static/ (salvo
+# /static/pdfs/), /api/bot/, /sms/api/ y /api/v1/cron/ (auth propia por key/secreto).
+_SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+_JSON_PATH_PREFIXES = ("/api/", "/sms/api/", "/sms/wizard/", "/supervision-agente/api/")
+_DUMMY_BCRYPT_HASH = security.hash_password("dummy-password-for-timing-equalization")
+
+
 def _is_public_path(path: str) -> bool:
-    if path in ("/", "/login", "/health", "/landing"):
-        return True
-    # PDFs sensibles: nunca públicos vía StaticFiles (usar /pdfs/ o /api/bot/pdf/).
-    if path.startswith("/static/pdfs/"):
-        return False
-    if path.startswith("/static/") or path.startswith("/api/bot/"):
-        return True
-    if path.startswith("/sms/api/"):
-        return True
-    # Cron Render: auth propia vía X-Cron-Secret (no cookie de sesión).
-    if path.startswith("/api/v1/cron/"):
-        return True
-    return False
+    return permisos.es_ruta_publica(path)
+
+
+def _es_ruta_json(path: str) -> bool:
+    return path.startswith(_JSON_PATH_PREFIXES)
+
+
+def _client_ip(request: Request) -> str:
+    peer = request.client.host if request.client else None
+    try:
+        return rate_limit.client_ip(request.headers, str(peer) if peer else None)
+    except Exception:
+        return str(peer or "desconocida")
+
+
+def _respuesta_error(request: Request, status_code: int, mensaje: str, headers: Optional[dict] = None):
+    if _es_ruta_json(request.url.path):
+        return JSONResponse({"error": mensaje}, status_code=status_code, headers=headers)
+    return HTMLResponse(
+        f"<!doctype html><meta charset='utf-8'><title>{status_code}</title><p>{mensaje}</p>",
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+def _redirect_login(clear_cookie: bool = True) -> RedirectResponse:
+    response = RedirectResponse(url="/login", status_code=303)
+    if clear_cookie:
+        clear_session_cookie(response)
+    return response
 
 
 def _aplicar_contexto_permisos(request: Request, user_id: str) -> Optional[RedirectResponse]:
-    """Carga perfil/permisos en request.state. Devuelve redirect si la cuenta está inactiva."""
+    """Carga perfil/permisos en request.state (fail-closed).
+
+    Devuelve un redirect a /login (y borra la cookie) si el usuario no existe,
+    está inactivo o no tiene un perfil válido. Si la BD no responde propaga
+    ContextoAuthNoDisponible (el middleware contesta 503, nunca otorga acceso).
+    """
     ctx = usuarios_service.contexto_auth_usuario(user_id)
-    if not ctx.get("activo", True):
-        response = RedirectResponse(url="/login", status_code=303)
-        clear_session_cookie(response)
-        return response
+    if not ctx.get("activo", False) or ctx.get("bloqueado"):
+        _json_log("INFO", "sesion_bloqueada", motivo=ctx.get("motivo") or "inactivo")
+        return _redirect_login()
     request.state.user_id = ctx["user_id"]
     request.state.user_nombre = ctx.get("nombre") or ""
     request.state.user_email = ctx.get("email") or ""
-    request.state.perfil_codigo = ctx.get("perfil_codigo") or permisos.PERFIL_ADMIN
+    request.state.perfil_codigo = ctx.get("perfil_codigo") or permisos.PERFIL_SIN_ACCESO
     request.state.perfil_nombre = ctx.get("perfil_nombre") or ""
-    request.state.permisos = ctx.get("permisos") or permisos.permisos_de_perfil(permisos.PERFIL_ADMIN)
+    request.state.permisos = frozenset(ctx.get("permisos") or ())
     return None
 
 
-@app.middleware("http")
-async def production_security_middleware(request: Request, call_next):
+def _revocar_sesion_presentada(request: Request) -> None:
+    datos = security.parse_session(request.cookies.get(SESSION_COOKIE))
+    if datos:
+        if not session_store.revocar(datos.sid, datos.user_id, datos.expires_at):
+            _json_log("ERROR", "sesion_revocacion_fallida")
+
+
+def _login_error(request: Request, mensaje: str, status_code: int = 401, headers: Optional[dict] = None):
+    response = render_template("login.html", {"request": request, "error": mensaje}, status_code=status_code)
+    for k, v in (headers or {}).items():
+        response.headers[k] = v
+    return response
+
+
+async def _procesar_login(request: Request, ip: str):
+    try:
+        form = await request.form()
+        email = str(form.get("email") or "").strip().lower()
+        password = str(form.get("password") or "")
+        if not email or not password:
+            rate_limit.limiter.login_failure(ip, "")
+            return _login_error(request, "Credenciales incorrectas.")
+
+        espera = rate_limit.limiter.login_blocked_for(ip, email)
+        if espera:
+            _json_log("INFO", "login_rate_limited", ip=ip, espera=espera)
+            return _login_error(
+                request,
+                "Demasiados intentos. Espera unos minutos e inténtalo de nuevo.",
+                status_code=429,
+                headers={"Retry-After": str(espera)},
+            )
+
+        usuario = usuarios_service.obtener_usuario_por_email(email)
+        # Se verifica siempre un bcrypt (hash ficticio si no existe) para no
+        # revelar por tiempos si el correo está registrado.
+        hash_guardado = usuario.get("password") if usuario else _DUMMY_BCRYPT_HASH
+        password_ok = verify_password(password, hash_guardado)
+        if not usuario or not password_ok:
+            rate_limit.limiter.login_failure(ip, email)
+            _json_log("INFO", "login_failed", ip=ip)
+            return _login_error(request, "Credenciales incorrectas.")
+
+        if usuario.get("activo") is False:
+            _json_log("INFO", "login_inactive")
+            return _login_error(
+                request, "Esta cuenta está desactivada. Contacta al administrador."
+            )
+
+        if not permisos.perfil_valido(usuario.get("perfil_codigo")):
+            _json_log("WARNING", "login_sin_perfil", usuario_id=usuario.get("id"))
+            return _login_error(
+                request,
+                "Tu cuenta no tiene un perfil asignado. Contacta al administrador.",
+                status_code=403,
+            )
+
+        rate_limit.limiter.login_success(ip, email)
+        _revocar_sesion_presentada(request)
+        destino = permisos.home_path_para_perfil(usuario.get("perfil_codigo"))
+        response = RedirectResponse(url=destino, status_code=303)
+        set_session_cookie(response, str(usuario["id"]))
+        _json_log("INFO", "login_success", perfil=usuario.get("perfil_codigo"))
+        return response
+    except Exception as exc:
+        _json_log("ERROR", "login_error", error=repr(exc))
+        return _login_error(request, "No fue posible iniciar sesión.", status_code=500)
+
+
+async def _flujo_seguridad(request: Request, call_next):
     path = request.url.path
+    ip = _client_ip(request)
+    request.state.client_ip = ip
 
-    # Autenticación segura en /login
+    espera = rate_limit.limiter.check_request(ip, path)
+    if espera:
+        _json_log("INFO", "rate_limit_global", ip=ip, path=path)
+        return _respuesta_error(
+            request, 429, "Demasiadas solicitudes. Inténtalo de nuevo en unos segundos.",
+            headers={"Retry-After": str(espera)},
+        )
+
+    if (
+        request.method not in _SAFE_METHODS
+        and (path == "/login" or not _is_public_path(path))
+        and not csrf_guard.origen_permitido(request.headers)
+    ):
+        _json_log("WARNING", "csrf_origen_rechazado", path=path, method=request.method)
+        return _respuesta_error(request, 403, "Solicitud rechazada: origen no permitido.")
+
     if path == "/login" and request.method == "POST":
-        try:
-            form = await request.form()
-            email = str(form.get("email") or "").strip().lower()
-            password = str(form.get("password") or "")
-            if not email or not password:
-                return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
-
-            usuario = usuarios_service.obtener_usuario_por_email(email)
-            if not usuario or not verify_password(password, usuario.get("password")):
-                _json_log("INFO", "login_failed")
-                return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
-
-            if usuario.get("activo") is False:
-                _json_log("INFO", "login_inactive")
-                return render_template(
-                    "login.html",
-                    {"request": request, "error": "Esta cuenta está desactivada. Contacta al administrador."},
-                    status_code=401,
-                )
-
-            destino = permisos.home_path_para_perfil(usuario.get("perfil_codigo"))
-            response = RedirectResponse(url=destino, status_code=303)
-            set_session_cookie(response, str(usuario["id"]))
-            _json_log("INFO", "login_success", perfil=usuario.get("perfil_codigo") or "ADMIN")
-            return response
-        except Exception as exc:
-            _json_log("ERROR", "login_error", error=repr(exc))
-            return render_template("login.html", {"request": request, "error": "No fue posible iniciar sesión."}, status_code=500)
+        return await _procesar_login(request, ip)
 
     if path == "/logout":
-        response = RedirectResponse(url="/login", status_code=303)
-        clear_session_cookie(response)
-        return response
+        _revocar_sesion_presentada(request)
+        return _redirect_login()
 
     if not _is_public_path(path):
-        user_id = verify_session(request.cookies.get(SESSION_COOKIE))
+        token = request.cookies.get(SESSION_COOKIE)
+        user_id = verify_session(token)
         if not user_id:
-            response = RedirectResponse(url="/login", status_code=303)
-            clear_session_cookie(response)
-            return response
-        bloqueo = _aplicar_contexto_permisos(request, user_id)
+            return _redirect_login()
+        try:
+            sid = security.session_id_from_token(token)
+            if sid and session_store.esta_revocada(sid):
+                return _redirect_login()
+            bloqueo = _aplicar_contexto_permisos(request, user_id)
+        except (session_store.SesionNoVerificable, usuarios_service.ContextoAuthNoDisponible) as exc:
+            _json_log("ERROR", "auth_no_disponible", error=repr(exc))
+            return _respuesta_error(request, 503, "Servicio no disponible. Inténtalo de nuevo.")
         if bloqueo is not None:
             return bloqueo
         if permisos.denegar_acceso(request.state.permisos, request.method, path):
@@ -202,21 +298,32 @@ async def production_security_middleware(request: Request, call_next):
                 method=request.method,
                 perfil=getattr(request.state, "perfil_codigo", None),
             )
-            if path.startswith("/api/") or path.startswith("/sms/api/") or path.startswith("/sms/wizard/"):
+            if _es_ruta_json(path):
                 return JSONResponse({"error": "No autorizado"}, status_code=403)
             home = permisos.home_path_para_perfil(
                 getattr(request.state, "perfil_codigo", None)
             )
             return _redirect(home, error="No tienes permiso para esa pantalla")
-    else:
-        # Si es ruta pública pero tiene cookie válida, hidrata permisos para permitir vistas condicionales
+    elif path in permisos.PUBLIC_EXACT_PATHS:
+        # Ruta pública con sesión válida: hidrata permisos para vistas condicionales.
         token = request.cookies.get(SESSION_COOKIE)
-        if token:
-            user_id = verify_session(token)
-            if user_id:
-                _aplicar_contexto_permisos(request, user_id)
+        user_id = verify_session(token)
+        if user_id:
+            try:
+                sid = security.session_id_from_token(token)
+                if not (sid and session_store.esta_revocada(sid)):
+                    _aplicar_contexto_permisos(request, user_id)
+            except Exception as exc:
+                _json_log("WARNING", "hidratacion_publica_omitida", error=repr(exc))
 
     response = await call_next(request)
+    rate_limit.limiter.record_api_response(ip, path, response.status_code)
+    return response
+
+
+@app.middleware("http")
+async def production_security_middleware(request: Request, call_next):
+    response = await _flujo_seguridad(request, call_next)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"

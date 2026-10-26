@@ -20,6 +20,7 @@ import db
 import main
 import migrate
 import security
+import session_store
 import schema_preflight
 import sms_cartera_runtime
 import sms_saldo_service
@@ -65,6 +66,10 @@ def _ejecutar_mantenimiento_segundo_plano() -> None:
         )
     except Exception as exc:
         log_msg("⚠️ [PERFILES]", f"Aviso al asegurar perfiles: {exc!r}")
+    try:
+        session_store.ensure_schema()
+    except Exception as exc:
+        log_msg("⚠️ [SESIONES]", f"Aviso al asegurar sesiones_revocadas: {exc!r}")
     log_msg("✅ [BACKGROUND]", "Mantenimiento no estructural completado")
 
 
