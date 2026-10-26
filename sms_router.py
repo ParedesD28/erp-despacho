@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from psycopg2.extras import RealDictCursor
 
 import db
+from dbrows import names_set
 import expedientes_service
 from sms_saldo_service import actualizar_item_cola, enriquecer_candidatos
 
@@ -88,7 +89,7 @@ def _ensure_sms_schema() -> None:
                     """,
                     (table,),
                 )
-                actual = {str(row[0]) for row in cur.fetchall()}
+                actual = names_set(cur.fetchall(), "column_name", lower=False)
                 if not actual:
                     raise RuntimeError(f"[SMS PREFLIGHT] Falta tabla: {table}")
                 missing = sorted(expected - actual)
@@ -314,7 +315,7 @@ def _columnas_existentes_crm(cur) -> Set[str]:
         WHERE table_name='gestiones_crm' AND table_schema='public';
         """
     )
-    return {str(row[0]).lower() for row in cur.fetchall()}
+    return names_set(cur.fetchall(), "column_name")
 
 
 def _registrar_en_crm_idempotente(

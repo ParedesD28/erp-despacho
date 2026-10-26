@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm">
+    <h2 class="text-xl font-semibold text-slate-800">Google Drive — conectar</h2>
+    <a href="/informes" class="text-sm font-semibold text-slate-600 hover:text-slate-900 flex items-center gap-2">
+        <i data-lucide="arrow-left" class="w-4 h-4"></i> Volver a Informes
+    </a>
+</header>
+
+<div class="p-8 max-w-3xl mx-auto space-y-6">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
+        <h3 class="text-md font-bold text-slate-800 flex items-center gap-2">
+            <i data-lucide="cloud" class="w-5 h-5 text-blue-600"></i>
+            OAuth sin Python en el PC
+        </h3>
+        <p class="text-sm text-slate-600">
+            Solo admin. Google te redirige aquí, el ERP intercambia el código y te muestra el
+            <code class="text-xs bg-slate-100 px-1 rounded">refresh_token</code> <strong>una vez</strong>
+            para copiarlo a Render como <code class="text-xs bg-slate-100 px-1 rounded">GOOGLE_OAUTH_REFRESH_TOKEN</code>.
+            No lo pegues en el chat.
+        </p>
+
+        {% if error %}
+        <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-800 text-sm font-semibold whitespace-pre-wrap">{{ error }}</div>
+        {% endif %}
+
+        {% if refresh_token %}
+        <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-4 space-y-3">
+            {% if saved_to_db %}
+            <p class="text-sm font-bold text-emerald-900">✓ Conectado. Token guardado cifrado en la base — Drive queda listo sin pegar nada en Render.</p>
+            {% else %}
+            <p class="text-sm font-bold text-emerald-900">Refresh token (cópialo a Render; no se vuelve a mostrar):</p>
+            {% endif %}
+            <details class="text-xs">
+                <summary class="cursor-pointer font-semibold text-emerald-800">Ver / copiar token (respaldo opcional)</summary>
+                <textarea readonly rows="3"
+                    class="mt-2 w-full font-mono text-xs border border-emerald-300 rounded-md p-3 bg-white text-slate-800"
+                    onclick="this.select()">{{ refresh_token }}</textarea>
+            </details>
+            {% if not saved_to_db %}
+            <ol class="text-xs text-emerald-900 list-decimal list-inside space-y-1">
+                <li>Render → Environment → <code>GOOGLE_OAUTH_REFRESH_TOKEN</code> = este valor</li>
+                <li>Confirma <code>GOOGLE_DRIVE_FOLDER_ID</code></li>
+                <li>Redeploy</li>
+            </ol>
+            {% endif %}
+            {% if token_warning %}
+            <p class="text-xs text-amber-800 font-semibold">{{ token_warning }}</p>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <dl class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div class="rounded-lg bg-slate-50 border border-slate-100 p-3">
+                <dt class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Client ID</dt>
+                <dd class="mt-1 font-semibold {% if status.client_id_present %}text-emerald-700{% else %}text-amber-700{% endif %}">
+                    {% if status.client_id_present %}Configurado{% else %}Falta en Render{% endif %}
+                </dd>
+            </div>
+            <div class="rounded-lg bg-slate-50 border border-slate-100 p-3">
+                <dt class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Client secret</dt>
+                <dd class="mt-1 font-semibold {% if status.client_secret_present %}text-emerald-700{% else %}text-amber-700{% endif %}">
+                    {% if status.client_secret_present %}Configurado{% else %}Falta en Render{% endif %}
+                </dd>
+            </div>
+            <div class="rounded-lg bg-slate-50 border border-slate-100 p-3">
+                <dt class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Refresh token</dt>
+                <dd class="mt-1 font-semibold {% if status.refresh_token_present %}text-emerald-700{% else %}text-slate-600{% endif %}">
+                    {% if status.refresh_token_source == 'db' %}En base (cifrado)
+                    {% elif status.refresh_token_source == 'env' %}En Render env
+                    {% elif status.refresh_token_present %}Presente
+                    {% else %}Pendiente (usar Conectar){% endif %}
+                </dd>
+            </div>
+            <div class="rounded-lg bg-slate-50 border border-slate-100 p-3">
+                <dt class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Folder ID</dt>
+                <dd class="mt-1 font-semibold {% if status.folder_id_present %}text-emerald-700{% else %}text-amber-700{% endif %}">
+                    {% if status.folder_id_present %}…{{ status.folder_id_suffix }}{% else %}Falta{% endif %}
+                </dd>
+            </div>
+        </dl>
+
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 space-y-1">
+            <p><span class="font-bold text-slate-700">Redirect URI (debe coincidir en Google Cloud → cliente Web):</span></p>
+            <code class="block break-all text-slate-800 bg-white border border-slate-200 rounded px-2 py-1.5">{{ status.redirect_uri }}</code>
+            <p class="pt-1">Scope: <code>{{ status.scope }}</code></p>
+        </div>
+
+        <div class="flex flex-wrap gap-3 pt-2">
+            {% if status.oauth_client_ready %}
+            <a href="/herramientas/google-drive/conectar"
+               class="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-5 rounded-md shadow-sm">
+                <i data-lucide="link" class="w-4 h-4"></i>
+                Conectar con Google
+            </a>
+            {% else %}
+            <button type="button" disabled
+                class="inline-flex items-center gap-2 bg-slate-300 text-slate-600 font-bold py-2.5 px-5 rounded-md cursor-not-allowed"
+                title="Configura CLIENT_ID y CLIENT_SECRET en Render">
+                Conectar con Google
+            </button>
+            {% endif %}
+            <a href="/informes" class="inline-flex items-center gap-2 px-4 py-2.5 rounded-md border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50">
+                Cancelar
+            </a>
+        </div>
+    </div>
+
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-5 text-sm text-amber-950 space-y-2">
+        <p class="font-bold">Cliente OAuth = tipo Web (no Desktop)</p>
+        <p>
+            En Google Cloud → Credenciales, el cliente debe ser
+            <strong>Aplicación web</strong> con URI de redirección autorizada
+            <code class="text-xs bg-white px-1 rounded border border-amber-100">https://gestionlegal.co/herramientas/google-drive/oauth/callback</code>
+            (y opcional localhost para pruebas).
+            Un cliente “Desktop” no acepta ese redirect.
+        </p>
+        <p class="text-xs">
+            Mientras tanto, sin Drive: activa <code>EXPEDIENTE_DOCS_ENABLED=true</code> en Render
+            (PDFs en disco del ERP).
+        </p>
+    </div>
+</div>
+{% endblock %}

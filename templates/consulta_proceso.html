@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-sm">
+    <h2 class="text-xl font-semibold text-slate-800">Consulta de proceso</h2>
+    <a href="/informes" class="text-sm font-semibold text-slate-600 hover:text-slate-900 flex items-center gap-2">
+        <i data-lucide="arrow-left" class="w-4 h-4"></i> Volver a Informes
+    </a>
+</header>
+
+<div class="p-8 max-w-5xl mx-auto space-y-6">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+        <h3 class="text-md font-bold text-slate-800 mb-1 flex items-center gap-2">
+            <i data-lucide="search" class="w-5 h-5 text-blue-600"></i>
+            Buscar por radicado
+        </h3>
+        <p class="text-sm text-slate-500 mb-5">
+            Consulta detalle, actuaciones y sujetos procesales vía la API legal configurada en el servidor.
+        </p>
+
+        {% if not api_configurada %}
+        <div class="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 text-sm font-semibold">
+            Falta configurar LEGAL_API_BASE_URL
+        </div>
+        {% endif %}
+
+        <form method="GET" action="/herramientas/consulta-proceso" class="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
+            <div class="flex-1">
+                <label for="radicado" class="block text-xs font-bold text-slate-500 uppercase mb-1">Radicado</label>
+                <input
+                    id="radicado"
+                    type="text"
+                    name="radicado"
+                    value="{{ radicado or '' }}"
+                    required
+                    autocomplete="off"
+                    placeholder="Número de radicado"
+                    class="w-full border border-slate-300 rounded-md p-2.5 text-sm bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none text-slate-700"
+                >
+            </div>
+            <button
+                type="submit"
+                class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-6 rounded-md transition-colors shadow-sm flex items-center justify-center gap-2"
+                {% if not api_configurada %}disabled title="Configure LEGAL_API_BASE_URL en el servidor"{% endif %}
+            >
+                <i data-lucide="scan-search" class="w-4 h-4"></i>
+                Consultar
+            </button>
+        </form>
+    </div>
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-800 text-sm flex items-start gap-2">
+        <i data-lucide="alert-triangle" class="w-5 h-5 flex-shrink-0 mt-0.5"></i>
+        <span class="font-semibold whitespace-pre-wrap break-words">{{ error }}</span>
+    </div>
+    {% endif %}
+
+    {% if resultado %}
+    <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="bg-slate-900 px-6 py-4">
+            <h3 class="text-white font-bold flex items-center gap-2">
+                <i data-lucide="file-text" class="w-5 h-5 text-sky-400"></i>
+                Detalle del proceso
+            </h3>
+            <p class="text-slate-400 text-xs mt-1">ID interno: {{ resultado.id_interno }} · Radicado: {{ radicado }}</p>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <tbody class="divide-y divide-slate-100">
+                    {% for etiqueta, valor in resultado.detalle_filas %}
+                    <tr>
+                        <th class="text-left px-6 py-2.5 font-semibold text-slate-500 bg-slate-50 w-48">{{ etiqueta }}</th>
+                        <td class="px-6 py-2.5 text-slate-800">{{ valor if valor else "—" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="bg-slate-900 px-6 py-4">
+            <h3 class="text-white font-bold flex items-center gap-2">
+                <i data-lucide="users" class="w-5 h-5 text-emerald-400"></i>
+                Sujetos procesales
+                <span class="text-slate-400 font-normal text-sm">({{ resultado.sujetos|length }})</span>
+            </h3>
+        </div>
+        {% if resultado.sujetos %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-50 text-slate-500 uppercase text-xs tracking-wide">
+                    <tr>
+                        <th class="text-left px-6 py-3 font-bold">Tipo</th>
+                        <th class="text-left px-6 py-3 font-bold">Nombre</th>
+                        <th class="text-left px-6 py-3 font-bold">Identificación</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for s in resultado.sujetos %}
+                    <tr>
+                        <td class="px-6 py-2.5 text-slate-700">{{ s.tipo_sujeto or "—" }}</td>
+                        <td class="px-6 py-2.5 text-slate-800 font-medium">{{ s.nombre or "—" }}</td>
+                        <td class="px-6 py-2.5 text-slate-700">{{ s.identificacion or "—" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="px-6 py-4 text-sm text-slate-500">Sin sujetos procesales en la respuesta.</p>
+        {% endif %}
+    </section>
+
+    <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="bg-slate-900 px-6 py-4">
+            <h3 class="text-white font-bold flex items-center gap-2">
+                <i data-lucide="list" class="w-5 h-5 text-violet-400"></i>
+                Actuaciones
+                <span class="text-slate-400 font-normal text-sm">({{ resultado.actuaciones|length }})</span>
+            </h3>
+        </div>
+        {% if resultado.actuaciones %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <thead class="bg-slate-50 text-slate-500 uppercase text-xs tracking-wide">
+                    <tr>
+                        <th class="text-left px-4 py-3 font-bold">Fecha</th>
+                        <th class="text-left px-4 py-3 font-bold">Actuación</th>
+                        <th class="text-left px-4 py-3 font-bold">Anotación</th>
+                        <th class="text-left px-4 py-3 font-bold">Docs</th>
+                        <th class="text-left px-4 py-3 font-bold">Inicio término</th>
+                        <th class="text-left px-4 py-3 font-bold">Fin término</th>
+                        <th class="text-left px-4 py-3 font-bold">Registro</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for a in resultado.actuaciones %}
+                    <tr>
+                        <td class="px-4 py-2.5 text-slate-700 whitespace-nowrap">{{ a.fecha_actuacion or "—" }}</td>
+                        <td class="px-4 py-2.5 text-slate-800">{{ a.actuacion or "—" }}</td>
+                        <td class="px-4 py-2.5 text-slate-700 max-w-md">{{ a.anotacion or "—" }}</td>
+                        <td class="px-4 py-2.5 text-slate-700 whitespace-nowrap">
+                            {% if a.con_documentos %}
+                            <span class="text-[10px] uppercase font-bold tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">Sí</span>
+                            {% else %}
+                            <span class="text-slate-400">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-2.5 text-slate-700 whitespace-nowrap">{{ a.inicio_termino or "—" }}</td>
+                        <td class="px-4 py-2.5 text-slate-700 whitespace-nowrap">{{ a.fin_termino or "—" }}</td>
+                        <td class="px-4 py-2.5 text-slate-700 whitespace-nowrap">{{ a.fecha_registro or "—" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="px-6 py-4 text-sm text-slate-500">Sin actuaciones en la respuesta.</p>
+        {% endif %}
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

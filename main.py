@@ -5,10 +5,12 @@ liquidador de expensas PH, supervisión de agente y administración de expedient
 """
 from __future__ import annotations
 
+from dbrows import first_value, names_set, rows_as_dicts
 import sms_router
 import cartas_cobro_router
 import certificados_deuda_router
 import asyncio
+import hmac
 import io
 import json
 import os
@@ -16,7 +18,7 @@ import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, List, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -34,6 +36,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     JSONResponse,
     RedirectResponse,
     StreamingResponse,
@@ -42,6 +45,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import db
+import rate_limit
+import csrf_guard
+import session_store
 import security
 from security import (
     SESSION_COOKIE,
@@ -61,6 +67,7 @@ import obligaciones_service
 import obligacion_saldo_service
 import radicacion_service
 import bot_api
+from vencimientos_estado import sql_abierto
 import agent_supervision
 import estado_cuenta_pdf_service
 from estado_cuenta_pdf_service import (
@@ -73,6 +80,7 @@ import permisos
 import usuarios_service
 import usuarios_router
 import portal_ph_router
+import sync_rama_router
 
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
@@ -80,6 +88,7 @@ templates = Jinja2Templates(directory="templates")
 import api_recaudos
 
 app.include_router(api_recaudos.router)
+app.include_router(sync_rama_router.router)
 
 def render_template(name: str, context: dict, status_code: int = 200):
     """Renderiza plantillas Jinja2 siendo compatible con cualquier versión de Starlette/FastAPI."""
@@ -109,82 +118,177 @@ observability.install_exception_handling(app)
 # ==============================================================================
 # MIDDLEWARE DE SEGURIDAD PRODUCTIVA
 # ==============================================================================
+# La clasificación de rutas (públicas / permiso requerido / default-deny) vive en
+# permisos.py. Públicas: "/", "/login", "/health", "/landing", /static/ (salvo
+# /static/pdfs/), /api/bot/, /sms/api/ y /api/v1/cron/ (auth propia por key/secreto).
+_SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+_JSON_PATH_PREFIXES = ("/api/", "/sms/api/", "/sms/wizard/", "/supervision-agente/api/")
+_DUMMY_BCRYPT_HASH = security.hash_password("dummy-password-for-timing-equalization")
+
+
 def _is_public_path(path: str) -> bool:
-    if path in ("/login", "/health"):
-        return True
-    # PDFs sensibles: nunca públicos vía StaticFiles (usar /pdfs/ o /api/bot/pdf/).
-    if path.startswith("/static/pdfs/"):
-        return False
-    if path.startswith("/static/") or path.startswith("/api/bot/"):
-        return True
-    if path.startswith("/sms/api/"):
-        return True
-    return False
+    return permisos.es_ruta_publica(path)
+
+
+def _es_ruta_json(path: str) -> bool:
+    return path.startswith(_JSON_PATH_PREFIXES)
+
+
+def _client_ip(request: Request) -> str:
+    peer = request.client.host if request.client else None
+    try:
+        return rate_limit.client_ip(request.headers, str(peer) if peer else None)
+    except Exception:
+        return str(peer or "desconocida")
+
+
+def _respuesta_error(request: Request, status_code: int, mensaje: str, headers: Optional[dict] = None):
+    if _es_ruta_json(request.url.path):
+        return JSONResponse({"error": mensaje}, status_code=status_code, headers=headers)
+    return HTMLResponse(
+        f"<!doctype html><meta charset='utf-8'><title>{status_code}</title><p>{mensaje}</p>",
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+def _redirect_login(clear_cookie: bool = True) -> RedirectResponse:
+    response = RedirectResponse(url="/login", status_code=303)
+    if clear_cookie:
+        clear_session_cookie(response)
+    return response
 
 
 def _aplicar_contexto_permisos(request: Request, user_id: str) -> Optional[RedirectResponse]:
-    """Carga perfil/permisos en request.state. Devuelve redirect si la cuenta está inactiva."""
+    """Carga perfil/permisos en request.state (fail-closed).
+
+    Devuelve un redirect a /login (y borra la cookie) si el usuario no existe,
+    está inactivo o no tiene un perfil válido. Si la BD no responde propaga
+    ContextoAuthNoDisponible (el middleware contesta 503, nunca otorga acceso).
+    """
     ctx = usuarios_service.contexto_auth_usuario(user_id)
-    if not ctx.get("activo", True):
-        response = RedirectResponse(url="/login", status_code=303)
-        clear_session_cookie(response)
-        return response
+    if not ctx.get("activo", False) or ctx.get("bloqueado"):
+        _json_log("INFO", "sesion_bloqueada", motivo=ctx.get("motivo") or "inactivo")
+        return _redirect_login()
     request.state.user_id = ctx["user_id"]
     request.state.user_nombre = ctx.get("nombre") or ""
     request.state.user_email = ctx.get("email") or ""
-    request.state.perfil_codigo = ctx.get("perfil_codigo") or permisos.PERFIL_ADMIN
+    request.state.perfil_codigo = ctx.get("perfil_codigo") or permisos.PERFIL_SIN_ACCESO
     request.state.perfil_nombre = ctx.get("perfil_nombre") or ""
-    request.state.permisos = ctx.get("permisos") or permisos.permisos_de_perfil(permisos.PERFIL_ADMIN)
+    request.state.permisos = frozenset(ctx.get("permisos") or ())
     return None
 
 
-@app.middleware("http")
-async def production_security_middleware(request: Request, call_next):
+def _revocar_sesion_presentada(request: Request) -> None:
+    datos = security.parse_session(request.cookies.get(SESSION_COOKIE))
+    if datos:
+        if not session_store.revocar(datos.sid, datos.user_id, datos.expires_at):
+            _json_log("ERROR", "sesion_revocacion_fallida")
+
+
+def _login_error(request: Request, mensaje: str, status_code: int = 401, headers: Optional[dict] = None):
+    response = render_template("login.html", {"request": request, "error": mensaje}, status_code=status_code)
+    for k, v in (headers or {}).items():
+        response.headers[k] = v
+    return response
+
+
+async def _procesar_login(request: Request, ip: str):
+    try:
+        form = await request.form()
+        email = str(form.get("email") or "").strip().lower()
+        password = str(form.get("password") or "")
+        if not email or not password:
+            rate_limit.limiter.login_failure(ip, "")
+            return _login_error(request, "Credenciales incorrectas.")
+
+        espera = rate_limit.limiter.login_blocked_for(ip, email)
+        if espera:
+            _json_log("INFO", "login_rate_limited", ip=ip, espera=espera)
+            return _login_error(
+                request,
+                "Demasiados intentos. Espera unos minutos e inténtalo de nuevo.",
+                status_code=429,
+                headers={"Retry-After": str(espera)},
+            )
+
+        usuario = usuarios_service.obtener_usuario_por_email(email)
+        # Se verifica siempre un bcrypt (hash ficticio si no existe) para no
+        # revelar por tiempos si el correo está registrado.
+        hash_guardado = usuario.get("password") if usuario else _DUMMY_BCRYPT_HASH
+        password_ok = verify_password(password, hash_guardado)
+        if not usuario or not password_ok:
+            rate_limit.limiter.login_failure(ip, email)
+            _json_log("INFO", "login_failed", ip=ip)
+            return _login_error(request, "Credenciales incorrectas.")
+
+        if usuario.get("activo") is False:
+            _json_log("INFO", "login_inactive")
+            return _login_error(
+                request, "Esta cuenta está desactivada. Contacta al administrador."
+            )
+
+        if not permisos.perfil_valido(usuario.get("perfil_codigo")):
+            _json_log("WARNING", "login_sin_perfil", usuario_id=usuario.get("id"))
+            return _login_error(
+                request,
+                "Tu cuenta no tiene un perfil asignado. Contacta al administrador.",
+                status_code=403,
+            )
+
+        rate_limit.limiter.login_success(ip, email)
+        _revocar_sesion_presentada(request)
+        destino = permisos.home_path_para_perfil(usuario.get("perfil_codigo"))
+        response = RedirectResponse(url=destino, status_code=303)
+        set_session_cookie(response, str(usuario["id"]))
+        _json_log("INFO", "login_success", perfil=usuario.get("perfil_codigo"))
+        return response
+    except Exception as exc:
+        _json_log("ERROR", "login_error", error=repr(exc))
+        return _login_error(request, "No fue posible iniciar sesión.", status_code=500)
+
+
+async def _flujo_seguridad(request: Request, call_next):
     path = request.url.path
+    ip = _client_ip(request)
+    request.state.client_ip = ip
 
-    # Autenticación segura en /login
+    espera = rate_limit.limiter.check_request(ip, path)
+    if espera:
+        _json_log("INFO", "rate_limit_global", ip=ip, path=path)
+        return _respuesta_error(
+            request, 429, "Demasiadas solicitudes. Inténtalo de nuevo en unos segundos.",
+            headers={"Retry-After": str(espera)},
+        )
+
+    if (
+        request.method not in _SAFE_METHODS
+        and (path == "/login" or not _is_public_path(path))
+        and not csrf_guard.origen_permitido(request.headers)
+    ):
+        _json_log("WARNING", "csrf_origen_rechazado", path=path, method=request.method)
+        return _respuesta_error(request, 403, "Solicitud rechazada: origen no permitido.")
+
     if path == "/login" and request.method == "POST":
-        try:
-            form = await request.form()
-            email = str(form.get("email") or "").strip().lower()
-            password = str(form.get("password") or "")
-            if not email or not password:
-                return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
-
-            usuario = usuarios_service.obtener_usuario_por_email(email)
-            if not usuario or not verify_password(password, usuario.get("password")):
-                _json_log("INFO", "login_failed")
-                return render_template("login.html", {"request": request, "error": "Credenciales incorrectas."}, status_code=401)
-
-            if usuario.get("activo") is False:
-                _json_log("INFO", "login_inactive")
-                return render_template(
-                    "login.html",
-                    {"request": request, "error": "Esta cuenta está desactivada. Contacta al administrador."},
-                    status_code=401,
-                )
-
-            destino = permisos.home_path_para_perfil(usuario.get("perfil_codigo"))
-            response = RedirectResponse(url=destino, status_code=303)
-            set_session_cookie(response, str(usuario["id"]))
-            _json_log("INFO", "login_success", perfil=usuario.get("perfil_codigo") or "ADMIN")
-            return response
-        except Exception as exc:
-            _json_log("ERROR", "login_error", error=repr(exc))
-            return render_template("login.html", {"request": request, "error": "No fue posible iniciar sesión."}, status_code=500)
+        return await _procesar_login(request, ip)
 
     if path == "/logout":
-        response = RedirectResponse(url="/login", status_code=303)
-        clear_session_cookie(response)
-        return response
+        _revocar_sesion_presentada(request)
+        return _redirect_login()
 
     if not _is_public_path(path):
-        user_id = verify_session(request.cookies.get(SESSION_COOKIE))
+        token = request.cookies.get(SESSION_COOKIE)
+        user_id = verify_session(token)
         if not user_id:
-            response = RedirectResponse(url="/login", status_code=303)
-            clear_session_cookie(response)
-            return response
-        bloqueo = _aplicar_contexto_permisos(request, user_id)
+            return _redirect_login()
+        try:
+            sid = security.session_id_from_token(token)
+            if sid and session_store.esta_revocada(sid):
+                return _redirect_login()
+            bloqueo = _aplicar_contexto_permisos(request, user_id)
+        except (session_store.SesionNoVerificable, usuarios_service.ContextoAuthNoDisponible) as exc:
+            _json_log("ERROR", "auth_no_disponible", error=repr(exc))
+            return _respuesta_error(request, 503, "Servicio no disponible. Inténtalo de nuevo.")
         if bloqueo is not None:
             return bloqueo
         if permisos.denegar_acceso(request.state.permisos, request.method, path):
@@ -195,14 +299,32 @@ async def production_security_middleware(request: Request, call_next):
                 method=request.method,
                 perfil=getattr(request.state, "perfil_codigo", None),
             )
-            if path.startswith("/api/") or path.startswith("/sms/api/") or path.startswith("/sms/wizard/"):
+            if _es_ruta_json(path):
                 return JSONResponse({"error": "No autorizado"}, status_code=403)
             home = permisos.home_path_para_perfil(
                 getattr(request.state, "perfil_codigo", None)
             )
             return _redirect(home, error="No tienes permiso para esa pantalla")
+    elif path in permisos.PUBLIC_EXACT_PATHS:
+        # Ruta pública con sesión válida: hidrata permisos para vistas condicionales.
+        token = request.cookies.get(SESSION_COOKIE)
+        user_id = verify_session(token)
+        if user_id:
+            try:
+                sid = security.session_id_from_token(token)
+                if not (sid and session_store.esta_revocada(sid)):
+                    _aplicar_contexto_permisos(request, user_id)
+            except Exception as exc:
+                _json_log("WARNING", "hidratacion_publica_omitida", error=repr(exc))
 
     response = await call_next(request)
+    rate_limit.limiter.record_api_response(ip, path, response.status_code)
+    return response
+
+
+@app.middleware("http")
+async def production_security_middleware(request: Request, call_next):
+    response = await _flujo_seguridad(request, call_next)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -311,10 +433,18 @@ def sumar_dias_habiles(fecha_inicial: date, dias: int) -> date:
 # ==============================================================================
 @app.get("/", include_in_schema=False)
 def root_compat(request: Request):
-    destino = permisos.home_path_para_perfil(
-        getattr(request.state, "perfil_codigo", None)
-    )
-    return RedirectResponse(url=destino, status_code=303)
+    """
+    Ruta raíz: Si el usuario ya cuenta con sesión activa autenticada,
+    lo redirige a su módulo correspondiente del ERP. Si no ha iniciado
+    sesión (público general / visitantes de gestionlegal.co), muestra el portal institucional.
+    """
+    user_id = verify_session(request.cookies.get(SESSION_COOKIE))
+    if user_id:
+        destino = permisos.home_path_para_perfil(
+            getattr(request.state, "perfil_codigo", None)
+        )
+        return RedirectResponse(url=destino, status_code=303)
+    return render_template("landing_gestionlegal.html", {"request": request})
 
 
 @app.get("/health")
@@ -429,10 +559,11 @@ def vista_dashboard(request: Request):
             # 4. Términos Judiciales Próximos (excluye procesos inactivos)
             terminos_proximos = []
             if expedientes_service._table_exists(cur, "vencimientos"):
-                cur.execute("""
+                cur.execute(f"""
                     SELECT v.*
                     FROM vencimientos v
-                    WHERE v.completado = FALSE
+                    WHERE {sql_abierto('v')}
+                      AND COALESCE(v.anulado, FALSE) = FALSE
                       AND COALESCE(v.tipo, 'PROCESAL') = 'PROCESAL'
                       AND NOT EXISTS (
                           SELECT 1
@@ -451,6 +582,14 @@ def vista_dashboard(request: Request):
                     ORDER BY v.fecha_vencimiento ASC LIMIT 10
                 """)
                 terminos_proximos = [dict(r) for r in cur.fetchall()]
+
+            # 4b. Alertas de sync Rama (in-ERP)
+            import sync_procesos_service
+
+            alertas_sync_unread = sync_procesos_service.contar_alertas_no_leidas(cur)
+            alertas_sync_recientes = sync_procesos_service.listar_alertas_recientes(
+                cur, limit=5, solo_no_leidas=True
+            )
 
         # 5. Totales de cartera: snapshot (sin liquidar en cada refresh).
         try:
@@ -485,6 +624,8 @@ def vista_dashboard(request: Request):
                 "acuerdos_proximos": acuerdos_proximos,
                 "monto_acuerdos_vigentes": monto_acuerdos_vigentes,
                 "terminos_proximos": terminos_proximos,
+                "alertas_sync_unread": alertas_sync_unread,
+                "alertas_sync_recientes": alertas_sync_recientes,
                 "totales_cartera": totales_cartera,
                 "hoy": str(hoy),
             },
@@ -900,6 +1041,42 @@ def detalle_expediente(request: Request, radicado: str):
                 demandantes = expedientes_service._get_demandantes(cur, proceso)
                 demandados = expedientes_service._get_demandados(cur, radicado)
                 actuaciones = expedientes_service._get_actuaciones(cur, radicado)
+                import sync_procesos_service
+
+                alertas_expediente = []
+                if sync_procesos_service._table_exists(cur, "alertas_seguimiento"):
+                    ap_drive = (
+                        sync_procesos_service._table_exists(cur, "actuaciones_proceso")
+                        and "drive_url"
+                        in sync_procesos_service._cols(cur, "actuaciones_proceso")
+                    )
+                    if ap_drive:
+                        cur.execute(
+                            """
+                            SELECT
+                                a.id, a.titulo, a.detalle, a.leida, a.atendida,
+                                a.created_at, ap.drive_url, ap.drive_file_id
+                            FROM alertas_seguimiento a
+                            LEFT JOIN actuaciones_proceso ap
+                              ON ap.id = a.actuacion_proceso_id
+                            WHERE a.radicado_interno = %s
+                            ORDER BY a.created_at DESC
+                            LIMIT 20
+                            """,
+                            (radicado,),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT id, titulo, detalle, leida, atendida, created_at
+                            FROM alertas_seguimiento
+                            WHERE radicado_interno = %s
+                            ORDER BY created_at DESC
+                            LIMIT 20
+                            """,
+                            (radicado,),
+                        )
+                    alertas_expediente = rows_as_dicts(cur)
                 contactos_opts = expedientes_service._contact_options(cur)
                 abogados_opts = expedientes_service._get_abogados(cur)
                 obligaciones = obligaciones_service.obtener_obligaciones_proceso(cur, radicado)
@@ -931,6 +1108,8 @@ def detalle_expediente(request: Request, radicado: str):
                         "contactos": contactos_opts,
                         "abogados": abogados_opts,
                         "actuaciones": actuaciones,
+                        "etapas_actuacion": expedientes_service.CANONICAL_STAGES,
+                        "alertas_expediente": alertas_expediente,
                         "acuerdos_crm": acuerdos,
                         "audit_ediciones": audit,
                         "conjuntos": conjuntos,
@@ -1202,31 +1381,18 @@ async def guardar_expediente_estructurado(request: Request):
         conn.release()
 
 
-def _ensure_proceso_inactivaciones(cur) -> None:
-    """Garantiza historial auditable de inactivación (migración 20260919_fase15)."""
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS proceso_inactivaciones (
-            id BIGSERIAL PRIMARY KEY,
-            radicado_interno TEXT NOT NULL,
-            accion TEXT NOT NULL CHECK (accion IN ('INACTIVAR','ACTIVAR')),
-            motivo TEXT,
-            usuario TEXT,
-            fecha TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT chk_proceso_inactivacion_motivo
-                CHECK (
-                    accion = 'ACTIVAR'
-                    OR length(trim(COALESCE(motivo,''))) >= 5
-                )
+class HistorialInactivacionNoDisponible(RuntimeError):
+    """La tabla de historial no existe: la migración 20261021 no se aplicó."""
+
+
+def _exigir_tabla_proceso_inactivaciones(cur) -> None:
+    cur.execute("SELECT to_regclass('public.proceso_inactivaciones') IS NOT NULL AS existe")
+    row = cur.fetchone()
+    existe = first_value(row, "existe")
+    if not existe:
+        raise HistorialInactivacionNoDisponible(
+            "tabla proceso_inactivaciones inexistente (migración 20261021_proceso_inactivaciones pendiente)"
         )
-        """
-    )
-    cur.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_proceso_inactivaciones_radicado_fecha
-            ON proceso_inactivaciones (radicado_interno, fecha DESC)
-        """
-    )
 
 
 @app.post("/expediente/estado", include_in_schema=False)
@@ -1247,14 +1413,14 @@ def cambiar_estado_expediente(
 
     conn = db.get_connection()
     try:
+        # Una sola transacción: el UPDATE de estado y el registro en el
+        # historial se confirman juntos o se revierten juntos.
         with conn:
             with conn.cursor() as cur:
-                _ensure_proceso_inactivaciones(cur)
+                _exigir_tabla_proceso_inactivaciones(cur)
                 cols = expedientes_service._cols(cur, "procesos")
                 if "estado" not in cols:
-                    cur.execute(
-                        "ALTER TABLE procesos ADD COLUMN IF NOT EXISTS estado TEXT DEFAULT 'Activo'"
-                    )
+                    raise RuntimeError("procesos.estado no existe en el esquema")
                 cur.execute("SELECT estado FROM procesos WHERE radicado_interno=%s FOR UPDATE", (radicado,))
                 actual = cur.fetchone()
                 if not actual:
@@ -1288,9 +1454,18 @@ def cambiar_estado_expediente(
         return _redirect(f"/expediente/{radicado}", mensaje=msg)
     except HTTPException:
         raise
+    except HistorialInactivacionNoDisponible as exc:
+        print(f"[EXPEDIENTE][ESTADO] {radicado}: {exc}", flush=True)
+        return _redirect(
+            f"/expediente/{radicado}",
+            error="No se cambió el estado: el historial de inactivaciones no está disponible (falta aplicar una migración). Avise al administrador.",
+        )
     except Exception as exc:
         print(f"[EXPEDIENTE][ESTADO] Error {radicado}: {exc!r}", flush=True)
-        return _redirect(f"/expediente/{radicado}", error="No+fue+posible+cambiar+el+estado+del+expediente")
+        return _redirect(
+            f"/expediente/{radicado}",
+            error="No se cambió el estado del expediente: no fue posible registrar el historial. Intente de nuevo o avise al administrador.",
+        )
     finally:
         conn.release()
 
@@ -1305,24 +1480,21 @@ async def nueva_actuacion(request: Request):
     try:
         with conn:
             with conn.cursor() as cur:
-                if not expedientes_service._table_exists(cur, "actuaciones"):
-                    raise RuntimeError("No existe la tabla actuaciones")
-                cols = expedientes_service._cols(cur, "actuaciones")
-                payload = {
-                    "radicado_interno": radicado,
-                    "fecha": form.get("fecha") or date.today(),
-                    "etapa": str(form.get("etapa") or "Auto de Trámite / General").strip(),
-                    "descripcion": str(form.get("descripcion") or form.get("sub_etapa") or "Actuación registrada").strip(),
-                    "usuario": "ERP",
-                    "tipificacion_sugerida": str(form.get("sub_etapa") or "Observación").strip(),
-                }
-                use = [c for c in payload if c in cols]
-                cur.execute(
-                    f"INSERT INTO actuaciones ({', '.join(use)}) VALUES ({', '.join(['%s']*len(use))}) RETURNING id",
-                    [payload[c] for c in use],
+                nueva_id = expedientes_service.registrar_actuacion(
+                    cur,
+                    radicado,
+                    fecha=form.get("fecha") or date.today(),
+                    etapa=form.get("etapa"),
+                    descripcion=form.get("descripcion") or form.get("sub_etapa"),
+                    usuario="ERP",
+                    tipificacion=form.get("sub_etapa"),
                 )
-                expedientes_service._sync_stage(cur, radicado)
+                if nueva_id is None:
+                    raise ValueError("No se registran actuaciones en procesos prejurídicos")
         return _redirect(f"/expediente/{radicado}", mensaje="Actuación+registrada+y+etapa+actualizada")
+    except ValueError as exc:
+        print(f"[ACTUACION] Validación registrando {radicado}: {exc!r}", flush=True)
+        return _redirect(f"/expediente/{radicado}", error=str(exc))
     except Exception as exc:
         print(f"[ACTUACION] Error registrando {radicado}: {exc!r}", flush=True)
         return _redirect(f"/expediente/{radicado}", error="No+fue+posible+registrar+la+actuación")
@@ -1336,10 +1508,8 @@ def eliminar_actuacion(actuacion_id: int, radicado_interno: str):
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM actuaciones WHERE id=%s AND radicado_interno=%s", (actuacion_id, radicado_interno))
-                if cur.rowcount == 0:
+                if not expedientes_service.eliminar_actuacion(cur, radicado_interno, actuacion_id):
                     raise ValueError("Actuación no encontrada")
-                expedientes_service._sync_stage(cur, radicado_interno)
         return _redirect(f"/expediente/{radicado_interno}", mensaje="Actuación+eliminada+y+etapa+recalculada")
     except Exception as exc:
         print(f"[ACTUACION] Error eliminando {actuacion_id}: {exc!r}", flush=True)
@@ -1364,7 +1534,7 @@ def _ensure_crm_and_vencimientos_schema():
                 },
                 "vencimientos": {
                     "radicado_interno", "titulo", "fecha_vencimiento",
-                    "completado", "tipo", "valor", "inmueble_id",
+                    "estado", "tipo", "valor", "inmueble_id",
                     "anulado", "categoria", "abogado_id", "obligacion_id",
                 },
                 "acuerdos_pago": {
@@ -1382,7 +1552,7 @@ def _ensure_crm_and_vencimientos_schema():
                     """,
                     (table,),
                 )
-                actual = {str(row[0]) for row in cur.fetchall()}
+                actual = names_set(cur.fetchall(), "column_name", lower=False)
                 if not actual:
                     raise RuntimeError(f"Falta tabla requerida: {table}")
                 missing = sorted(expected - actual)
@@ -2057,6 +2227,38 @@ def servir_pdf_autenticado(filename: str):
     )
 
 
+@app.get("/expediente-docs/{radicado}/{rest:path}", include_in_schema=False)
+def servir_expediente_doc(radicado: str, rest: str):
+    """PDF de actuación guardado en disco ERP (auth de sesión; fuera de /static/)."""
+    import expediente_docs_storage as eds
+
+    rad = eds.safe_radicado_segment(radicado)
+    parts = [p for p in (rest or "").split("/") if p and p not in {".", ".."}]
+    if not parts or any("/" in p or "\\" in p for p in parts):
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    # Solo nombres de archivo sanitizados (sin path traversal).
+    from pathlib import Path as _Path
+
+    for part in parts:
+        if _Path(part).name != part:
+            raise HTTPException(status_code=404, detail="Documento no encontrado")
+
+    root = eds.local_docs_root().resolve()
+    path = root.joinpath(rad, *parts).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+    return FileResponse(
+        path=str(path),
+        media_type="application/pdf",
+        filename=parts[-1],
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
 # ==============================================================================
 # INFORMES Y DESCARGA EXCEL
 # ==============================================================================
@@ -2096,6 +2298,331 @@ def vista_estado_cuenta_pdf(request: Request):
             "modo_phasecob": False,
         },
     )
+
+
+def _legal_api_configurada() -> bool:
+    return bool((os.environ.get("LEGAL_API_BASE_URL") or "").strip())
+
+
+def _legal_api_env_debug_payload() -> dict[str, Any]:
+    """Metadatos seguros de LEGAL_API_BASE_URL (nunca la URL ni el host)."""
+    from external_legal_client import (
+        BUSCAR_QUERY_KEYS,
+        RELATIVE_ENDPOINT_TEMPLATES,
+        _base_path_from_url,
+        _joined_path_examples,
+    )
+
+    stripped = (os.environ.get("LEGAL_API_BASE_URL") or "").strip()
+    base_path = _base_path_from_url(stripped) if stripped else ""
+    has_port = bool(urlparse(stripped).port) if stripped else False
+    return {
+        "legal_api_base_url_present": bool(stripped),
+        "legal_api_base_url_len": len(stripped),
+        "startswith_https": stripped.lower().startswith("https://"),
+        "base_path": base_path,
+        "base_has_explicit_port": has_port,
+        "relative_endpoints": list(RELATIVE_ENDPOINT_TEMPLATES),
+        "buscar_query_keys": list(BUSCAR_QUERY_KEYS),
+        "joined_path_examples": _joined_path_examples(stripped) if stripped else [],
+    }
+
+
+# ISO date or datetime → solo YYYY-MM-DD para UI consulta-proceso.
+_ISO_FECHA_DISPLAY_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})"
+    r"(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$"
+)
+_ACTUACION_FECHA_KEYS = (
+    "fecha_actuacion",
+    "inicio_termino",
+    "fin_termino",
+    "fecha_registro",
+)
+
+
+def _fecha_display_consulta(value: Any) -> Any:
+    """Quita la hora de ISO datetimes para mostrar solo la fecha (YYYY-MM-DD)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    if not text:
+        return value
+    match = _ISO_FECHA_DISPLAY_RE.match(text)
+    if match:
+        return match.group(1)
+    return value
+
+
+def _detalle_filas_consulta(detalle) -> list[tuple[str, Any]]:
+    """Pares etiqueta/valor para la tabla de detalle en la UI."""
+    return [
+        ("Juzgado / despacho", detalle.juzgado),
+        ("Estado", detalle.estado),
+        ("Ponente", detalle.ponente),
+        ("Llave proceso", detalle.llave_proceso),
+        ("Departamento", detalle.departamento),
+        ("Tipo de proceso", detalle.tipo_proceso),
+        ("Clase", detalle.clase_proceso),
+        ("Subclase", detalle.subclase_proceso),
+        ("Recurso", detalle.recurso),
+        ("Ubicación", detalle.ubicacion),
+        ("Fecha creación", _fecha_display_consulta(detalle.fecha_creacion)),
+        (
+            "Última actuación",
+            _fecha_display_consulta(detalle.fecha_ultima_actuacion),
+        ),
+        ("Contenido radicación", detalle.contenido_radicacion),
+    ]
+
+
+def _actuacion_display_dict(actuacion: Any) -> dict[str, Any]:
+    """model_dump de actuación con fechas solo-día para la plantilla."""
+    data = actuacion.model_dump() if hasattr(actuacion, "model_dump") else dict(actuacion)
+    for key in _ACTUACION_FECHA_KEYS:
+        if key in data:
+            data[key] = _fecha_display_consulta(data.get(key))
+    return data
+
+
+@app.get("/herramientas/consulta-proceso/debug-env")
+def debug_legal_api_env(request: Request):
+    """Admin only: present/len/https flag de LEGAL_API_BASE_URL sin filtrar secretos."""
+    if getattr(request.state, "perfil_codigo", None) != permisos.PERFIL_ADMIN:
+        return JSONResponse({"error": "No autorizado"}, status_code=403)
+    return JSONResponse(_legal_api_env_debug_payload())
+
+
+def _require_admin_html(request: Request):
+    """None si admin; si no, RedirectResponse o template 403 simple."""
+    if getattr(request.state, "perfil_codigo", None) != permisos.PERFIL_ADMIN:
+        return _redirect("/informes", error="Solo+administrador")
+    return None
+
+
+@app.get("/herramientas/google-drive", include_in_schema=False)
+def vista_google_drive_oauth(request: Request):
+    """Admin: estado OAuth Drive + botón conectar (sin Python local)."""
+    denied = _require_admin_html(request)
+    if denied is not None:
+        return denied
+    import google_drive_oauth as gdo
+
+    return render_template(
+        "google_drive_conectar.html",
+        {
+            "request": request,
+            "status": gdo.status_snapshot(),
+            "error": None,
+            "refresh_token": None,
+            "token_warning": None,
+        },
+    )
+
+
+@app.get("/herramientas/google-drive/conectar", include_in_schema=False)
+def google_drive_conectar(request: Request):
+    """Admin: redirige a Google OAuth (drive.file, access_type=offline)."""
+    denied = _require_admin_html(request)
+    if denied is not None:
+        return denied
+    import google_drive_oauth as gdo
+
+    if not gdo.oauth_client_ready():
+        return render_template(
+            "google_drive_conectar.html",
+            {
+                "request": request,
+                "status": gdo.status_snapshot(),
+                "error": (
+                    "Faltan GOOGLE_OAUTH_CLIENT_ID y/o GOOGLE_OAUTH_CLIENT_SECRET en Render. "
+                    "Configúralos y redeploy antes de conectar."
+                ),
+                "refresh_token": None,
+                "token_warning": None,
+            },
+        )
+    try:
+        user_id = str(getattr(request.state, "user_id", "") or "")
+        state = gdo.mint_oauth_state(user_id=user_id)
+        url = gdo.build_authorize_url(state=state)
+    except ValueError as exc:
+        return render_template(
+            "google_drive_conectar.html",
+            {
+                "request": request,
+                "status": gdo.status_snapshot(),
+                "error": str(exc),
+                "refresh_token": None,
+                "token_warning": None,
+            },
+        )
+    response = RedirectResponse(url=url, status_code=302)
+    response.set_cookie(
+        key=gdo.STATE_COOKIE,
+        value=state,
+        max_age=gdo.STATE_TTL_S,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.get("/herramientas/google-drive/oauth/callback", include_in_schema=False)
+def google_drive_oauth_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+):
+    """Admin: intercambia code → guarda refresh_token cifrado en DB (+ muestra una vez)."""
+    denied = _require_admin_html(request)
+    if denied is not None:
+        return denied
+    import google_drive_oauth as gdo
+
+    ctx: dict[str, Any] = {
+        "request": request,
+        "status": gdo.status_snapshot(),
+        "error": None,
+        "refresh_token": None,
+        "token_warning": None,
+        "saved_to_db": False,
+    }
+
+    def _finish(template_ctx: dict) -> Any:
+        template_ctx["status"] = gdo.status_snapshot()
+        resp = render_template("google_drive_conectar.html", template_ctx)
+        try:
+            resp.delete_cookie(
+                gdo.STATE_COOKIE,
+                path="/",
+                secure=True,
+                httponly=True,
+                samesite="lax",
+            )
+        except Exception:
+            pass
+        return resp
+
+    if error:
+        ctx["error"] = f"Google denegó el acceso: {error}"
+        return _finish(ctx)
+
+    cookie_state = request.cookies.get(gdo.STATE_COOKIE) or ""
+    user_id = str(getattr(request.state, "user_id", "") or "")
+    state_ok = (
+        bool(state)
+        and bool(cookie_state)
+        and hmac.compare_digest(state, cookie_state)
+        and gdo.verify_oauth_state(state, user_id=user_id)
+    )
+    if not state_ok:
+        ctx["error"] = (
+            "State OAuth inválido o expirado. Vuelve a pulsar «Conectar con Google»."
+        )
+        return _finish(ctx)
+
+    if not (code or "").strip():
+        ctx["error"] = "Google no envió código de autorización."
+        return _finish(ctx)
+
+    try:
+        tokens = gdo.exchange_code_for_tokens(code.strip())
+    except Exception as exc:
+        ctx["error"] = f"No se pudo intercambiar el código: {exc}"
+        return _finish(ctx)
+
+    refresh = (tokens.get("refresh_token") or "").strip()
+    if not refresh:
+        ctx["error"] = (
+            "Google no devolvió refresh_token. Usa cliente tipo «Aplicación web» "
+            "con redirect URI exacto, revoca el acceso previo de la app en "
+            "myaccount.google.com/permissions y vuelve a conectar."
+        )
+        return _finish(ctx)
+
+    from app_settings import save_google_oauth_refresh_token
+
+    saved = save_google_oauth_refresh_token(refresh)
+    ctx["saved_to_db"] = saved
+    ctx["refresh_token"] = refresh
+    if saved:
+        ctx["token_warning"] = (
+            "Token guardado cifrado en la base (Drive ya puede usarlo tras el próximo sync). "
+            "Copia de respaldo opcional a Render como GOOGLE_OAUTH_REFRESH_TOKEN. "
+            "No lo pegues en chats."
+        )
+        _json_log("INFO", "google_drive_oauth_connected", saved_to_db=True)
+    else:
+        ctx["token_warning"] = (
+            "No se pudo guardar en DB (¿migración app_settings aplicada?). "
+            "Copia el token a Render → GOOGLE_OAUTH_REFRESH_TOKEN y redeploy. "
+            "No lo pegues en chats."
+        )
+        _json_log("WARN", "google_drive_oauth_connected", saved_to_db=False)
+    return _finish(ctx)
+
+
+@app.get("/herramientas/consulta-proceso")
+async def vista_consulta_proceso(request: Request, radicado: str = ""):
+    """Herramienta: consulta detalle/actuaciones/sujetos vía LegalAPIClient."""
+    from external_legal_client import LegalAPIClient
+
+    radicado_limpio = (radicado or "").strip()
+    api_ok = _legal_api_configurada()
+    ctx: dict[str, Any] = {
+        "request": request,
+        "radicado": radicado_limpio,
+        "api_configurada": api_ok,
+        "error": None,
+        "resultado": None,
+    }
+
+    if not radicado_limpio:
+        return render_template("consulta_proceso.html", ctx)
+
+    if not api_ok:
+        ctx["error"] = "Falta configurar LEGAL_API_BASE_URL"
+        return render_template("consulta_proceso.html", ctx)
+
+    try:
+        async with LegalAPIClient() as client:
+            id_interno = await client.consultar_id_por_radicado(radicado_limpio)
+            detalle = await client.obtener_detalle(id_interno)
+            actuaciones = await client.obtener_actuaciones(id_interno)
+            sujetos = await client.obtener_sujetos(id_interno)
+        ctx["resultado"] = {
+            "id_interno": id_interno,
+            "detalle_filas": _detalle_filas_consulta(detalle),
+            "actuaciones": [_actuacion_display_dict(a) for a in actuaciones],
+            "sujetos": [s.model_dump() for s in sujetos],
+        }
+    except HTTPException as exc:
+        detail = exc.detail
+        # Solo el detail exacto de _base_url_from_env. Mensajes que mencionan
+        # LEGAL_API_BASE_URL (p. ej. HTML/WAF) NO deben mapearse a "Falta configurar…".
+        if isinstance(detail, str) and detail.strip() == "LEGAL_API_BASE_URL no configurada":
+            ctx["error"] = "Falta configurar LEGAL_API_BASE_URL"
+        else:
+            ctx["error"] = detail if isinstance(detail, str) else "Error al consultar el proceso"
+    except Exception as exc:
+        _json_log("ERROR", "consulta_proceso_fallo", error=type(exc).__name__)
+        ctx["error"] = "No fue posible completar la consulta. Intente de nuevo."
+
+    return render_template("consulta_proceso.html", ctx)
+
+
+@app.get("/landing")
+def vista_landing_gestionlegal(request: Request):
+    """Página institucional pública de Gestión Legal."""
+    return render_template("landing_gestionlegal.html", {"request": request})
 
 
 @app.get("/phasecob")

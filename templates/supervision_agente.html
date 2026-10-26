@@ -190,6 +190,7 @@ let conversaciones = [];
 let actual = null;
 let resumenAbierto = true;
 let prevIaPhones = new Set(JSON.parse(sessionStorage.getItem('sup_ia_phones') || '[]'));
+/* Nombre/id de sesión (nunca cookie token_erp). El servidor vuelve a fijar `usuario` en cada POST. */
 const usuarioERP = {{ usuario|tojson }};
 
 function escapeHtml(value) {
