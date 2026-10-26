@@ -298,35 +298,51 @@ def obtener_usuario_por_email(email: str, conn=None) -> Optional[dict]:
             conn.release()
 
 
-def contexto_auth_usuario(user_id: str) -> dict[str, Any]:
-    """Contexto para middleware: perfil, permisos, activo.
+class ContextoAuthNoDisponible(RuntimeError):
+    """No se pudo consultar al usuario (BD caída): el middleware responde 503."""
 
-    Si el esquema aún no existe o falta el usuario, se asume ADMIN activo
-    para no expulsar a nadie en el primer rollout.
-    """
-    fallback = {
+
+def _contexto_bloqueado(user_id: str, motivo: str, usuario: Optional[dict] = None) -> dict[str, Any]:
+    usuario = usuario or {}
+    return {
         "user_id": str(user_id),
-        "nombre": "",
-        "email": "",
-        "activo": True,
-        "perfil_codigo": permisos.PERFIL_ADMIN,
-        "perfil_nombre": permisos.PERFIL_NOMBRES[permisos.PERFIL_ADMIN],
-        "permisos": permisos.permisos_de_perfil(permisos.PERFIL_ADMIN),
+        "nombre": str(usuario.get("nombre") or ""),
+        "email": str(usuario.get("email") or ""),
+        "activo": False,
+        "bloqueado": True,
+        "motivo": motivo,
+        "perfil_codigo": permisos.PERFIL_SIN_ACCESO,
+        "perfil_nombre": permisos.PERFIL_NOMBRES[permisos.PERFIL_SIN_ACCESO],
+        "permisos": frozenset(),
     }
+
+
+def contexto_auth_usuario(user_id: str) -> dict[str, Any]:
+    """Contexto para middleware: perfil, permisos, activo (fail-closed).
+
+    - Usuario inexistente => bloqueado (la sesión se descarta).
+    - Perfil ausente/desconocido => bloqueado (nunca ADMIN).
+    - Error de BD => ContextoAuthNoDisponible (503), sin otorgar privilegios.
+    """
     try:
         usuario = obtener_usuario_por_id(user_id)
-    except Exception:
-        return fallback
+    except Exception as exc:
+        raise ContextoAuthNoDisponible(repr(exc)) from exc
     if not usuario:
-        return fallback
+        return _contexto_bloqueado(user_id, "usuario_inexistente")
 
     activo = bool(usuario.get("activo", True))
+    if not permisos.perfil_valido(usuario.get("perfil_codigo")):
+        return _contexto_bloqueado(user_id, "perfil_invalido", usuario)
+
     codigo = permisos.normalizar_perfil(usuario.get("perfil_codigo"))
     return {
         "user_id": str(usuario["id"]),
         "nombre": str(usuario.get("nombre") or ""),
         "email": str(usuario.get("email") or ""),
         "activo": activo,
+        "bloqueado": not activo,
+        "motivo": "" if activo else "usuario_inactivo",
         "perfil_codigo": codigo,
         "perfil_nombre": str(
             usuario.get("perfil_nombre") or permisos.PERFIL_NOMBRES.get(codigo, codigo)

@@ -12,5 +12,5 @@ CREATE INDEX IF NOT EXISTS idx_actuaciones_proceso_drive_file
     WHERE drive_file_id IS NOT NULL AND length(trim(drive_file_id)) > 0;
 
 INSERT INTO schema_migrations(version)
-VALUES ('20261020_actuaciones_proceso_drive')
+VALUES ('20261021_actuaciones_proceso_drive')
 ON CONFLICT DO NOTHING;

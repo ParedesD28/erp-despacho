@@ -4,6 +4,7 @@ import unicodedata
 import requests
 from psycopg2.extras import RealDictCursor
 import db
+from dbrows import names_set
 
 TASAS_SFC_URL = "https://www.datos.gov.co/resource/pare-7x5i.json"
 TASA_MODALIDAD = "Consumo y ordinario"
@@ -65,7 +66,7 @@ def asegurar_tabla_tasas():
                 WHERE table_schema='public' AND table_name='historico_tasas'
                 """
             )
-            columns = {str(row[0]) for row in cur.fetchall()}
+            columns = names_set(cur.fetchall(), "column_name", lower=False)
             expected = {
                 "anio", "mes", "tasa_efectiva_anual", "tasa_usura_ea",
                 "ibc_ea", "modalidad", "vigencia_desde", "vigencia_hasta",
