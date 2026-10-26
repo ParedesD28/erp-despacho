@@ -2379,7 +2379,10 @@ def google_drive_oauth_callback(
     state: str = "",
     error: str = "",
 ):
-    """Admin: intercambia code → guarda refresh_token cifrado en DB (+ muestra una vez)."""
+    """Admin: intercambia code → guarda refresh_token cifrado en DB.
+
+    El token solo se muestra en pantalla si el guardado en DB falló.
+    """
     denied = _require_admin_html(request)
     if denied is not None:
         return denied
@@ -2397,6 +2400,8 @@ def google_drive_oauth_callback(
     def _finish(template_ctx: dict) -> Any:
         template_ctx["status"] = gdo.status_snapshot()
         resp = render_template("google_drive_conectar.html", template_ctx)
+        if template_ctx.get("refresh_token"):
+            resp.headers["Cache-Control"] = "no-store"
         try:
             resp.delete_cookie(
                 gdo.STATE_COOKIE,
@@ -2450,15 +2455,14 @@ def google_drive_oauth_callback(
 
     saved = save_google_oauth_refresh_token(refresh)
     ctx["saved_to_db"] = saved
-    ctx["refresh_token"] = refresh
     if saved:
         ctx["token_warning"] = (
-            "Token guardado cifrado en la base (Drive ya puede usarlo tras el próximo sync). "
-            "Copia de respaldo opcional a Render como GOOGLE_OAUTH_REFRESH_TOKEN. "
-            "No lo pegues en chats."
+            "Token guardado cifrado en la base. Drive ya puede usarlo tras el próximo sync. "
+            "No hace falta copiarlo a Render."
         )
         _json_log("INFO", "google_drive_oauth_connected", saved_to_db=True)
     else:
+        ctx["refresh_token"] = refresh
         ctx["token_warning"] = (
             "No se pudo guardar en DB (¿migración app_settings aplicada?). "
             "Copia el token a Render → GOOGLE_OAUTH_REFRESH_TOKEN y redeploy. "

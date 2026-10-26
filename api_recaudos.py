@@ -3,7 +3,6 @@ Router FastAPI para integración de Recaudos por IA, Conciliación de Pagos,
 Aprobación Humana de Paz y Salvo y Reportes Contables.
 """
 import os
-import secrets
 from datetime import date, datetime
 from typing import Optional
 
@@ -13,20 +12,15 @@ from psycopg2.extras import RealDictCursor
 
 import db
 import liquidador
+import m2m_keys
 import recaudos_service
 
 router = APIRouter(prefix="/api/recaudos", tags=["Recaudos y Paz y Salvo"])
 
-BOT_API_KEY = (os.getenv("LIQUIDADOR_API_KEY") or "").strip().strip('"').strip("'")
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
 
 def _require_bot_auth(request: Request):
-    expected = BOT_API_KEY
-    supplied = request.headers.get("X-API-Key")
-    if not expected:
-        raise HTTPException(status_code=503, detail="LIQUIDADOR_API_KEY no configurada")
-    if not supplied or not secrets.compare_digest(supplied, expected):
-        raise HTTPException(status_code=401, detail="No autorizado")
+    m2m_keys.require_api_key(m2m_keys.PURPOSE_RECAUDOS, request.headers.get("X-API-Key"))
 
 @router.post("/bot/abono")
 async def reportar_abono_agente(request: Request):

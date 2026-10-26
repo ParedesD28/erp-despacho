@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 from psycopg2.extras import RealDictCursor
 
 import db
+import m2m_keys
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
@@ -43,7 +44,7 @@ def _agent_url():
 
 
 def _agent_headers():
-    key = os.getenv("AGENT_SUPERVISION_KEY") or os.getenv("LIQUIDADOR_API_KEY") or ""
+    key, _origen = m2m_keys.outbound_key(m2m_keys.PURPOSE_SUPERVISION)
     return {
         "X-Agent-Supervision-Key": key,
         "Accept": "application/json",
@@ -53,17 +54,19 @@ def _agent_headers():
 
 def _proxy(method, path, *, json=None, params=None):
     base = _agent_url()
-    key = os.getenv("AGENT_SUPERVISION_KEY") or os.getenv("LIQUIDADOR_API_KEY") or ""
+    key, origen = m2m_keys.outbound_key(m2m_keys.PURPOSE_SUPERVISION)
     if not key:
         print(
-            "[SUPERVISION AGENTE][ALERTA] No existe AGENT_SUPERVISION_KEY ni LIQUIDADOR_API_KEY",
+            "[SUPERVISION AGENTE][ALERTA] No existe AGENT_SUPERVISION_KEY",
             flush=True,
         )
         return {
             "status": "error",
             "codigo": "AGENT_SUPERVISION_KEY_MISSING",
-            "mensaje": "Falta configurar AGENT_SUPERVISION_KEY (o el fallback LIQUIDADOR_API_KEY) en Render.",
+            "mensaje": "Falta configurar AGENT_SUPERVISION_KEY en Render.",
         }, 503
+    if origen == "heredada":
+        m2m_keys.note_legacy_use(m2m_keys.PURPOSE_SUPERVISION)
     try:
         response = requests.request(
             method,

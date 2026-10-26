@@ -2,7 +2,6 @@
 import os
 import io
 import time
-import secrets
 import hashlib
 import hmac
 from pathlib import Path
@@ -15,16 +14,13 @@ from psycopg2.extras import RealDictCursor
 
 import liquidador
 import exportaciones
+import m2m_keys
 
 router = APIRouter()
 
-BOT_API_KEY = (os.getenv("LIQUIDADOR_API_KEY") or "").strip().strip('"').strip("'")
 _TOKEN_TTL_SECONDS = int(os.getenv("BOT_PDF_URL_TTL", "900"))
-_PDF_SECRET = (
-    os.getenv("BOT_PDF_PUBLIC_SECRET")
-    or BOT_API_KEY
-    or ""
-).strip().strip('"').strip("'")
+
+m2m_keys.log_config_summary()
 
 
 def _public_base_url() -> str:
@@ -36,22 +32,18 @@ def _public_base_url() -> str:
 
 
 def _require_api_key(request: Request) -> None:
-    expected = BOT_API_KEY
-    supplied = request.headers.get("X-API-Key")
-    if not expected:
-        raise HTTPException(status_code=503, detail="LIQUIDADOR_API_KEY no está configurada")
-    if not supplied or not secrets.compare_digest(supplied, expected):
-        raise HTTPException(status_code=401, detail="No autorizado")
+    m2m_keys.require_api_key(m2m_keys.PURPOSE_BOT, request.headers.get("X-API-Key"))
 
 
-def _sign(filename: str, expires: int) -> str:
+def _sign(filename: str, expires: int, secret: str | None = None) -> str:
+    key = m2m_keys.signing_secret(m2m_keys.PURPOSE_PDF) if secret is None else secret
     payload = f"{filename}|{expires}".encode("utf-8")
-    return hmac.new(_PDF_SECRET.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    return hmac.new(key.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
 
 def build_signed_pdf_url(filename: str, base_url: str) -> str:
-    if not _PDF_SECRET:
-        raise RuntimeError("BOT_PDF_PUBLIC_SECRET/LIQUIDADOR_API_KEY no está configurada")
+    if not m2m_keys.signing_secret(m2m_keys.PURPOSE_PDF):
+        raise RuntimeError("BOT_PDF_PUBLIC_SECRET no está configurada")
     expires = int(time.time()) + _TOKEN_TTL_SECONDS
     token = _sign(filename, expires)
     return f"{base_url.rstrip('/')}/api/bot/pdf/{filename}?expires={expires}&token={token}"
@@ -239,7 +231,8 @@ async def liquidar_para_bot(request: Request):
 
 @router.get("/api/bot/pdf/{filename}", include_in_schema=False)
 def servir_pdf_bot(filename: str, expires: int, token: str):
-    if not _PDF_SECRET:
+    pdf_secrets = m2m_keys.verification_secrets(m2m_keys.PURPOSE_PDF)
+    if not pdf_secrets:
         raise HTTPException(status_code=503, detail="Servicio PDF no configurado")
     if not filename or Path(filename).name != filename:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
@@ -249,8 +242,12 @@ def servir_pdf_bot(filename: str, expires: int, token: str):
         raise HTTPException(status_code=403, detail="Enlace inválido")
     if expires_int < int(time.time()):
         raise HTTPException(status_code=410, detail="Enlace expirado")
-    expected = _sign(filename, expires_int)
-    if not token or not hmac.compare_digest(expected, token):
+    token_ok = False
+    for secret in pdf_secrets:
+        expected = _sign(filename, expires_int, secret)
+        if token and hmac.compare_digest(expected.encode("utf-8"), token.encode("utf-8")):
+            token_ok = True
+    if not token_ok:
         raise HTTPException(status_code=403, detail="Enlace no autorizado")
 
     import pdf_storage

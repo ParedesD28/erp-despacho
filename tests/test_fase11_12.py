@@ -11,6 +11,7 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from jinja2 import DictLoader, Environment
 
@@ -387,9 +388,7 @@ class Fase11ContractsTests(unittest.TestCase):
 
 class Fase11PdfSecurityTests(unittest.TestCase):
     def test_url_pdf_firmada_usa_hmac(self):
-        old_secret = bot_api._PDF_SECRET
-        try:
-            bot_api._PDF_SECRET = "x" * 40
+        with mock.patch.dict(os.environ, {"BOT_PDF_PUBLIC_SECRET": "x" * 40}):
             url = bot_api.build_signed_pdf_url("Estado_Cuenta_7_demo.pdf", "https://erp.example")
             self.assertIn("/api/bot/pdf/Estado_Cuenta_7_demo.pdf?", url)
             query = url.split("?", 1)[1]
@@ -398,18 +397,12 @@ class Fase11PdfSecurityTests(unittest.TestCase):
                 values["token"],
                 bot_api._sign("Estado_Cuenta_7_demo.pdf", int(values["expires"])),
             )
-        finally:
-            bot_api._PDF_SECRET = old_secret
 
     def test_pdf_bloquea_traversal(self):
-        old_secret = bot_api._PDF_SECRET
-        try:
-            bot_api._PDF_SECRET = "x" * 40
+        with mock.patch.dict(os.environ, {"BOT_PDF_PUBLIC_SECRET": "x" * 40}):
             with self.assertRaises(Exception) as ctx:
                 bot_api.servir_pdf_bot("../secreto.pdf", int(__import__("time").time()) + 60, "x")
             self.assertEqual(getattr(ctx.exception, "status_code", None), 404)
-        finally:
-            bot_api._PDF_SECRET = old_secret
 
     def test_fecha_corte_futura_rechazada(self):
         tomorrow = (date.today() + timedelta(days=1)).isoformat()
