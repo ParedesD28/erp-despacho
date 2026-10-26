@@ -9,19 +9,9 @@ import pandas as pd
 from psycopg2.extras import RealDictCursor
 
 import db
+import etapas_procesales
 
-CANONICAL_STAGES = [
-    "1. Presentación de la demanda",
-    "2. Inadmisión",
-    "3. Admisión",
-    "4. Medidas Cautelares",
-    "5. Notificación",
-    "6. Excepciones",
-    "7. Sentencia",
-    "8. Desistimiento tácito",
-    "Auto de Trámite / General",
-    "Terminación del Proceso",
-]
+CANONICAL_STAGES = list(etapas_procesales.ETAPAS_SELECCIONABLES)
 CANONICAL = set(CANONICAL_STAGES)
 TIPOS_CARTERA = {"PREJURIDICO", "JURIDICO"}
 
@@ -133,58 +123,78 @@ def _norm(value):
     return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
 
 
-def _stage_from_act(etapa, descripcion, tipificacion):
-    explicit = str(etapa or "").strip()
-    if explicit in CANONICAL:
-        return explicit
-    n = _norm(" ".join(str(x or "") for x in (etapa, tipificacion, descripcion)))
-    if any(k in n for k in ("terminacion del proceso", "archivo definitivo", "paz y salvo procesal")):
-        return "Terminación del Proceso"
-    if any(k in n for k in ("sentencia ejecutoriada", "sentencia", "fallo", "condena")):
-        return "7. Sentencia"
-    if "desistimiento tacito" in n:
-        return "8. Desistimiento tácito"
-    if any(k in n for k in ("excepcion", "excepciones", "contestacion a excepciones", "traslado de excepciones")):
-        return "6. Excepciones"
-    if any(k in n for k in ("notificacion", "notificacion personal", "citacion", "emplazamiento")):
-        return "5. Notificación"
-    if any(k in n for k in ("medida cautelar", "medidas cautelares", "embargo", "secuestro", "oficio de embargo", "libramiento de embargo")):
-        return "4. Medidas Cautelares"
-    if any(k in n for k in ("inadmis", "subsanacion")):
-        return "2. Inadmisión"
-    if any(k in n for k in ("admision", "auto admite", "mandamiento ejecutivo", "libra mandamiento", "solicitud de oficios")):
-        return "3. Admisión"
-    if any(k in n for k in ("presentacion de la demanda", "radicacion", "reparto", "reparto y radicacion", "inicio")):
-        return "1. Presentación de la demanda"
-    return None
-
-
 def _sync_stage(cur, radicado):
+    """Deriva procesos.etapa_actual de las actuaciones y la persiste.
+
+    Único punto que escribe procesos.etapa_actual a partir de actuaciones.etapa.
+    Es idempotente y nunca retrocede salvo que se elimine la actuación que
+    aportaba la etapa más alta (el valor siempre es el máximo de lo que existe).
+    Devuelve la etapa derivada o None si no hay nada que derivar.
+    """
     cols = _cols(cur, "procesos")
+    if "etapa_actual" not in cols or not _table_exists(cur, "actuaciones"):
+        return None
     if "tipo_cartera" in cols:
         cur.execute("SELECT tipo_cartera FROM procesos WHERE radicado_interno=%s LIMIT 1", (radicado,))
         row_tipo = cur.fetchone()
         if row_tipo and str(_row_value(row_tipo, "tipo_cartera", _row_value(row_tipo, 0)) or "").upper() == "PREJURIDICO":
             return None
-    if "etapa_actual" not in cols or not _table_exists(cur, "actuaciones"):
+    if "etapa" not in _cols(cur, "actuaciones"):
         return None
-    act_cols = _cols(cur, "actuaciones")
-    available = [c for c in ("etapa", "descripcion", "tipificacion_sugerida") if c in act_cols]
-    if not available:
-        return None
-    select = ", ".join(available)
-    order_col = "fecha" if "fecha" in act_cols else "id"
-    id_clause = ", id DESC" if "id" in act_cols else ""
-    cur.execute(f"SELECT {select} FROM actuaciones WHERE radicado_interno=%s ORDER BY {order_col} DESC NULLS LAST{id_clause} LIMIT 1", (radicado,))
-    act = cur.fetchone()
-    if not act:
-        return None
-    values = {name: _row_value(act, name, _row_value(act, idx)) for idx, name in enumerate(available)}
-    stage = _stage_from_act(values.get("etapa"), values.get("descripcion"), values.get("tipificacion_sugerida"))
+    # Serializa recálculos concurrentes del mismo proceso.
+    cur.execute("SELECT 1 FROM procesos WHERE radicado_interno=%s FOR UPDATE", (radicado,))
+    cur.execute("SELECT etapa FROM actuaciones WHERE radicado_interno=%s", (radicado,))
+    stage = etapas_procesales.calcular_etapa(_row_value(r, "etapa", _row_value(r, 0)) for r in cur.fetchall())
     if not stage:
         return None
-    cur.execute("UPDATE procesos SET etapa_actual=%s WHERE radicado_interno=%s", (stage, radicado))
+    cur.execute(
+        "UPDATE procesos SET etapa_actual=%s WHERE radicado_interno=%s AND etapa_actual IS DISTINCT FROM %s",
+        (stage, radicado, stage),
+    )
     return stage
+
+
+def registrar_actuacion(cur, radicado, *, fecha=None, etapa=None, descripcion=None, usuario="ERP", tipificacion=None):
+    """Crea una actuación y sincroniza procesos.etapa_actual en la misma transacción.
+
+    Lanza EtapaInvalidaError si `etapa` no está en el catálogo. Devuelve el id
+    de la actuación, o None si la base la descartó (trigger de procesos
+    prejurídicos). Toda escritura de actuaciones debe pasar por aquí.
+    """
+    etapa_norm = etapas_procesales.normalizar_etapa(etapa) or etapas_procesales.ETAPA_NEUTRA
+    if not _table_exists(cur, "actuaciones"):
+        raise RuntimeError("No existe la tabla actuaciones")
+    act_cols = _cols(cur, "actuaciones")
+    payload = {
+        "radicado_interno": radicado,
+        "fecha": fecha or date.today(),
+        "etapa": etapa_norm,
+        "descripcion": (str(descripcion).strip() if descripcion else "") or "Actuación registrada",
+        "usuario": usuario or "ERP",
+        "tipificacion_sugerida": (str(tipificacion).strip() if tipificacion else "") or "Observación",
+    }
+    use = [c for c in payload if c in act_cols]
+    if "radicado_interno" not in use or "etapa" not in use:
+        raise RuntimeError("La tabla actuaciones no contiene columnas compatibles")
+    returning = " RETURNING id" if "id" in act_cols else ""
+    cur.execute(
+        f"INSERT INTO actuaciones ({', '.join(use)}) VALUES ({', '.join(['%s'] * len(use))}){returning}",
+        [payload[c] for c in use],
+    )
+    nuevo = cur.fetchone() if returning else None
+    if returning and nuevo is None:
+        return None
+    _sync_stage(cur, radicado)
+    return _row_value(nuevo, "id", _row_value(nuevo, 0)) if nuevo is not None else True
+
+
+def eliminar_actuacion(cur, radicado, actuacion_id):
+    """Elimina una actuación y recalcula procesos.etapa_actual. False si no existe."""
+    cur.execute("DELETE FROM actuaciones WHERE id=%s AND radicado_interno=%s", (actuacion_id, radicado))
+    if cur.rowcount == 0:
+        return False
+    _sync_stage(cur, radicado)
+    return True
 
 
 def _parse_money(value, default=None):

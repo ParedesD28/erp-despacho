@@ -998,6 +998,7 @@ def detalle_expediente(request: Request, radicado: str):
                         "contactos": contactos_opts,
                         "abogados": abogados_opts,
                         "actuaciones": actuaciones,
+                        "etapas_actuacion": expedientes_service.CANONICAL_STAGES,
                         "alertas_expediente": alertas_expediente,
                         "acuerdos_crm": acuerdos,
                         "audit_ediciones": audit,
@@ -1373,24 +1374,21 @@ async def nueva_actuacion(request: Request):
     try:
         with conn:
             with conn.cursor() as cur:
-                if not expedientes_service._table_exists(cur, "actuaciones"):
-                    raise RuntimeError("No existe la tabla actuaciones")
-                cols = expedientes_service._cols(cur, "actuaciones")
-                payload = {
-                    "radicado_interno": radicado,
-                    "fecha": form.get("fecha") or date.today(),
-                    "etapa": str(form.get("etapa") or "Auto de Trámite / General").strip(),
-                    "descripcion": str(form.get("descripcion") or form.get("sub_etapa") or "Actuación registrada").strip(),
-                    "usuario": "ERP",
-                    "tipificacion_sugerida": str(form.get("sub_etapa") or "Observación").strip(),
-                }
-                use = [c for c in payload if c in cols]
-                cur.execute(
-                    f"INSERT INTO actuaciones ({', '.join(use)}) VALUES ({', '.join(['%s']*len(use))}) RETURNING id",
-                    [payload[c] for c in use],
+                nueva_id = expedientes_service.registrar_actuacion(
+                    cur,
+                    radicado,
+                    fecha=form.get("fecha") or date.today(),
+                    etapa=form.get("etapa"),
+                    descripcion=form.get("descripcion") or form.get("sub_etapa"),
+                    usuario="ERP",
+                    tipificacion=form.get("sub_etapa"),
                 )
-                expedientes_service._sync_stage(cur, radicado)
+                if nueva_id is None:
+                    raise ValueError("No se registran actuaciones en procesos prejurídicos")
         return _redirect(f"/expediente/{radicado}", mensaje="Actuación+registrada+y+etapa+actualizada")
+    except ValueError as exc:
+        print(f"[ACTUACION] Validación registrando {radicado}: {exc!r}", flush=True)
+        return _redirect(f"/expediente/{radicado}", error=str(exc))
     except Exception as exc:
         print(f"[ACTUACION] Error registrando {radicado}: {exc!r}", flush=True)
         return _redirect(f"/expediente/{radicado}", error="No+fue+posible+registrar+la+actuación")
@@ -1404,10 +1402,8 @@ def eliminar_actuacion(actuacion_id: int, radicado_interno: str):
     try:
         with conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM actuaciones WHERE id=%s AND radicado_interno=%s", (actuacion_id, radicado_interno))
-                if cur.rowcount == 0:
+                if not expedientes_service.eliminar_actuacion(cur, radicado_interno, actuacion_id):
                     raise ValueError("Actuación no encontrada")
-                expedientes_service._sync_stage(cur, radicado_interno)
         return _redirect(f"/expediente/{radicado_interno}", mensaje="Actuación+eliminada+y+etapa+recalculada")
     except Exception as exc:
         print(f"[ACTUACION] Error eliminando {actuacion_id}: {exc!r}", flush=True)
