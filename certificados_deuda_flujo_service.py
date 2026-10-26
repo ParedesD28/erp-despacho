@@ -216,7 +216,27 @@ def _meta_cuenta_bolsa(resultado: dict[str, Any]) -> dict[str, Any]:
             resultado.get("capital_limpio_a_demandar") or []
         ),
         "errores_procesamiento": list(resultado.get("errores_procesamiento") or []),
+        "saldo_anterior": resultado.get("saldo_anterior"),
+        "saldo_anterior_modo": resultado.get("saldo_anterior_modo"),
+        "saldo_anterior_desglose": list(
+            resultado.get("saldo_anterior_desglose") or []
+        ),
+        "alerta_saldo_anterior": bool(resultado.get("alerta_saldo_anterior")),
+        "alerta_saldo_anterior_mensaje": resultado.get(
+            "alerta_saldo_anterior_mensaje"
+        ),
     }
+
+
+def _advertencias_con_saldo_anterior(
+    meta: dict[str, Any], advertencias: list[str] | None = None
+) -> list[str]:
+    """Antepone alerta de saldo anterior (abogado) si aplica."""
+    adv = list(advertencias or [])
+    msg = meta.get("alerta_saldo_anterior_mensaje")
+    if meta.get("alerta_saldo_anterior") and msg and msg not in adv:
+        adv.insert(0, str(msg))
+    return adv
 
 
 def _lookup_cuenta(
@@ -238,7 +258,7 @@ def _lookup_cuenta(
             "inmueble_id": None,
             "deudores": [],
             "titular_seleccionado": None,
-            "advertencias": [],
+            "advertencias": _advertencias_con_saldo_anterior(meta),
             "motivo": MOTIVO_OMITIDO,
             "motivo_detalle": "PDF omitido / no parseado",
             "error": "PDF omitido / no parseado",
@@ -251,7 +271,7 @@ def _lookup_cuenta(
             "inmueble_id": None,
             "deudores": [],
             "titular_seleccionado": None,
-            "advertencias": [],
+            "advertencias": _advertencias_con_saldo_anterior(meta),
             "motivo": MOTIVO_SIN_CAPITAL,
             "motivo_detalle": "Sin capital limpio a demandar (Bolsa)",
             "error": "Sin capital limpio a demandar",
@@ -289,7 +309,9 @@ def _lookup_cuenta(
         principal = hallado.get("titular_principal") or (
             deudores[0] if deudores else None
         )
-        advertencias = list(hallado.get("advertencias") or [])
+        advertencias = _advertencias_con_saldo_anterior(
+            meta, list(hallado.get("advertencias") or [])
+        )
         # Preview usa los mismos campos críticos que la emisión Word.
         faltantes = faltantes_datos_criticos(hallado)
         if faltantes:
@@ -382,7 +404,7 @@ def _lookup_cuenta(
                     "es_principal": True,
                     "rol": "principal",
                 },
-                "advertencias": [],
+                "advertencias": _advertencias_con_saldo_anterior(meta),
                 "copropiedad_nit": datos_pdf.get("copropiedad_nit"),
                 "copropiedad_nombre": datos_pdf.get("copropiedad_nombre"),
                 "regla_multi_deudor": REGLA_MULTI_DEUDOR,
@@ -413,10 +435,13 @@ def _lookup_cuenta(
                 "es_principal": True,
                 "rol": "principal",
             },
-            "advertencias": [
-                "Fallback PDF: sin lista de co-propietarios Neon "
-                "(cargue el maestro para relacionar a todos)."
-            ],
+            "advertencias": _advertencias_con_saldo_anterior(
+                meta,
+                [
+                    "Fallback PDF: sin lista de co-propietarios Neon "
+                    "(cargue el maestro para relacionar a todos)."
+                ],
+            ),
             "copropiedad_nit": (copropiedad_nit or "").strip() or None,
             "copropiedad_nombre": (copropiedad_nombre or "").strip()
             or meta["conjunto"]
@@ -441,7 +466,7 @@ def _lookup_cuenta(
         "inmueble_id": None,
         "deudores": [],
         "titular_seleccionado": None,
-        "advertencias": [],
+        "advertencias": _advertencias_con_saldo_anterior(meta),
         "motivo": MOTIVO_SIN_MATCH,
         "motivo_detalle": detalle,
         "error": detalle,
@@ -456,13 +481,19 @@ def procesar_lote_certificados(
     titular_cedula: str = "",
     copropiedad_nit: str = "",
     copropiedad_nombre: str = "",
+    extender_certificado_saldo_anterior: bool = False,
 ) -> dict[str, Any]:
     """
     Bolsa Global por cuenta + lookup Neon (clave canónica).
 
     No genera Word; solo preview / diagnóstico.
+    `extender_certificado_saldo_anterior`: desglose cuotas hacia atrás
+    solo si el abogado extiende el certificado a esa fecha.
     """
-    bolsa = calcular_bolsa_lote(cuentas)
+    bolsa = calcular_bolsa_lote(
+        cuentas,
+        extender_certificado_saldo_anterior=extender_certificado_saldo_anterior,
+    )
     resultados: list[dict[str, Any]] = []
     for r in bolsa.get("resultados") or []:
         resultados.append(
@@ -756,6 +787,7 @@ def procesar_y_generar_certificados(
     incluir_poder: bool = True,
     fmi_por_indice: Optional[dict[int, str]] = None,
     edicion_por_indice: Optional[dict[int, dict[str, Any]]] = None,
+    extender_certificado_saldo_anterior: bool = False,
 ) -> dict[str, Any] | tuple[BytesIO, str, dict[str, Any]]:
     """
     Punto único: preview (dict) o generar (buffer, filename, meta).
@@ -768,6 +800,8 @@ def procesar_y_generar_certificados(
     hay `indices`, se intersectan (no se mezclan deudores entre cuentas).
     `fmi_por_indice` aplica solo en `generar` (índice del preview → FMI).
     `edicion_por_indice` (phasecob): nombre/cédula/FMI/conceptos por índice.
+    `extender_certificado_saldo_anterior`: desglose saldo anterior solo
+    si el certificado se extiende a esa fecha.
     """
     preview = procesar_lote_certificados(
         cuentas,
@@ -775,6 +809,7 @@ def procesar_y_generar_certificados(
         titular_cedula=titular_cedula,
         copropiedad_nit=copropiedad_nit,
         copropiedad_nombre=copropiedad_nombre,
+        extender_certificado_saldo_anterior=extender_certificado_saldo_anterior,
     )
     if (modo or "preview").strip().lower() != "generar":
         return preview

@@ -1,0 +1,1015 @@
+{
+  "saldo_anterior": 997872.0,
+  "fecha_inicio_mora_con_saldo": "2024.07",
+  "fecha_inicio_mora_sin_saldo": "2025.01",
+  "rows": [
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0001783",
+      "Fecha": "2024.01.01",
+      "Valor": 98000,
+      "Abono": 0,
+      "Saldo": 1095872
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0001783",
+      "Fecha": "2024.01.01",
+      "Valor": 24226,
+      "Abono": 0,
+      "Saldo": 1120098
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001403",
+      "Fecha": "2024.01.04",
+      "Valor": 0,
+      "Abono": 125774,
+      "Saldo": 994324
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001403",
+      "Fecha": "2024.01.04",
+      "Valor": 0,
+      "Abono": 24226,
+      "Saldo": 970098
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0001854",
+      "Fecha": "2024.02.01",
+      "Valor": 98000,
+      "Abono": 0,
+      "Saldo": 1068098
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0001854",
+      "Fecha": "2024.02.01",
+      "Valor": 23538,
+      "Abono": 0,
+      "Saldo": 1091636
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0001925",
+      "Fecha": "2024.03.01",
+      "Valor": 98000,
+      "Abono": 0,
+      "Saldo": 1189636
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0001925",
+      "Fecha": "2024.03.01",
+      "Valor": 25968,
+      "Abono": 0,
+      "Saldo": 1215604
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0001996",
+      "Fecha": "2024.04.01",
+      "Valor": 98000,
+      "Abono": 0,
+      "Saldo": 1313604
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0001996",
+      "Fecha": "2024.04.01",
+      "Valor": 28398,
+      "Abono": 0,
+      "Saldo": 1342002
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002067",
+      "Fecha": "2024.05.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 1452148
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002067",
+      "Fecha": "2024.05.01",
+      "Valor": 30829,
+      "Abono": 0,
+      "Saldo": 1482977
+    },
+    {
+      "Concepto": "RETROACTIVO AÑO 2026",
+      "Tipo Documento": "FAC",
+      "Número": "0002067",
+      "Fecha": "2024.05.01",
+      "Valor": 47437,
+      "Abono": 0,
+      "Saldo": 1530414
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002138",
+      "Fecha": "2024.06.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 1640560
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002138",
+      "Fecha": "2024.06.01",
+      "Valor": 33560,
+      "Abono": 0,
+      "Saldo": 1674120
+    },
+    {
+      "Concepto": "CUOTA EXTRAORDINARIA",
+      "Tipo Documento": "FAC",
+      "Número": "0002138",
+      "Fecha": "2024.06.01",
+      "Valor": 105240,
+      "Abono": 0,
+      "Saldo": 1779360
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002209",
+      "Fecha": "2024.07.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 1889506
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002209",
+      "Fecha": "2024.07.01",
+      "Valor": 36292,
+      "Abono": 0,
+      "Saldo": 1925798
+    },
+    {
+      "Concepto": "CUOTA EXTRAORDINARIA",
+      "Tipo Documento": "FAC",
+      "Número": "0002209",
+      "Fecha": "2024.07.01",
+      "Valor": 105240,
+      "Abono": 0,
+      "Saldo": 2031038
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002280",
+      "Fecha": "2024.08.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 2141184
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002280",
+      "Fecha": "2024.08.01",
+      "Valor": 39024,
+      "Abono": 0,
+      "Saldo": 2180208
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002351",
+      "Fecha": "2024.09.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 2290354
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002351",
+      "Fecha": "2024.09.01",
+      "Valor": 41755,
+      "Abono": 0,
+      "Saldo": 2332109
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002422",
+      "Fecha": "2024.10.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 2442255
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002422",
+      "Fecha": "2024.10.01",
+      "Valor": 44487,
+      "Abono": 0,
+      "Saldo": 2486742
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001803",
+      "Fecha": "2024.10.16",
+      "Valor": 0,
+      "Abono": 23538,
+      "Saldo": 2463204
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001803",
+      "Fecha": "2024.10.16",
+      "Valor": 0,
+      "Abono": 25968,
+      "Saldo": 2437236
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001803",
+      "Fecha": "2024.10.16",
+      "Valor": 0,
+      "Abono": 28398,
+      "Saldo": 2408838
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001803",
+      "Fecha": "2024.10.16",
+      "Valor": 0,
+      "Abono": 30829,
+      "Saldo": 2378009
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001803",
+      "Fecha": "2024.10.16",
+      "Valor": 0,
+      "Abono": 33560,
+      "Saldo": 2344449
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001803",
+      "Fecha": "2024.10.16",
+      "Valor": 0,
+      "Abono": 7707,
+      "Saldo": 2336742
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002493",
+      "Fecha": "2024.11.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 2446888
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002493",
+      "Fecha": "2024.11.01",
+      "Valor": 47219,
+      "Abono": 0,
+      "Saldo": 2494107
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002564",
+      "Fecha": "2024.12.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 2604253
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002564",
+      "Fecha": "2024.12.01",
+      "Valor": 49950,
+      "Abono": 0,
+      "Saldo": 2654203
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002635",
+      "Fecha": "2025.01.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 2764349
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002635",
+      "Fecha": "2025.01.01",
+      "Valor": 52682,
+      "Abono": 0,
+      "Saldo": 2817031
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001905",
+      "Fecha": "2025.01.07",
+      "Valor": 0,
+      "Abono": 235818,
+      "Saldo": 2581213
+    },
+    {
+      "Concepto": "CUOTA EXTRAORDINARIA",
+      "Tipo Documento": "RDC",
+      "Número": "0001905",
+      "Fecha": "2025.01.07",
+      "Valor": 0,
+      "Abono": 210480,
+      "Saldo": 2370733
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001905",
+      "Fecha": "2025.01.07",
+      "Valor": 0,
+      "Abono": 28585,
+      "Saldo": 2342148
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001905",
+      "Fecha": "2025.01.07",
+      "Valor": 0,
+      "Abono": 39024,
+      "Saldo": 2303124
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001905",
+      "Fecha": "2025.01.07",
+      "Valor": 0,
+      "Abono": 41755,
+      "Saldo": 2261369
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001905",
+      "Fecha": "2025.01.07",
+      "Valor": 0,
+      "Abono": 44487,
+      "Saldo": 2216882
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001905",
+      "Fecha": "2025.01.07",
+      "Valor": 0,
+      "Abono": 47219,
+      "Saldo": 2169663
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001905",
+      "Fecha": "2025.01.07",
+      "Valor": 0,
+      "Abono": 49950,
+      "Saldo": 2119713
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001905",
+      "Fecha": "2025.01.07",
+      "Valor": 0,
+      "Abono": 52682,
+      "Saldo": 2067031
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002710",
+      "Fecha": "2025.02.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 2177177
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002710",
+      "Fecha": "2025.02.01",
+      "Valor": 49565,
+      "Abono": 0,
+      "Saldo": 2226742
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002781",
+      "Fecha": "2025.03.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 2336888
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002781",
+      "Fecha": "2025.03.01",
+      "Valor": 52297,
+      "Abono": 0,
+      "Saldo": 2389185
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001981",
+      "Fecha": "2025.03.04",
+      "Valor": 0,
+      "Abono": 398138,
+      "Saldo": 1991047
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001981",
+      "Fecha": "2025.03.04",
+      "Valor": 0,
+      "Abono": 49565,
+      "Saldo": 1941482
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0001981",
+      "Fecha": "2025.03.04",
+      "Valor": 0,
+      "Abono": 52297,
+      "Saldo": 1889185
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0002009",
+      "Fecha": "2025.03.31",
+      "Valor": 0,
+      "Abono": 200000,
+      "Saldo": 1689185
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002852",
+      "Fecha": "2025.04.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 1799331
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002852",
+      "Fecha": "2025.04.01",
+      "Valor": 40195,
+      "Abono": 0,
+      "Saldo": 1839526
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002923",
+      "Fecha": "2025.05.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 1949672
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002923",
+      "Fecha": "2025.05.01",
+      "Valor": 42926,
+      "Abono": 0,
+      "Saldo": 1992598
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002994",
+      "Fecha": "2025.06.01",
+      "Valor": 110146,
+      "Abono": 0,
+      "Saldo": 2102744
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0002994",
+      "Fecha": "2025.06.01",
+      "Valor": 34243,
+      "Abono": 0,
+      "Saldo": 2136987
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003064",
+      "Fecha": "2025.07.01",
+      "Valor": 129350,
+      "Abono": 0,
+      "Saldo": 2266337
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003064",
+      "Fecha": "2025.07.01",
+      "Valor": 36292,
+      "Abono": 0,
+      "Saldo": 2302629
+    },
+    {
+      "Concepto": "CUOTA DE SEGURO AREAS COMUNES",
+      "Tipo Documento": "FAC",
+      "Número": "0003064",
+      "Fecha": "2025.07.01",
+      "Valor": 64667,
+      "Abono": 0,
+      "Saldo": 2367296
+    },
+    {
+      "Concepto": "RETROACTIVO AÑO 2026",
+      "Tipo Documento": "FAC",
+      "Número": "0003064",
+      "Fecha": "2025.07.01",
+      "Valor": 57612,
+      "Abono": 0,
+      "Saldo": 2424908
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0002129",
+      "Fecha": "2025.07.19",
+      "Valor": 0,
+      "Abono": 40195,
+      "Saldo": 2384713
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0002129",
+      "Fecha": "2025.07.19",
+      "Valor": 0,
+      "Abono": 42926,
+      "Saldo": 2341787
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0002129",
+      "Fecha": "2025.07.19",
+      "Valor": 0,
+      "Abono": 34243,
+      "Saldo": 2307544
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0002129",
+      "Fecha": "2025.07.19",
+      "Valor": 0,
+      "Abono": 32636,
+      "Saldo": 2274908
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003135",
+      "Fecha": "2025.08.01",
+      "Valor": 129350,
+      "Abono": 0,
+      "Saldo": 2404258
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003135",
+      "Fecha": "2025.08.01",
+      "Valor": 39114,
+      "Abono": 0,
+      "Saldo": 2443372
+    },
+    {
+      "Concepto": "CUOTA DE SEGURO AREAS COMUNES",
+      "Tipo Documento": "FAC",
+      "Número": "0003135",
+      "Fecha": "2025.08.01",
+      "Valor": 64667,
+      "Abono": 0,
+      "Saldo": 2508039
+    },
+    {
+      "Concepto": "RETROACTIVO AÑO 2026",
+      "Tipo Documento": "FAC",
+      "Número": "0003135",
+      "Fecha": "2025.08.01",
+      "Valor": 57612,
+      "Abono": 0,
+      "Saldo": 2565651
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003206",
+      "Fecha": "2025.09.01",
+      "Valor": 129350,
+      "Abono": 0,
+      "Saldo": 2695001
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003206",
+      "Fecha": "2025.09.01",
+      "Valor": 41325,
+      "Abono": 0,
+      "Saldo": 2736326
+    },
+    {
+      "Concepto": "CUOTA DE SEGURO AREAS COMUNES",
+      "Tipo Documento": "FAC",
+      "Número": "0003206",
+      "Fecha": "2025.09.01",
+      "Valor": 64667,
+      "Abono": 0,
+      "Saldo": 2800993
+    },
+    {
+      "Concepto": "MULTAS POR CONVIVENCIA",
+      "Tipo Documento": "FAC",
+      "Número": "0003206",
+      "Fecha": "2025.09.01",
+      "Valor": 45000,
+      "Abono": 0,
+      "Saldo": 2845993
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003277",
+      "Fecha": "2025.10.01",
+      "Valor": 129350,
+      "Abono": 0,
+      "Saldo": 2975343
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003277",
+      "Fecha": "2025.10.01",
+      "Valor": 42808,
+      "Abono": 0,
+      "Saldo": 3018151
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003348",
+      "Fecha": "2025.11.01",
+      "Valor": 129350,
+      "Abono": 0,
+      "Saldo": 3147501
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003348",
+      "Fecha": "2025.11.01",
+      "Valor": 45175,
+      "Abono": 0,
+      "Saldo": 3192676
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0002258",
+      "Fecha": "2025.11.01",
+      "Valor": 0,
+      "Abono": 3656,
+      "Saldo": 3189020
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0002258",
+      "Fecha": "2025.11.01",
+      "Valor": 0,
+      "Abono": 39114,
+      "Saldo": 3149906
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0002258",
+      "Fecha": "2025.11.01",
+      "Valor": 0,
+      "Abono": 41325,
+      "Saldo": 3108581
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0002258",
+      "Fecha": "2025.11.01",
+      "Valor": 0,
+      "Abono": 42808,
+      "Saldo": 3065773
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "RDC",
+      "Número": "0002258",
+      "Fecha": "2025.11.01",
+      "Valor": 0,
+      "Abono": 23097,
+      "Saldo": 3042676
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003419",
+      "Fecha": "2025.12.01",
+      "Valor": 129350,
+      "Abono": 0,
+      "Saldo": 3172026
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003419",
+      "Fecha": "2025.12.01",
+      "Valor": 48581,
+      "Abono": 0,
+      "Saldo": 3220607
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003490",
+      "Fecha": "2026.01.01",
+      "Valor": 129350,
+      "Abono": 0,
+      "Saldo": 3349957
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003490",
+      "Fecha": "2026.01.01",
+      "Valor": 49991,
+      "Abono": 0,
+      "Saldo": 3399948
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003561",
+      "Fecha": "2026.02.01",
+      "Valor": 129350,
+      "Abono": 0,
+      "Saldo": 3529298
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003561",
+      "Fecha": "2026.02.01",
+      "Valor": 52362,
+      "Abono": 0,
+      "Saldo": 3581660
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003632",
+      "Fecha": "2026.03.01",
+      "Valor": 129350,
+      "Abono": 0,
+      "Saldo": 3711010
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003632",
+      "Fecha": "2026.03.01",
+      "Valor": 57092,
+      "Abono": 0,
+      "Saldo": 3768102
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003703",
+      "Fecha": "2026.04.01",
+      "Valor": 148100,
+      "Abono": 0,
+      "Saldo": 3916202
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003703",
+      "Fecha": "2026.04.01",
+      "Valor": 61995,
+      "Abono": 0,
+      "Saldo": 3978197
+    },
+    {
+      "Concepto": "RETROACTIVO AÑO 2026",
+      "Tipo Documento": "FAC",
+      "Número": "0003703",
+      "Fecha": "2026.04.01",
+      "Valor": 28125,
+      "Abono": 0,
+      "Saldo": 4006322
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003774",
+      "Fecha": "2026.05.01",
+      "Valor": 148100,
+      "Abono": 0,
+      "Saldo": 4154422
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003774",
+      "Fecha": "2026.05.01",
+      "Valor": 68206,
+      "Abono": 0,
+      "Saldo": 4222628
+    },
+    {
+      "Concepto": "RETROACTIVO AÑO 2026",
+      "Tipo Documento": "FAC",
+      "Número": "0003774",
+      "Fecha": "2026.05.01",
+      "Valor": 28125,
+      "Abono": 0,
+      "Saldo": 4250753
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003847",
+      "Fecha": "2026.06.01",
+      "Valor": 148100,
+      "Abono": 0,
+      "Saldo": 4398853
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003847",
+      "Fecha": "2026.06.01",
+      "Valor": 72700,
+      "Abono": 0,
+      "Saldo": 4471553
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003918",
+      "Fecha": "2026.07.01",
+      "Valor": 148100,
+      "Abono": 0,
+      "Saldo": 4619653
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003918",
+      "Fecha": "2026.07.01",
+      "Valor": 75856,
+      "Abono": 0,
+      "Saldo": 4695509
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003989",
+      "Fecha": "2026.08.01",
+      "Valor": 148100,
+      "Abono": 0,
+      "Saldo": 4843609
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0003989",
+      "Fecha": "2026.08.01",
+      "Valor": 81125,
+      "Abono": 0,
+      "Saldo": 4924734
+    },
+    {
+      "Concepto": "CUOTA DE SEGURO AREAS COMUNES",
+      "Tipo Documento": "FAC",
+      "Número": "0003989",
+      "Fecha": "2026.08.01",
+      "Valor": 74383,
+      "Abono": 0,
+      "Saldo": 4999117
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0004060",
+      "Fecha": "2026.09.01",
+      "Valor": 148100,
+      "Abono": 0,
+      "Saldo": 5147217
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0004060",
+      "Fecha": "2026.09.01",
+      "Valor": 83286,
+      "Abono": 0,
+      "Saldo": 5230503
+    },
+    {
+      "Concepto": "CUOTA DE SEGURO AREAS COMUNES",
+      "Tipo Documento": "FAC",
+      "Número": "0004060",
+      "Fecha": "2026.09.01",
+      "Valor": 74383,
+      "Abono": 0,
+      "Saldo": 5304886
+    },
+    {
+      "Concepto": "CUOTAS DE ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0004131",
+      "Fecha": "2026.10.01",
+      "Valor": 148100,
+      "Abono": 0,
+      "Saldo": 5452986
+    },
+    {
+      "Concepto": "INTERESES ADMINISTRACION",
+      "Tipo Documento": "FAC",
+      "Número": "0004131",
+      "Fecha": "2026.10.01",
+      "Valor": 87286,
+      "Abono": 0,
+      "Saldo": 5540272
+    },
+    {
+      "Concepto": "CUOTA DE SEGURO AREAS COMUNES",
+      "Tipo Documento": "FAC",
+      "Número": "0004131",
+      "Fecha": "2026.10.01",
+      "Valor": 74383,
+      "Abono": 0,
+      "Saldo": 5614655
+    }
+  ]
+}

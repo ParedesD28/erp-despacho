@@ -178,7 +178,9 @@ def puede_ver_cobro(permisos: Optional[Iterable[str]]) -> bool:
 # /api/bot/ y /api/recaudos/bot/ usan llave M2M (m2m_keys); /sms/api/ usa token;
 # /api/v1/cron/ usa X-Cron-Secret. tests/test_m2m_rutas_publicas.py audita que toda
 # ruta registrada bajo estos prefijos se autentique por sí misma.
-PUBLIC_EXACT_PATHS: frozenset[str] = frozenset({"/", "/login", "/health", "/landing"})
+PUBLIC_EXACT_PATHS: frozenset[str] = frozenset(
+    {"/", "/login", "/health", "/landing", "/politica-de-datos"}
+)
 PUBLIC_PREFIXES: tuple[str, ...] = (
     "/static/",
     "/api/bot/",

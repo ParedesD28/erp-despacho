@@ -90,7 +90,7 @@ class ClasificacionDeRutasTests(unittest.TestCase):
         self.assertTrue(permisos.denegar_acceso(admin, "GET", "/liquidadorx"))
 
     def test_lista_publica_es_pequena_y_explicita(self):
-        for path in ("/", "/login", "/health", "/landing", "/static/css/a.css",
+        for path in ("/", "/login", "/health", "/landing", "/politica-de-datos", "/static/css/a.css",
                      "/api/bot/liquidar", "/sms/api/pendientes", "/api/v1/cron/sync-rama"):
             self.assertTrue(permisos.es_ruta_publica(path), path)
         for path in ("/static/pdfs/secreto.pdf", "/liquidador", "/pdfs/a.pdf",
