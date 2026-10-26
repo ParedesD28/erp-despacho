@@ -10,6 +10,7 @@ from psycopg2.extras import RealDictCursor
 
 import db
 import etapas_procesales
+from dbrows import names_set
 
 CANONICAL_STAGES = list(etapas_procesales.ETAPAS_SELECCIONABLES)
 CANONICAL = set(CANONICAL_STAGES)
@@ -57,11 +58,7 @@ def _ensure_inmueble_propietarios_schema(cur):
             """,
             (table,),
         )
-        actual = {
-            str(_row_value(row, "column_name"))
-            for row in cur.fetchall()
-            if _row_value(row, "column_name") is not None
-        }
+        actual = names_set(cur.fetchall(), "column_name", lower=False)
         if not actual:
             raise RuntimeError(f"[SCHEMA PREFLIGHT] Falta tabla: {table}")
         missing = sorted(expected - actual)
@@ -81,11 +78,7 @@ def _ensure_cartera_schema(cur):
         WHERE table_schema='public' AND table_name='procesos'
         """
     )
-    actual = {
-        str(_row_value(row, "column_name"))
-        for row in cur.fetchall()
-        if _row_value(row, "column_name") is not None
-    }
+    actual = names_set(cur.fetchall(), "column_name", lower=False)
     missing = sorted(required - actual)
     if missing:
         raise RuntimeError(

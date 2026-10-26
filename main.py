@@ -1395,6 +1395,19 @@ def _exigir_tabla_proceso_inactivaciones(cur) -> None:
         )
 
 
+def _log_error_estado(radicado: str, accion: str, etapa: str, exc: BaseException) -> None:
+    """Log diagnóstico sin datos sensibles: tipo, SQLSTATE, constraint y paso (no params ni motivo)."""
+    diag = getattr(exc, "diag", None)
+    print(
+        "[EXPEDIENTE][ESTADO] fallo "
+        f"radicado={radicado} accion={accion} etapa={etapa} "
+        f"tipo={type(exc).__name__} sqlstate={getattr(exc, 'pgcode', None)} "
+        f"tabla={getattr(diag, 'table_name', None)} constraint={getattr(diag, 'constraint_name', None)} "
+        f"columna={getattr(diag, 'column_name', None)} detalle={str(exc).splitlines()[0][:200] if not hasattr(exc, 'pgcode') or exc.pgcode is None else ''}",
+        flush=True,
+    )
+
+
 @app.post("/expediente/estado", include_in_schema=False)
 def cambiar_estado_expediente(
     request: Request,
@@ -1412,20 +1425,20 @@ def cambiar_estado_expediente(
         return _redirect(f"/expediente/{radicado}", error="Debe+indicar+un+motivo+de+inactivacion")
 
     conn = db.get_connection()
+    etapa = "inicio"
     try:
         # Una sola transacción: el UPDATE de estado y el registro en el
         # historial se confirman juntos o se revierten juntos.
         with conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                etapa = "verificar_historial"
                 _exigir_tabla_proceso_inactivaciones(cur)
-                cols = expedientes_service._cols(cur, "procesos")
-                if "estado" not in cols:
-                    raise RuntimeError("procesos.estado no existe en el esquema")
+                etapa = "leer_expediente"
                 cur.execute("SELECT estado FROM procesos WHERE radicado_interno=%s FOR UPDATE", (radicado,))
                 actual = cur.fetchone()
                 if not actual:
                     raise HTTPException(status_code=404, detail="Expediente no encontrado")
-                estado_actual = (actual["estado"] if isinstance(actual, dict) else actual[0]) or "ACTIVO"
+                estado_actual = first_value(actual, "estado") or "ACTIVO"
                 nuevo_estado = "INACTIVO" if accion == "INACTIVAR" else "Activo"
 
                 if accion == "INACTIVAR" and str(estado_actual).upper() == "INACTIVO":
@@ -1433,11 +1446,13 @@ def cambiar_estado_expediente(
                 if accion == "ACTIVAR" and str(estado_actual).upper() != "INACTIVO":
                     return _redirect(f"/expediente/{radicado}", mensaje="El+expediente+ya+estaba+activo")
 
+                etapa = "actualizar_estado"
                 cur.execute(
                     "UPDATE procesos SET estado=%s WHERE radicado_interno=%s",
                     (nuevo_estado, radicado),
                 )
                 usuario = str(getattr(request.state, "user_id", None) or "ERP")
+                etapa = "registrar_historial"
                 cur.execute(
                     """
                     INSERT INTO proceso_inactivaciones
@@ -1455,17 +1470,18 @@ def cambiar_estado_expediente(
     except HTTPException:
         raise
     except HistorialInactivacionNoDisponible as exc:
-        print(f"[EXPEDIENTE][ESTADO] {radicado}: {exc}", flush=True)
+        _log_error_estado(radicado, accion, etapa, exc)
         return _redirect(
             f"/expediente/{radicado}",
             error="No se cambió el estado: el historial de inactivaciones no está disponible (falta aplicar una migración). Avise al administrador.",
         )
     except Exception as exc:
-        print(f"[EXPEDIENTE][ESTADO] Error {radicado}: {exc!r}", flush=True)
-        return _redirect(
-            f"/expediente/{radicado}",
-            error="No se cambió el estado del expediente: no fue posible registrar el historial. Intente de nuevo o avise al administrador.",
-        )
+        _log_error_estado(radicado, accion, etapa, exc)
+        if etapa == "registrar_historial":
+            texto = "No se cambió el estado del expediente: no fue posible registrar el historial. Intente de nuevo o avise al administrador."
+        else:
+            texto = f"No se cambió el estado del expediente: error interno en el paso '{etapa}'. Avise al administrador."
+        return _redirect(f"/expediente/{radicado}", error=texto)
     finally:
         conn.release()
 

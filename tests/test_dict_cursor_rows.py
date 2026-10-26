@@ -97,6 +97,21 @@ class DictAndTupleCursorTests(unittest.TestCase):
                 out = sps.listar_expedientes_activos_con_radicado(cur)
                 self.assertEqual([r["radicado_interno"] for r in out], ["EXP-1"])
 
+    def test_expedientes_service_schema_checks_dict_y_tupla(self):
+        import expedientes_service as es
+
+        full = {
+            "information_schema.columns": (
+                ["column_name"],
+                [(c,) for c in ("tipo_cartera", "estado_rama", "tipo_proceso_id", "naturaleza", "estado", "inmueble_id", "contacto_id", "es_principal", "id", "identificacion")],
+            )
+        }
+        for as_dict in (True, False):
+            with self.subTest(dict_rows=as_dict):
+                cur = _Cur(as_dict, full)
+                cols = es._cols(cur, "procesos")
+                self.assertIn("estado", cols)
+
     def test_dbrows_helpers(self):
         self.assertEqual(dbrows.first_value({"existe": True}, "existe"), True)
         self.assertEqual(dbrows.first_value((False,), "existe"), False)
