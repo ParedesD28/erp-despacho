@@ -5,6 +5,7 @@ liquidador de expensas PH, supervisión de agente y administración de expedient
 """
 from __future__ import annotations
 
+from dbrows import first_value, names_set, rows_as_dicts
 import sms_router
 import cartas_cobro_router
 import certificados_deuda_router
@@ -1075,7 +1076,7 @@ def detalle_expediente(request: Request, radicado: str):
                             """,
                             (radicado,),
                         )
-                    alertas_expediente = [dict(r) for r in cur.fetchall()]
+                    alertas_expediente = rows_as_dicts(cur)
                 contactos_opts = expedientes_service._contact_options(cur)
                 abogados_opts = expedientes_service._get_abogados(cur)
                 obligaciones = obligaciones_service.obtener_obligaciones_proceso(cur, radicado)
@@ -1387,7 +1388,7 @@ class HistorialInactivacionNoDisponible(RuntimeError):
 def _exigir_tabla_proceso_inactivaciones(cur) -> None:
     cur.execute("SELECT to_regclass('public.proceso_inactivaciones') IS NOT NULL AS existe")
     row = cur.fetchone()
-    existe = row["existe"] if isinstance(row, dict) else row[0]
+    existe = first_value(row, "existe")
     if not existe:
         raise HistorialInactivacionNoDisponible(
             "tabla proceso_inactivaciones inexistente (migración 20261021_proceso_inactivaciones pendiente)"
@@ -1551,7 +1552,7 @@ def _ensure_crm_and_vencimientos_schema():
                     """,
                     (table,),
                 )
-                actual = {str(row[0]) for row in cur.fetchall()}
+                actual = names_set(cur.fetchall(), "column_name", lower=False)
                 if not actual:
                     raise RuntimeError(f"Falta tabla requerida: {table}")
                 missing = sorted(expected - actual)
