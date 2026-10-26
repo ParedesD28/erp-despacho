@@ -84,9 +84,7 @@ class _FakeConn:
 
 class InactivarSinBdTests(unittest.TestCase):
     def _call(self, conn, accion="INACTIVAR", motivo="motivo valido"):
-        with patch.object(main.db, "get_connection", return_value=conn), patch.object(
-            main.expedientes_service, "_cols", return_value={"estado"}
-        ):
+        with patch.object(main.db, "get_connection", return_value=conn):
             return main.cambiar_estado_expediente(
                 _request(), radicado_interno=RADICADO, accion=accion, motivo=motivo
             )
@@ -99,6 +97,16 @@ class InactivarSinBdTests(unittest.TestCase):
         self.assertIn("error", _query(resp))
         self.assertIn("No se cambió", _query(resp)["error"])
         self.assertNotIn("mensaje", _query(resp))
+
+    def test_error_fuera_del_historial_no_culpa_al_historial(self):
+        class BoomConn(_FakeConn):
+            def cursor(self_inner, *a, **k):
+                raise RuntimeError("boom")
+
+        resp = self._call(BoomConn())
+        msg = _query(resp)["error"]
+        self.assertNotIn("registrar el historial", msg)
+        self.assertIn("paso", msg)
 
     def test_sin_tabla_historial_no_modifica_estado(self):
         conn = _FakeConn(tabla_existe=False)
@@ -159,7 +167,8 @@ class InactivarConBdRealTests(unittest.TestCase):
         import psycopg2
         from psycopg2.extras import RealDictCursor
 
-        raw = psycopg2.connect(TEST_DSN, cursor_factory=RealDictCursor)
+        # Cursor por defecto = tupla, igual que el pool de producción.
+        raw = psycopg2.connect(TEST_DSN)
 
         class Wrapper:
             def __enter__(self_inner):
@@ -236,6 +245,43 @@ class InactivarConBdRealTests(unittest.TestCase):
         self.assertIn("No se cambió", _query(resp)["error"])
         self.assertEqual(self._estado(), "Activo")
         self.assertEqual(self._historial(), [])
+
+    def test_camino_completo_con_conexion_de_pool_cursor_tupla(self):
+        """Regresión EXP-0022: con cursor tupla fallaba _cols(procesos) antes del INSERT."""
+        resp = self._post("INACTIVAR", "motivo suficiente")
+        self.assertNotIn("error", _query(resp))
+        self.assertEqual(self._estado(), "INACTIVO")
+        self.assertEqual(len(self._historial()), 1)
+
+    def test_fallo_se_loguea_con_etapa_y_sqlstate_sin_motivo(self):
+        import io
+        from contextlib import redirect_stdout
+
+        with self.raw.cursor() as cur:
+            cur.execute(
+                """
+                CREATE OR REPLACE FUNCTION t_falla_historial() RETURNS trigger AS $$
+                BEGIN RAISE EXCEPTION 'historial caido'; END $$ LANGUAGE plpgsql
+                """
+            )
+            cur.execute(
+                "CREATE TRIGGER t_falla BEFORE INSERT ON proceso_inactivaciones "
+                "FOR EACH ROW EXECUTE FUNCTION t_falla_historial()"
+            )
+        self.raw.commit()
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                self._post("INACTIVAR", "motivo ultrasecreto")
+        finally:
+            with self.raw.cursor() as cur:
+                cur.execute("DROP TRIGGER t_falla ON proceso_inactivaciones")
+            self.raw.commit()
+        log = buf.getvalue()
+        self.assertIn("etapa=registrar_historial", log)
+        self.assertIn("sqlstate=P0001", log)
+        self.assertIn(RADICADO, log)
+        self.assertNotIn("ultrasecreto", log)
 
     def test_sin_tabla_de_historial_error_claro_y_estado_intacto(self):
         with self.raw.cursor() as cur:
