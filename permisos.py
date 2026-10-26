@@ -176,7 +176,9 @@ def puede_ver_cobro(permisos: Optional[Iterable[str]]) -> bool:
 # Rutas públicas (sin sesión). Cada una se protege con su propio mecanismo:
 # login/landing/health son abiertas; /static no sirve PDFs sensibles;
 # /api/bot/ y /sms/api/ usan API key/token; /api/v1/cron/ usa X-Cron-Secret.
-PUBLIC_EXACT_PATHS: frozenset[str] = frozenset({"/", "/login", "/health", "/landing"})
+PUBLIC_EXACT_PATHS: frozenset[str] = frozenset(
+    {"/", "/login", "/health", "/landing", "/politica-de-datos"}
+)
 PUBLIC_PREFIXES: tuple[str, ...] = (
     "/static/",
     "/api/bot/",

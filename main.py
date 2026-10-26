@@ -119,8 +119,9 @@ observability.install_exception_handling(app)
 # MIDDLEWARE DE SEGURIDAD PRODUCTIVA
 # ==============================================================================
 # La clasificación de rutas (públicas / permiso requerido / default-deny) vive en
-# permisos.py. Públicas: "/", "/login", "/health", "/landing", /static/ (salvo
-# /static/pdfs/), /api/bot/, /sms/api/ y /api/v1/cron/ (auth propia por key/secreto).
+# permisos.py. Públicas: "/", "/login", "/health", "/landing", "/politica-de-datos",
+# /static/ (salvo /static/pdfs/), /api/bot/, /sms/api/ y /api/v1/cron/ (auth propia
+# por key/secreto).
 _SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 _JSON_PATH_PREFIXES = ("/api/", "/sms/api/", "/sms/wizard/", "/supervision-agente/api/")
 _DUMMY_BCRYPT_HASH = security.hash_password("dummy-password-for-timing-equalization")
@@ -2623,6 +2624,12 @@ async def vista_consulta_proceso(request: Request, radicado: str = ""):
 def vista_landing_gestionlegal(request: Request):
     """Página institucional pública de Gestión Legal."""
     return render_template("landing_gestionlegal.html", {"request": request})
+
+
+@app.get("/politica-de-datos", include_in_schema=False)
+def vista_politica_datos(request: Request):
+    """Política de tratamiento de datos de la página pública."""
+    return render_template("politica_datos.html", {"request": request})
 
 
 @app.get("/phasecob")
