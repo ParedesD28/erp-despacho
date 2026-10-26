@@ -59,7 +59,7 @@ def calcular_bolsa_por_cuenta(
         )
         return {**meta, **vacio, "omitido": True}
 
-    # Flag por cuenta o del lote: solo entonces se desglosa saldo anterior.
+    # Flag deprecado: se acepta por compatibilidad pero la Bolsa lo ignora.
     extender = bool(
         extender_certificado_saldo_anterior
         or cuenta.get("extender_certificado_saldo_anterior")
@@ -83,8 +83,8 @@ def calcular_bolsa_lote(
 
     `cuentas` debe traer `rows` sellados (como en la caché del lote o el
     retorno interno de `procesar_lote_estados_cuenta` antes de strippear).
-    `extender_certificado_saldo_anterior`: desglose cuotas hacia atrás
-    (solo si el abogado extiende el certificado a esa fecha).
+    `extender_certificado_saldo_anterior`: DEPRECADO, se ignora (el saldo
+    anterior siempre se certifica en una fila «SALDO ANTERIOR»).
     """
     cuentas = list(cuentas or [])
     resultados = [
@@ -135,6 +135,8 @@ def generar_excel_bolsa_global(payload: dict[str, Any]) -> io.BytesIO:
                 "Saldo anterior": r.get("saldo_anterior"),
                 "Modo saldo anterior": r.get("saldo_anterior_modo") or "",
                 "Alerta saldo anterior": bool(r.get("alerta_saldo_anterior")),
+                "Saldo anterior pendiente": r.get("saldo_anterior_pendiente"),
+                "Sanciones certificadas": r.get("sanciones_certificadas"),
                 "Bolsa abonos (Σ)": r.get("bolsa_abonos"),
                 "Bolsa inicial": r.get("bolsa_global_inicial"),
                 "Bolsa remanente": r.get("bolsa_remanente_final"),

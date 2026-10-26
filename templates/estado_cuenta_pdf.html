@@ -92,17 +92,14 @@
                 co-propietarios). Analizar OK = parseo PDF; sin match = Neon no cruzó.
             </p>
             <div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-950 space-y-1">
-                <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" id="chk-extender-saldo-anterior" class="mt-1 rounded border-rose-300 text-rose-800 focus:ring-rose-500">
-                    <span>
-                        <span class="font-semibold">Extender certificado al saldo anterior</span>
-                        (desglose en cuotas de administración hacia atrás).
-                        <span class="block text-xs text-rose-800 mt-0.5">
-                            Por defecto el saldo anterior <strong>solo afecta el inicio de mora</strong>.
-                            Marque esto únicamente si la pretensión / certificado cubre ese período previo.
-                        </span>
-                    </span>
-                </label>
+                <p class="font-semibold">Saldo anterior y sanciones en el certificado</p>
+                <p class="text-xs text-rose-800">
+                    El <strong>saldo anterior</strong> siempre entra a la deuda certificada como la deuda
+                    más antigua (los abonos lo consumen primero) en una sola fila «SALDO ANTERIOR»; si es a
+                    favor, se acredita a los abonos. Puede traer intereses o sanciones previos sin separar:
+                    revise la alerta roja. Las <strong>sanciones y multas</strong> no son interés de mora:
+                    se cobran como capital en cuotas extraordinarias (alerta ámbar).
+                </p>
             </div>
             <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
                 <label class="flex items-start gap-2 cursor-pointer">
@@ -809,18 +806,10 @@
         return fetch(url, { method: 'POST', body: fd });
     }
 
-    function extenderSaldoAnteriorOpts() {
-        return !!(document.getElementById('chk-extender-saldo-anterior') || {}).checked;
-    }
-
     async function postBolsa(url, cacheId, files) {
         const fd = new FormData();
         if (cacheId) fd.append('cache_id', cacheId);
         (files || []).forEach(f => fd.append('archivos', f));
-        fd.append(
-            'extender_certificado_saldo_anterior',
-            extenderSaldoAnteriorOpts() ? 'true' : 'false'
-        );
         return fetch(url, { method: 'POST', body: fd });
     }
 
@@ -839,10 +828,6 @@
         fd.append('modo', modo);
         const opts = pdfFallbackOpts();
         fd.append('permitir_datos_pdf', opts.permitir ? 'true' : 'false');
-        fd.append(
-            'extender_certificado_saldo_anterior',
-            extenderSaldoAnteriorOpts() ? 'true' : 'false'
-        );
         if (opts.nit) fd.append('copropiedad_nit', opts.nit);
         if (opts.cedula) fd.append('titular_cedula', opts.cedula);
         if (indices && indices.length) {
@@ -1761,6 +1746,12 @@
                      <p class="font-semibold leading-snug">${esc(r.alerta_saldo_anterior_mensaje || (advertencias[0] || 'Revise saldo anterior antes de emitir.'))}</p>
                    </div>`
                 : '';
+            const alertaSancCert = r.alerta_sanciones
+                ? `<div class="mt-2 rounded-lg border-2 border-amber-500 bg-amber-100 px-3 py-2 text-sm text-amber-950" role="alert">
+                     <p class="font-black uppercase text-amber-800 text-xs tracking-wide">Alerta abogado · sanciones / multas</p>
+                     <p class="font-semibold leading-snug">${esc(r.alerta_sanciones_mensaje || 'Hay sanciones/multas certificadas como capital extraordinario.')}</p>
+                   </div>`
+                : '';
             const advHtml = advertencias.length
                 ? `<ul class="mt-1 text-xs text-amber-800 list-disc list-inside">${advertencias.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`
                 : '';
@@ -1812,6 +1803,7 @@
                 </div>
                 ${chk}
                 ${alertaSaCert}
+                ${alertaSancCert}
                 ${phaseEditHtml}
                 ${fmiHtml}
                 <div class="text-sm">
@@ -2316,7 +2308,13 @@
                 ? `<div class="rounded-lg border-2 border-rose-600 bg-rose-100 px-4 py-3 text-sm text-rose-950 space-y-1" role="alert">
                         <p class="font-black uppercase tracking-wide text-rose-800">Alerta abogado · saldo anterior</p>
                         <p class="font-semibold leading-snug">${esc(r.alerta_saldo_anterior_mensaje || 'Hay saldo anterior; revise pretensión e inicio de mora antes de emitir.')}</p>
-                        <p class="text-xs font-bold text-rose-800">Modo: ${esc(r.saldo_anterior_modo || '—')} · Monto: ${money(r.saldo_anterior)}</p>
+                        <p class="text-xs font-bold text-rose-800">Modo: ${esc(r.saldo_anterior_modo || '—')} · Monto: ${money(r.saldo_anterior)} · Pendiente certificado: ${money(r.saldo_anterior_pendiente)}</p>
+                   </div>`
+                : '';
+            const alertaSancHtml = r.alerta_sanciones
+                ? `<div class="rounded-lg border-2 border-amber-500 bg-amber-100 px-4 py-3 text-sm text-amber-950 space-y-1" role="alert">
+                        <p class="font-black uppercase tracking-wide text-amber-800">Alerta abogado · sanciones / multas</p>
+                        <p class="font-semibold leading-snug">${esc(r.alerta_sanciones_mensaje || '')}</p>
                    </div>`
                 : '';
             let filas = items.map(it => `
@@ -2337,6 +2335,7 @@
                 : '<p class="text-sm text-slate-400">Sin errores de procesamiento.</p>';
             block.innerHTML = `
                 ${alertaSaHtml}
+                ${alertaSancHtml}
                 <div class="flex flex-wrap items-start justify-between gap-2">
                     <div>
                         <p class="font-bold text-slate-800">${esc(r.titular || 'Sin titular')} · ${esc(r.archivo || '')}</p>
@@ -2401,9 +2400,12 @@
             setStatus('Sin ítems de capital limpio para generar el certificado.', true);
             return;
         }
-        if (r.alerta_saldo_anterior) {
-            const msgAlerta = r.alerta_saldo_anterior_mensaje
-                || 'Hay saldo anterior COLON. Revise pretensión e inicio de mora antes de emitir.';
+        if (r.alerta_saldo_anterior || r.alerta_sanciones) {
+            const msgAlerta = [
+                r.alerta_saldo_anterior ? (r.alerta_saldo_anterior_mensaje
+                    || 'Hay saldo anterior COLON. Revise pretensión e inicio de mora antes de emitir.') : '',
+                r.alerta_sanciones ? (r.alerta_sanciones_mensaje || '') : '',
+            ].filter(Boolean).join('\n\n');
             const okSa = window.confirm(
                 msgAlerta + '\n\n¿Continuar con la descarga del certificado? Recuerde: no se dañe el proceso.'
             );

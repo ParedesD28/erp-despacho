@@ -327,9 +327,8 @@ async def procesar_certificado_unificado(
     extender_certificado_saldo_anterior: str = Form(
         "false",
         description=(
-            "Si true, desglosa saldo anterior en cuotas hacia atrás "
-            "(solo cuando el certificado se extiende a esa fecha). "
-            "Default false: saldo solo afecta inicio de mora (opción B)."
+            "DEPRECADO (se ignora). El saldo anterior siempre entra a la "
+            "deuda certificada como una fila «SALDO ANTERIOR»."
         ),
     ),
 ):

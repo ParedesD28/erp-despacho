@@ -9,6 +9,7 @@ Refactor alineado a la auditoría v2 (docs/auditoria-determinar-mora-capital-lim
 """
 from __future__ import annotations
 
+import calendar
 import math
 import re
 import unicodedata
@@ -20,7 +21,9 @@ from typing import Any, Literal, Mapping, Sequence
 # Contrato de salida
 # ---------------------------------------------------------------------------
 
-ClaseConcepto = Literal["interes", "capital", "gasto", "no_reconocido"]
+ClaseConcepto = Literal[
+    "interes", "sancion", "capital", "gasto", "no_reconocido", "saldo_anterior"
+]
 
 
 @dataclass(frozen=True)
@@ -34,18 +37,30 @@ class ItemCapitalLimpio:
     indice_fila: int | None = None
 
 
-# Modos de incorporación del saldo anterior COLON.
-SaldoAnteriorModo = Literal["desglose_cuotas", "opcion_b"]
+# Cómo entró el saldo anterior COLON a la deuda certificada.
+#   fila_saldo_anterior: UNA fila "SALDO ANTERIOR" (deuda más antigua, la
+#                        bolsa de abonos la consume primero).
+#   a_favor:             saldo negativo; se acredita a la bolsa de abonos.
+SaldoAnteriorModo = Literal["fila_saldo_anterior", "a_favor"]
 
-_CONCEPTO_SALDO_ANTERIOR_DESGLOSE = "CUOTAS DE ADMINISTRACION (SALDO ANTERIOR)"
-_MAX_MESES_DESGLOSE_SALDO = 240
+CONCEPTO_SALDO_ANTERIOR = "SALDO ANTERIOR"
 
 _ALERTA_SALDO_ANTERIOR_BASE = (
     "ATENCIÓN ABOGADO: esta cuenta tiene saldo anterior COLON. "
-    "El saldo anterior SIEMPRE se usa para determinar el inicio de mora (Art. 1653 / Bolsa). "
-    "El desglose en cuotas de administración hacia atrás SOLO aplica si usted "
-    "extiende el certificado hasta esa fecha; si no lo extiende, no se inventan "
-    "cuotas en el capital demandado. Revise antes de emitir — no se dañe el proceso."
+    "El saldo anterior SIEMPRE forma parte de la deuda certificada: entra como "
+    "la deuda más antigua (los abonos lo consumen primero) y se certifica en una "
+    "sola fila «SALDO ANTERIOR», sin inventar cuotas mensuales. "
+    "El estado de cuenta no separa qué parte del saldo anterior es capital, "
+    "intereses o sanciones: puede incluir intereses de mora previos que NO "
+    "deberían cobrarse como capital. Revise antes de emitir (la alerta informa, "
+    "no bloquea)."
+)
+
+_ALERTA_SANCIONES_BASE = (
+    "ATENCIÓN ABOGADO: el estado de cuenta tiene sanciones/multas. No son "
+    "interés de mora: se certifican como capital en la columna de cuotas "
+    "extraordinarias. Confirme que su cobro procede (debido proceso, "
+    "reglamento de propiedad horizontal) antes de emitir."
 )
 
 
@@ -60,11 +75,15 @@ class ResultadoMoraCapitalLimpio:
     # ΣAbono bruto y saldo anterior COLON.
     bolsa_abonos: float = 0.0
     saldo_anterior: float | None = None
-    # Default: opcion_b (mora). desglose_cuotas solo si se extiende el certificado.
     saldo_anterior_modo: SaldoAnteriorModo | None = None
-    saldo_anterior_desglose: list[dict[str, Any]] = field(default_factory=list)
+    # Parte del saldo anterior que sigue viva tras los abonos (fila certificada).
+    saldo_anterior_pendiente: float = 0.0
     alerta_saldo_anterior: bool = False
     alerta_saldo_anterior_mensaje: str | None = None
+    # Sanciones/multas certificadas como capital (no son interés de mora).
+    sanciones_certificadas: float = 0.0
+    alerta_sanciones: bool = False
+    alerta_sanciones_mensaje: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -87,9 +106,12 @@ class ResultadoMoraCapitalLimpio:
             "bolsa_abonos": self.bolsa_abonos,
             "saldo_anterior": self.saldo_anterior,
             "saldo_anterior_modo": self.saldo_anterior_modo,
-            "saldo_anterior_desglose": list(self.saldo_anterior_desglose),
+            "saldo_anterior_pendiente": self.saldo_anterior_pendiente,
             "alerta_saldo_anterior": self.alerta_saldo_anterior,
             "alerta_saldo_anterior_mensaje": self.alerta_saldo_anterior_mensaje,
+            "sanciones_certificadas": self.sanciones_certificadas,
+            "alerta_sanciones": self.alerta_sanciones,
+            "alerta_sanciones_mensaje": self.alerta_sanciones_mensaje,
             "errores_procesamiento": list(self.errores_procesamiento),
         }
 
@@ -110,15 +132,17 @@ class _GrupoMes:
 
 
 # Palabras clave de negocio (matching por token / límite, no substring corto)
-KW_INTERESES: frozenset[str] = frozenset(
+# Interés de mora REAL: palabra inequívoca (INTERES*, MORATORIO/A).
+KW_INTERESES_FUERTES: frozenset[str] = frozenset(
+    {"INTERES", "INTERESES", "MORATORIO", "MORATORIA"}
+)
+# Palabras sueltas que SOLO cuentan como interés si el concepto no es una cuota
+# (CUOTA ADMINISTRACION MORA es una cuota, no un interés).
+KW_INTERESES_DEBILES: frozenset[str] = frozenset({"INT", "MORA", "MORAS"})
+KW_INTERESES: frozenset[str] = KW_INTERESES_FUERTES | KW_INTERESES_DEBILES
+# Sanciones y multas: NO son interés; se cobran como capital (extraordinarias).
+KW_SANCIONES: frozenset[str] = frozenset(
     {
-        "INTERES",
-        "INTERESES",
-        "INT",
-        "MORA",
-        "MORAS",
-        "MORATORIO",
-        "MORATORIA",
         "SANCION",
         "SANCIONES",
         "MULTA",
@@ -127,6 +151,7 @@ KW_INTERESES: frozenset[str] = frozenset(
         "PENALIDADES",
     }
 )
+_PREFIJOS_SANCION: tuple[str, ...] = ("SANCION", "MULTA", "PENALIDAD")
 KW_CAPITAL: frozenset[str] = frozenset(
     {
         "CUOTA",
@@ -145,11 +170,6 @@ KW_GASTOS: frozenset[str] = frozenset(
 
 _PESOS_DECIMALES = 2
 _EPS = 0.005  # medio centavo COP
-
-# Prefijos controlados de interés (frozenset para lookup O(1)).
-_KW_INTERES_PREFIX: frozenset[str] = frozenset(
-    {"SANCION", "INTERES", "MULTA", "PENALIDAD", "MORA"}
-)
 
 # Regex de fecha precompilados (hot path en lotes grandes).
 _RE_FECHA_PUNTO = re.compile(r"^(\d{4})\.(\d{1,2})(?:\.(\d{1,2}))?")
@@ -176,7 +196,6 @@ def resultado_vacio(*, errores: list[str] | None = None) -> dict[str, Any]:
         bolsa_abonos=0.0,
         saldo_anterior=None,
         saldo_anterior_modo=None,
-        saldo_anterior_desglose=[],
         alerta_saldo_anterior=False,
         alerta_saldo_anterior_mensaje=None,
     ).as_dict()
@@ -194,121 +213,54 @@ def _mes_anterior_corte(mes_corte: str) -> str | None:
     return _mes_valido(anio, mes - 1)
 
 
-def inferir_cuota_ordinaria_desde_rows(
-    rows: Sequence[Mapping[str, Any]] | None,
-) -> float | None:
-    """
-    Infiere valor de cuota de administración ordinaria del extracto.
-
-    Usa la primera cuota ordinaria cronológica (más cercana al período previo
-    a la ventana) para desglosar saldo anterior hacia atrás.
-    """
-    if not rows:
-        return None
-    candidatos: list[tuple[str, float]] = []
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        valor_parsed = _a_float_seguro(row.get("Valor"))
-        if valor_parsed is None or valor_parsed <= _EPS:
-            continue
-        if not _es_cuota_ordinaria(str(row.get("Concepto") or "")):
-            continue
-        mes = _extraer_mes_corte(row.get("Fecha"))
-        if mes is None:
-            continue
-        candidatos.append((mes, _redondear_cop(valor_parsed)))
-    if not candidatos:
-        return None
-    candidatos.sort(key=lambda x: x[0])
-    return candidatos[0][1]
-
-
-def desglosar_saldo_anterior_en_cuotas(
-    saldo: float,
-    cuota: float,
-    mes_antes_ventana: str,
-) -> list[dict[str, Any]]:
-    """
-    Parte `saldo` en cuotas de administración hacia atrás desde `mes_antes_ventana`.
-
-    Cada ítem: {mes_corte, fecha, valor, concepto}. El remanente < cuota
-    queda en el mes más antiguo. Tope de seguridad: _MAX_MESES_DESGLOSE_SALDO.
-    """
-    saldo = _redondear_cop(max(0.0, float(saldo)))
-    cuota = _redondear_cop(float(cuota))
-    if saldo <= _EPS or cuota <= _EPS:
-        return []
-    out: list[dict[str, Any]] = []
-    rem = saldo
-    mes: str | None = mes_antes_ventana
-    for _ in range(_MAX_MESES_DESGLOSE_SALDO):
-        if rem <= _EPS or mes is None:
-            break
-        valor = _redondear_cop(min(cuota, rem))
-        out.append(
-            {
-                "mes_corte": mes,
-                "fecha": f"{mes}.01",
-                "valor": valor,
-                "concepto": _CONCEPTO_SALDO_ANTERIOR_DESGLOSE,
-            }
-        )
-        rem = _redondear_cop(rem - valor)
-        mes = _mes_anterior_corte(mes)
-    if rem > _EPS:
-        if out:
-            out[-1]["valor"] = _redondear_cop(float(out[-1]["valor"]) + rem)
-        else:
-            out.append(
-                {
-                    "mes_corte": mes_antes_ventana,
-                    "fecha": f"{mes_antes_ventana}.01",
-                    "valor": _redondear_cop(saldo),
-                    "concepto": _CONCEPTO_SALDO_ANTERIOR_DESGLOSE,
-                }
-            )
-    return out
-
-
 def _fmt_cop_alerta(valor: float) -> str:
     """Formato compacto COP para alertas (miles con punto)."""
     entero = int(round(float(valor)))
-    return f"${entero:,}".replace(",", ".")
+    signo = "-" if entero < 0 else ""
+    return f"{signo}${abs(entero):,}".replace(",", ".")
+
+
+def _ultimo_dia_mes(mes_corte: str) -> str | None:
+    """YYYY.MM → 'YYYY.MM.DD' con el último día calendario del mes."""
+    try:
+        anio_s, mes_s = mes_corte.split(".", 1)
+        anio, mes = int(anio_s), int(mes_s)
+        return f"{anio:04d}.{mes:02d}.{calendar.monthrange(anio, mes)[1]:02d}"
+    except (TypeError, ValueError):
+        return None
 
 
 def mensaje_alerta_saldo_anterior(
     *,
     saldo: float,
     modo: SaldoAnteriorModo,
-    cuota_inferida: float | None = None,
-    n_meses_desglose: int = 0,
-    extender_certificado: bool = False,
+    pendiente: float = 0.0,
+    abonos_aplicados: float = 0.0,
 ) -> str:
     """Texto visible para el abogado (UI Bolsa / certificados)."""
     monto = _fmt_cop_alerta(saldo)
-    if modo == "desglose_cuotas":
-        cuota_txt = (
-            f" Cuota ordinaria inferida: {_fmt_cop_alerta(cuota_inferida)}."
-            if cuota_inferida and cuota_inferida > _EPS
-            else ""
+    if modo == "a_favor":
+        return (
+            f"AVISO ABOGADO: el estado de cuenta trae un saldo anterior A FAVOR "
+            f"del propietario ({monto}). Se acreditó a la bolsa de abonos "
+            "(reduce la deuda certificada); no se convirtió en cero."
         )
+    if pendiente <= _EPS:
         detalle = (
-            f" Certificado extendido: desglose en {n_meses_desglose} cuota(s) "
-            f"de administración hacia atrás (entran al capital demandado).{cuota_txt}"
+            f" Los abonos ({_fmt_cop_alerta(abonos_aplicados)}) lo cubrieron por "
+            "completo; no aparece fila «SALDO ANTERIOR» en el certificado."
+        )
+    elif abonos_aplicados > _EPS:
+        detalle = (
+            f" Tras aplicar abonos por {_fmt_cop_alerta(abonos_aplicados)} quedan "
+            f"{_fmt_cop_alerta(pendiente)} vivos, certificados en la fila "
+            "«SALDO ANTERIOR»."
         )
     else:
         detalle = (
-            " Uso actual: el saldo se restó de la bolsa solo para fechar la mora "
-            "(opción B); no se inyectaron cuotas sintéticas al capital. "
-            "Active «Extender certificado al saldo anterior» solo si la pretensión "
-            "cubre ese período previo."
+            f" Sin abonos que lo cubran: {_fmt_cop_alerta(pendiente)} certificados "
+            "en la fila «SALDO ANTERIOR»."
         )
-        if not extender_certificado and cuota_inferida and cuota_inferida > _EPS:
-            detalle += (
-                f" Cuota ordinaria inferible del extracto: {_fmt_cop_alerta(cuota_inferida)} "
-                "(disponible para desglose si extiende el certificado)."
-            )
     return f"{_ALERTA_SALDO_ANTERIOR_BASE} Saldo anterior: {monto}.{detalle}"
 
 
@@ -371,6 +323,8 @@ def _es_cuota_ordinaria(
         if normal in forzados_ordinaria or crudo in forzados_ordinaria:
             return True
     tokens = normal.split()
+    if any(_es_token_sancion(tok) for tok in tokens):
+        return False
     if any(
         tok.startswith("EXTRA") or tok in _KW_ADMIN_NO_ORDINARIA
         for tok in tokens
@@ -504,19 +458,44 @@ def _extraer_mes_corte(fecha_raw: Any) -> str | None:
     return None
 
 
-def _token_en_kw(token: str, keywords: frozenset[str]) -> bool:
-    """Match exacto o prefijo seguro (SANCION*, INTERES*). Evita INT⊂PINTURA."""
-    if token in keywords:
-        return True
-    for kw in _KW_INTERES_PREFIX:
-        if kw in keywords and token.startswith(kw):
-            return True
-    return False
+def _es_token_sancion(token: str) -> bool:
+    return token in KW_SANCIONES or token.startswith(_PREFIJOS_SANCION)
+
+
+def _es_token_interes_fuerte(token: str) -> bool:
+    return (
+        token in KW_INTERESES_FUERTES
+        or token.startswith("INTERES")
+        or token.startswith("MORATORI")
+    )
+
+
+def _es_token_cuota(token: str) -> bool:
+    return token.startswith("CUOT") or token.startswith("COUT")
+
+
+def _es_token_admin(token: str) -> bool:
+    return token.startswith("ADMIN") or token.startswith("ADMON")
+
+
+def concepto_mora_ambiguo(concepto_raw: Any) -> bool:
+    """MORA/INT suelto en un concepto que parece cuota/administración (E6)."""
+    toks = _tokens(_normalizar_texto(concepto_raw))
+    if not toks or any(_es_token_interes_fuerte(t) for t in toks):
+        return False
+    if any(_es_token_sancion(t) for t in toks):
+        return False
+    tiene_debil = any(t in KW_INTERESES_DEBILES for t in toks)
+    return tiene_debil and any(_es_token_cuota(t) or _es_token_admin(t) for t in toks)
 
 
 def _clasificar_concepto(concepto_raw: Any, cache: dict[str, ClaseConcepto] | None = None) -> ClaseConcepto:
     """
-    Prioridad: interés > gasto > capital > no_reconocido.
+    Prioridad: interés (INTERES*/MORATORIO) > sanción/multa > mora suelta
+    (solo si no es cuota/administración) > gasto > capital > no_reconocido.
+
+    Sanciones y multas NO son interés de mora: clase propia `sancion`
+    (se cobran como capital, columna de extraordinarias).
     Usa tokens normalizados (NFKD) — nunca substring corto suelto tipo INT.
     `cache` opcional memoriza por texto crudo (misma cuenta / lote).
     """
@@ -529,13 +508,17 @@ def _clasificar_concepto(concepto_raw: Any, cache: dict[str, ClaseConcepto] | No
         clase: ClaseConcepto = "no_reconocido"
     else:
         toks = _tokens(normal)
-        if any(_token_en_kw(t, KW_INTERESES) for t in toks):
+        if any(_es_token_interes_fuerte(t) for t in toks):
             clase = "interes"
-        elif any(t.startswith("INTERES") for t in toks):
+        elif any(_es_token_sancion(t) for t in toks):
+            clase = "sancion"
+        elif any(t in KW_INTERESES_DEBILES for t in toks) and not any(
+            _es_token_cuota(t) or _es_token_admin(t) for t in toks
+        ):
             clase = "interes"
-        elif any(_token_en_kw(t, KW_GASTOS) for t in toks):
+        elif any(t in KW_GASTOS for t in toks):
             clase = "gasto"
-        elif any(_token_en_kw(t, KW_CAPITAL) for t in toks):
+        elif any(t in KW_CAPITAL for t in toks):
             clase = "capital"
         else:
             clase = "no_reconocido"
@@ -560,23 +543,30 @@ def determinar_mora_y_capital_limpio(
     Método Bolsa Global (Art. 1653 / 1655 CC) — reglas estrictas:
 
     1. Sumar todos los Abono → bolsa bruta (`bolsa_abonos`).
-       Si hay `saldo_anterior` COLON:
-       - Siempre (default): Opción B — bolsa efectiva =
-         max(0, ΣAbono − saldo_anterior) para fechar inicio de mora.
-         No se inventan cuotas en capital demandado.
-       - Solo si `extender_certificado_saldo_anterior=True` y hay cuota
-         ordinaria inferible: desglose en cuotas hacia atrás (capital
-         sintético previo a la ventana; bolsa = ΣAbono completa).
-       Con saldo_anterior > 0 siempre se enciende `alerta_saldo_anterior`.
-    2. Agrupar Valor > 0 por mes YYYY.MM.
-    3. Clasificar: intereses / capital / gastos; no reconocido → alerta + capital.
-    4. Consumir mes a mes: intereses primero, luego capital.
-    5. Mes Limpio: bolsa no cubre todos los intereses → residual intereses
+    2. Saldo anterior COLON (regla del usuario, 2026-10): SIEMPRE forma parte de
+       la deuda certificada, sin depender de ningún flag.
+       - saldo > 0: entra como la deuda MÁS ANTIGUA, en UNA fila
+         «SALDO ANTERIOR» fechada el último día del mes previo a la ventana
+         (sin inventar cuotas mensuales). Los abonos la consumen primero; lo que
+         quede vivo se certifica y fecha el inicio de mora.
+       - saldo < 0 (a favor): se acredita a la bolsa de abonos.
+       Siempre se enciende `alerta_saldo_anterior` (informa; no bloquea): el
+       saldo anterior puede traer intereses/sanciones previos sin separar.
+       `extender_certificado_saldo_anterior` está DEPRECADO y se ignora
+       (se acepta solo por compatibilidad con clientes antiguos).
+    3. Agrupar Valor > 0 por mes YYYY.MM.
+    4. Clasificar: intereses / sanciones / capital / gastos; no reconocido →
+       alerta + capital. Sanciones y multas NO son interés: van a capital
+       (extraordinarias) con alerta visible (`alerta_sanciones`).
+    5. Consumir mes a mes (más antiguo primero): intereses primero, luego
+       capital (las sanciones consumen abono como el resto del capital no
+       ordinario: antes de la cuota ordinaria).
+    6. Mes Limpio: bolsa no cubre todos los intereses → residual intereses
        perdonado; capital del mes 100% intacto; ese mes = fecha_inicio_mora.
-    6. B-Remanente (cubre I_m, no todo C_m): el sobrante B−I_m amortiza
-       primero extras/gastos/no reconocidos; la cuota ordinaria al final.
-    7. Con bolsa = 0: solo capital futuro; intereses posteriores descartados.
-    8. No crash; errores por fila; corruptos → 0.0.
+    7. B-Remanente (cubre I_m, no todo C_m): el sobrante B−I_m amortiza
+       primero extras/sanciones/gastos/no reconocidos; la cuota ordinaria al final.
+    8. Con bolsa = 0: solo capital futuro; intereses de mora posteriores descartados.
+    9. No crash; errores por fila; corruptos → 0.0.
 
     Retorna dict (vía ResultadoMoraCapitalLimpio.as_dict) para consumo fácil
     desde JSON/API sin acoplar el Excel de descarga PDF→Excel.
@@ -650,6 +640,19 @@ def determinar_mora_y_capital_limpio(
                     "tratado como capital demandable (revisar pretensión judicial)."
                 )
 
+            if clase == "sancion":
+                errores.append(
+                    f"Fila {idx}: Sanción/multa '{concepto_norm}' "
+                    f"({_fmt_cop_alerta(valor)}) NO es interés de mora: se cobra "
+                    "como capital en cuotas extraordinarias (confirme que procede)."
+                )
+            elif concepto_mora_ambiguo(concepto_raw):
+                errores.append(
+                    f"Fila {idx}: Concepto '{concepto_norm}' menciona MORA pero "
+                    "parece una cuota; se trató como capital, no como interés "
+                    "(revise si en realidad es interés de mora)."
+                )
+
             item = _ItemMes(
                 indice=idx,
                 fecha=fecha_str,
@@ -680,110 +683,67 @@ def determinar_mora_y_capital_limpio(
 
     bolsa_abonos = _redondear_cop(bolsa)
     saldo_ant_val: float | None = None
-    saldo_ant = 0.0
     saldo_modo: SaldoAnteriorModo | None = None
-    saldo_desglose: list[dict[str, Any]] = []
+    saldo_pendiente = 0.0
     alerta_sa = False
     alerta_sa_msg: str | None = None
-    cuota_inferida: float | None = None
+    saldo_item_sin_mes: _ItemMes | None = None
 
+    saldo_ant = 0.0
     if saldo_anterior is not None and saldo_anterior != "":
         parsed_sa = _a_float_seguro(saldo_anterior)
         if parsed_sa is None:
             errores.append(
-                f"saldo_anterior ilegible '{saldo_anterior}'; se ignora (bolsa = ΣAbono)."
+                f"saldo_anterior ilegible '{saldo_anterior}'; se ignora "
+                "(REVISE: la deuda certificada podría quedar incompleta)."
             )
         else:
-            if parsed_sa < 0:
-                errores.append(
-                    f"saldo_anterior negativo ({parsed_sa}); se trata como 0."
-                )
-                saldo_ant = 0.0
-            else:
-                saldo_ant = _redondear_cop(parsed_sa)
+            saldo_ant = _redondear_cop(parsed_sa)
             saldo_ant_val = saldo_ant
 
-    # Default Opción B (mora). Desglose solo si se extiende el certificado.
-    if saldo_ant > _EPS:
+    if extender_certificado_saldo_anterior:
+        errores.append(
+            "extender_certificado_saldo_anterior está deprecado y se ignora: el "
+            "saldo anterior siempre se certifica en una fila «SALDO ANTERIOR»."
+        )
+
+    bolsa_inicial = bolsa_abonos
+    if saldo_ant < -_EPS:
+        credito = _redondear_cop(-saldo_ant)
+        saldo_modo = "a_favor"
         alerta_sa = True
-        extender = bool(extender_certificado_saldo_anterior)
-        primer_mes = min(meses.keys()) if meses else None
+        bolsa_inicial = _redondear_cop(bolsa_abonos + credito)
+        errores.append(
+            f"Saldo anterior a favor ({_fmt_cop_alerta(saldo_ant)}): se acredita "
+            f"a la bolsa de abonos (bolsa = ΣAbono {_fmt_cop_alerta(bolsa_abonos)} "
+            f"+ {_fmt_cop_alerta(credito)})."
+        )
+        alerta_sa_msg = mensaje_alerta_saldo_anterior(saldo=saldo_ant, modo="a_favor")
+    elif saldo_ant > _EPS:
+        saldo_modo = "fila_saldo_anterior"
+        alerta_sa = True
+        fechas_validas = sorted(
+            m
+            for m in (_extraer_mes_corte(r.get("Fecha")) for r in rows if isinstance(r, Mapping))
+            if m
+        )
+        primer_mes = min(meses.keys()) if meses else (fechas_validas[0] if fechas_validas else None)
         mes_antes = _mes_anterior_corte(primer_mes) if primer_mes else None
-        cuota_inferida = inferir_cuota_ordinaria_desde_rows(rows)
-
-        if (
-            extender
-            and mes_antes is not None
-            and cuota_inferida is not None
-            and cuota_inferida > _EPS
-        ):
-            propuesto = desglosar_saldo_anterior_en_cuotas(
-                saldo_ant, cuota_inferida, mes_antes
-            )
-            if propuesto:
-                saldo_modo = "desglose_cuotas"
-                saldo_desglose = propuesto
-                for i, parte in enumerate(saldo_desglose):
-                    mes_d = str(parte["mes_corte"])
-                    item_syn = _ItemMes(
-                        indice=-(i + 1),
-                        fecha=str(parte["fecha"]),
-                        concepto=str(parte["concepto"]),
-                        valor=_redondear_cop(float(parte["valor"])),
-                        clase="capital",
-                    )
-                    meses.setdefault(mes_d, _GrupoMes()).capitales.append(item_syn)
-                errores.append(
-                    f"Certificado extendido: saldo anterior {_fmt_cop_alerta(saldo_ant)} "
-                    f"desglosado en {len(saldo_desglose)} cuota(s) hacia atrás "
-                    f"(cuota inferida {_fmt_cop_alerta(cuota_inferida)})."
-                )
-                alerta_sa_msg = mensaje_alerta_saldo_anterior(
-                    saldo=saldo_ant,
-                    modo="desglose_cuotas",
-                    cuota_inferida=cuota_inferida,
-                    n_meses_desglose=len(saldo_desglose),
-                    extender_certificado=True,
-                )
-            else:
-                saldo_modo = "opcion_b"
+        item_sa = _ItemMes(
+            indice=-1,
+            fecha=(_ultimo_dia_mes(mes_antes) or "") if mes_antes else "",
+            concepto=CONCEPTO_SALDO_ANTERIOR,
+            valor=saldo_ant,
+            clase="saldo_anterior",
+        )
+        if mes_antes is not None:
+            meses.setdefault(mes_antes, _GrupoMes()).capitales.append(item_sa)
         else:
-            saldo_modo = "opcion_b"
-            if extender and (
-                cuota_inferida is None or cuota_inferida <= _EPS or mes_antes is None
-            ):
-                errores.append(
-                    "Se pidió extender el certificado al saldo anterior, pero no "
-                    "fue posible inferir cuota ordinaria del extracto; se usa "
-                    "opción B (solo mora, sin cuotas sintéticas)."
-                )
-
-        if saldo_modo == "opcion_b":
-            if saldo_ant > bolsa_abonos + _EPS:
-                errores.append(
-                    f"Saldo anterior ({saldo_ant}) supera ΣAbono ({bolsa_abonos}); "
-                    "bolsa efectiva = 0. Opción B: el remanente previo no se demanda "
-                    "como capital (certificado no extendido / sin desglose)."
-                )
-            else:
-                errores.append(
-                    f"Opción B: bolsa efectiva = ΣAbono ({bolsa_abonos}) − "
-                    f"saldo_anterior ({saldo_ant}) = "
-                    f"{_redondear_cop(max(0.0, bolsa_abonos - saldo_ant))} "
-                    "(solo para inicio de mora; sin cuotas sintéticas)."
-                )
-            alerta_sa_msg = mensaje_alerta_saldo_anterior(
-                saldo=saldo_ant,
-                modo="opcion_b",
-                cuota_inferida=cuota_inferida,
-                extender_certificado=extender,
+            saldo_item_sin_mes = item_sa
+            errores.append(
+                "Saldo anterior sin ninguna fecha de referencia en el extracto: "
+                "se certifica al final como «REQUIERE REVISION»."
             )
-
-    # bolsa_global_inicial: efectiva (Σ−saldo) en B; completa si desglose.
-    if saldo_modo == "opcion_b" and saldo_ant > _EPS:
-        bolsa_inicial = _redondear_cop(max(0.0, bolsa_abonos - saldo_ant))
-    else:
-        bolsa_inicial = bolsa_abonos
     bolsa = bolsa_inicial
 
     # ---- 2) Consumir bolsa cronológicamente ----
@@ -926,6 +886,75 @@ def determinar_mora_y_capital_limpio(
             )
         )
 
+    if saldo_item_sin_mes is not None:
+        consumido = _redondear_cop(min(bolsa, saldo_item_sin_mes.valor))
+        bolsa = _redondear_cop(bolsa - consumido)
+        restante = _redondear_cop(saldo_item_sin_mes.valor - consumido)
+        if restante > _EPS:
+            capital_limpio.append(
+                ItemCapitalLimpio(
+                    fecha="",
+                    concepto=CONCEPTO_SALDO_ANTERIOR,
+                    valor_a_demandar=restante,
+                    nota=(
+                        "REQUIERE REVISION: saldo anterior sin fecha de referencia; "
+                        "incluido al final para no perder deuda."
+                    ),
+                    mes_corte="FECHA_INVALIDA",
+                    clase_concepto="saldo_anterior",
+                    indice_fila=None,
+                )
+            )
+
+    # El saldo anterior que sigue vivo se explica en su propia nota.
+    capital_limpio = [
+        ItemCapitalLimpio(
+            fecha=i.fecha,
+            concepto=i.concepto,
+            valor_a_demandar=i.valor_a_demandar,
+            nota=(
+                "Saldo anterior COLON: deuda más antigua, consumida primero por "
+                "los abonos; lo que queda vivo se certifica. "
+                + i.nota
+            )
+            if i.clase_concepto == "saldo_anterior"
+            and not i.nota.startswith("Saldo anterior COLON")
+            else i.nota,
+            mes_corte=i.mes_corte,
+            clase_concepto=i.clase_concepto,
+            indice_fila=i.indice_fila,
+        )
+        for i in capital_limpio
+    ]
+
+    saldo_pendiente = _redondear_cop(
+        sum(i.valor_a_demandar for i in capital_limpio if i.clase_concepto == "saldo_anterior")
+    )
+    sanciones_cert = _redondear_cop(
+        sum(i.valor_a_demandar for i in capital_limpio if i.clase_concepto == "sancion")
+    )
+    if saldo_modo == "fila_saldo_anterior":
+        aplicado = _redondear_cop(saldo_ant - saldo_pendiente)
+        alerta_sa_msg = mensaje_alerta_saldo_anterior(
+            saldo=saldo_ant,
+            modo="fila_saldo_anterior",
+            pendiente=saldo_pendiente,
+            abonos_aplicados=aplicado,
+        )
+        errores.append(
+            f"Saldo anterior {_fmt_cop_alerta(saldo_ant)} tratado como deuda más "
+            f"antigua: abonos aplicados {_fmt_cop_alerta(aplicado)}, pendiente "
+            f"certificado {_fmt_cop_alerta(saldo_pendiente)}."
+        )
+
+    alerta_sanc = sanciones_cert > _EPS
+    alerta_sanc_msg = (
+        f"{_ALERTA_SANCIONES_BASE} Sanciones/multas certificadas: "
+        f"{_fmt_cop_alerta(sanciones_cert)}."
+        if alerta_sanc
+        else None
+    )
+
     total = _redondear_cop(sum(i.valor_a_demandar for i in capital_limpio))
 
     return ResultadoMoraCapitalLimpio(
@@ -938,7 +967,10 @@ def determinar_mora_y_capital_limpio(
         bolsa_abonos=bolsa_abonos,
         saldo_anterior=saldo_ant_val,
         saldo_anterior_modo=saldo_modo,
-        saldo_anterior_desglose=list(saldo_desglose),
+        saldo_anterior_pendiente=saldo_pendiente,
         alerta_saldo_anterior=alerta_sa,
         alerta_saldo_anterior_mensaje=alerta_sa_msg,
+        sanciones_certificadas=sanciones_cert,
+        alerta_sanciones=alerta_sanc,
+        alerta_sanciones_mensaje=alerta_sanc_msg,
     ).as_dict()

@@ -340,6 +340,19 @@ _KW_ADMIN_NO_ORDINARIA: frozenset[str] = frozenset(
 )
 
 
+# Sanciones/multas nunca son cuota ordinaria (van en extraordinarias).
+_PREFIJOS_SANCION: tuple[str, ...] = ("SANCION", "MULTA", "PENALIDAD")
+
+CONCEPTO_SALDO_ANTERIOR = "SALDO ANTERIOR"
+
+
+def _es_saldo_anterior(raw: dict[str, Any]) -> bool:
+    return (
+        str(raw.get("clase_concepto") or "") == "saldo_anterior"
+        or _normalizar_texto(str(raw.get("concepto") or "")) == CONCEPTO_SALDO_ANTERIOR
+    )
+
+
 def _es_cuota_ordinaria(
     concepto: str,
     *,
@@ -359,6 +372,8 @@ def _es_cuota_ordinaria(
         if normal in forzados_ordinaria or crudo in forzados_ordinaria:
             return True
     tokens = normal.split()
+    if any(tok.startswith(_PREFIJOS_SANCION) for tok in tokens):
+        return False
     if any(tok.startswith("EXTRA") for tok in tokens):
         return False
     tiene_cuota = any(tok.startswith("CUOT") or tok.startswith("COUT") for tok in tokens)
@@ -467,6 +482,9 @@ def agrupar_capital_limpio(
     Agrupa ítems de `capital_limpio_a_demandar` por mes/año.
 
     - CUOTAS ORDINARIAS: conceptos tipo cuota de administración (se suman).
+    - SALDO ANTERIOR: una sola fila previa a la ventana (clase `saldo_anterior`),
+      en la columna de extraordinarias (no es una cuota mensual inventada).
+    - Sanciones/multas: nunca ordinarias; van en extraordinarias.
     - CUOTAS EXTRAORDINARIAS: resto del capital limpio — **no se suman** entre sí.
       En el mismo mes: la 1ª extraordinaria va en la columna EXTRA de la fila
       principal (junto a la ordinaria); la 2ª, 3ª, … cada una en una **fila nueva**
@@ -477,6 +495,7 @@ def agrupar_capital_limpio(
     """
     forzados = normalizar_forzados_ordinaria(conceptos_forzar_ordinaria)
     buckets: "OrderedDict[tuple[int, int], dict[str, Any]]" = OrderedDict()
+    saldo_anterior: dict[tuple[int, int], float] = {}
     sin_fecha_ord = 0.0
     sin_fecha_extras: list[float] = []
     try:
@@ -498,6 +517,9 @@ def agrupar_capital_limpio(
         concepto = str(raw.get("concepto") or "")
         ordinarias = _es_cuota_ordinaria(concepto, forzados_ordinaria=forzados)
         clave = _parse_mes_anio(raw.get("fecha") or raw.get("mes_corte"))
+        if clave is not None and _es_saldo_anterior(raw):
+            saldo_anterior[clave] = saldo_anterior.get(clave, 0.0) + valor
+            continue
         if clave is None:
             if ordinarias:
                 sin_fecha_ord += valor
@@ -561,6 +583,22 @@ def agrupar_capital_limpio(
     ordenados = sorted(buckets.items(), key=lambda kv: (kv[0][0], kv[0][1]))
     filas: list[FilaCertificado] = []
     acum = 0.0
+    # SALDO ANTERIOR: UNA fila por fecha previa a la ventana, antes de las cuotas.
+    for (anio, mes), valor_sa in sorted(saldo_anterior.items()):
+        valor_sa = round(valor_sa, 2)
+        acum = round(acum + valor_sa, 2)
+        filas.append(
+            FilaCertificado(
+                mes=CONCEPTO_SALDO_ANTERIOR,
+                anio=anio,
+                cuotas_ordinarias=0.0,
+                cuotas_extraordinarias=valor_sa,
+                vencimiento=_fmt_vencimiento(anio, mes, 31),
+                saldo=acum,
+                es_extra_adicional=False,
+                indice_extra=0,
+            )
+        )
     for (anio, mes), montos in ordenados:
         mes_label = _MESES_ES[mes] if 1 <= mes <= 12 else f"MES{mes}"
         nuevas, acum = _emitir_filas_mes(

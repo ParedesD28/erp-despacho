@@ -2836,8 +2836,8 @@ async def calcular_bolsa_global_estado_cuenta(
     Método Bolsa Global por deudor/archivo (Art. 1653-1655).
     Endpoint aparte del Excel de transcripción (PR #20).
     Requiere sesión + accion.editar (middleware genérico de POST).
-    `extender_certificado_saldo_anterior`: desglose cuotas hacia atrás
-    solo si el abogado extiende el certificado a esa fecha.
+    `extender_certificado_saldo_anterior`: DEPRECADO, se ignora (el saldo
+    anterior siempre se certifica en una fila «SALDO ANTERIOR»).
     """
     return await _payload_bolsa_global(
         cache_id,

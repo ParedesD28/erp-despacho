@@ -218,21 +218,25 @@ def _meta_cuenta_bolsa(resultado: dict[str, Any]) -> dict[str, Any]:
         "errores_procesamiento": list(resultado.get("errores_procesamiento") or []),
         "saldo_anterior": resultado.get("saldo_anterior"),
         "saldo_anterior_modo": resultado.get("saldo_anterior_modo"),
-        "saldo_anterior_desglose": list(
-            resultado.get("saldo_anterior_desglose") or []
-        ),
+        "saldo_anterior_pendiente": resultado.get("saldo_anterior_pendiente"),
         "alerta_saldo_anterior": bool(resultado.get("alerta_saldo_anterior")),
         "alerta_saldo_anterior_mensaje": resultado.get(
             "alerta_saldo_anterior_mensaje"
         ),
+        "sanciones_certificadas": resultado.get("sanciones_certificadas"),
+        "alerta_sanciones": bool(resultado.get("alerta_sanciones")),
+        "alerta_sanciones_mensaje": resultado.get("alerta_sanciones_mensaje"),
     }
 
 
 def _advertencias_con_saldo_anterior(
     meta: dict[str, Any], advertencias: list[str] | None = None
 ) -> list[str]:
-    """Antepone alerta de saldo anterior (abogado) si aplica."""
+    """Antepone alertas al abogado (saldo anterior y sanciones/multas) si aplican."""
     adv = list(advertencias or [])
+    msg_sanc = meta.get("alerta_sanciones_mensaje")
+    if meta.get("alerta_sanciones") and msg_sanc and msg_sanc not in adv:
+        adv.insert(0, str(msg_sanc))
     msg = meta.get("alerta_saldo_anterior_mensaje")
     if meta.get("alerta_saldo_anterior") and msg and msg not in adv:
         adv.insert(0, str(msg))
@@ -487,8 +491,8 @@ def procesar_lote_certificados(
     Bolsa Global por cuenta + lookup Neon (clave canónica).
 
     No genera Word; solo preview / diagnóstico.
-    `extender_certificado_saldo_anterior`: desglose cuotas hacia atrás
-    solo si el abogado extiende el certificado a esa fecha.
+    `extender_certificado_saldo_anterior`: DEPRECADO, se ignora (el saldo
+    anterior siempre se certifica en una fila «SALDO ANTERIOR»).
     """
     bolsa = calcular_bolsa_lote(
         cuentas,
@@ -800,8 +804,8 @@ def procesar_y_generar_certificados(
     hay `indices`, se intersectan (no se mezclan deudores entre cuentas).
     `fmi_por_indice` aplica solo en `generar` (índice del preview → FMI).
     `edicion_por_indice` (phasecob): nombre/cédula/FMI/conceptos por índice.
-    `extender_certificado_saldo_anterior`: desglose saldo anterior solo
-    si el certificado se extiende a esa fecha.
+    `extender_certificado_saldo_anterior`: DEPRECADO, se ignora (el saldo
+    anterior siempre se certifica en una fila «SALDO ANTERIOR»).
     """
     preview = procesar_lote_certificados(
         cuentas,

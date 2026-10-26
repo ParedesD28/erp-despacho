@@ -228,28 +228,110 @@ def _es_titular_candidato(linea: str) -> bool:
     return letras >= 4 and not _DOC_TIPO_RE.match(linea)
 
 
+_MONTO_SOLO_RE = re.compile(r"^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$|^-?\d+(?:\.\d+)?$")
+_SALDO_ANT_PIE_RE = re.compile(
+    r"^(?:(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*)?saldo\s+ant\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _saldo_anterior_en_linea(linea: str) -> float | None:
+    """Monto en la MISMA línea que «Saldo anterior» (layout Print-to-PDF)."""
+    m = _SALDO_ANTERIOR_LINE_RE.match((linea or "").strip())
+    if not m:
+        return None
+    montos = _SALDO_ANTERIOR_MONEY_RE.findall(m.group(1) or "")
+    if not montos:
+        return None
+    try:
+        return _parse_monto(montos[-1])
+    except (ValueError, TypeError):
+        return None
+
+
+def _saldo_anterior_pie(lineas: list[str]) -> float | None:
+    """
+    Pie del extracto COLON: «<monto> Saldo Ant.». En el layout partido el monto
+    queda en la línea anterior; en el layout compacto, pegado a la etiqueta.
+    Última ocurrencia gana (el pie está al final del extracto).
+    """
+    hallado: float | None = None
+    for i, linea in enumerate(lineas):
+        texto = (linea or "").strip()
+        m = _SALDO_ANT_PIE_RE.match(texto)
+        if not m:
+            continue
+        monto_txt = m.group(1)
+        if monto_txt is None and i > 0:
+            previa = (lineas[i - 1] or "").strip()
+            if _MONTO_SOLO_RE.match(previa):
+                monto_txt = previa
+        if monto_txt is None:
+            continue
+        try:
+            hallado = _parse_monto(monto_txt)
+        except (ValueError, TypeError):
+            continue
+    return hallado
+
+
+def _saldo_anterior_columnas_partidas(lineas: list[str]) -> float | None:
+    """
+    Tabla de movimientos con columnas partidas por pypdf: tras la etiqueta
+    «Saldo anterior» (y su « . . ») vienen líneas solo-monto: Valor, Abono, Saldo.
+    El saldo anterior es la 3ª cifra. Se ignora la portada («Saldo anterior /
+    Saldo Total» es un encabezado de columnas, no un saldo).
+    """
+    hallado: float | None = None
+    n = len(lineas)
+    for i, linea in enumerate(lineas):
+        if (linea or "").strip().lower() != "saldo anterior":
+            continue
+        nums: list[float] = []
+        for j in range(i + 1, min(n, i + 12)):
+            sig = (lineas[j] or "").strip()
+            if not sig or set(sig.replace(" ", "")) <= {".", "_", "-"}:
+                continue
+            if _MONTO_SOLO_RE.match(sig):
+                try:
+                    nums.append(_parse_monto(sig))
+                except (ValueError, TypeError):
+                    break
+                if len(nums) == 3:
+                    break
+                continue
+            break
+        if len(nums) == 3:
+            hallado = nums[2]
+    return hallado
+
+
 def extraer_saldo_anterior(lineas: list[str] | None) -> float | None:
     """
     Extrae el monto de 'Saldo anterior' del texto COLON (float|None).
 
+    Soporta los dos layouts reales del extracto:
+      1) compacto: «Saldo anterior . . 0 0 997,872» (monto en la misma línea);
+      2) partido por pypdf: etiqueta en una línea y los montos en líneas
+         siguientes; respaldo fiable = pie «<monto> / Saldo Ant.».
+    La portada («Saldo anterior / Saldo Total» + saldos por concepto) NO se usa.
+
     No crea filas de movimiento: el monto va a metadata (`cabecera.saldo_anterior`)
-    para Opción B de Bolsa (reducir ΣAbono). Sigue siendo ruido como concepto FAC.
+    y la Bolsa lo incorpora como la deuda más antigua.
     """
     if not lineas:
         return None
     hallado: float | None = None
     for linea in lineas:
-        m = _SALDO_ANTERIOR_LINE_RE.match((linea or "").strip())
-        if not m:
-            continue
-        montos = _SALDO_ANTERIOR_MONEY_RE.findall(m.group(1) or "")
-        if not montos:
-            continue
-        try:
-            hallado = _parse_monto(montos[-1])
-        except (ValueError, TypeError):
-            continue
-    return hallado
+        valor = _saldo_anterior_en_linea(linea)
+        if valor is not None:
+            hallado = valor
+    if hallado is not None:
+        return hallado
+    hallado = _saldo_anterior_pie(lineas)
+    if hallado is not None:
+        return hallado
+    return _saldo_anterior_columnas_partidas(lineas)
 
 
 def extraer_cabecera_portada(lineas: list[str]) -> dict:
@@ -501,8 +583,9 @@ def analizar_estado_cuenta_pdf(source: Source) -> dict:
         chars_movimiento += len(texto.strip())
         lineas.extend(_limpiar_lineas(texto))
 
-    # Saldo anterior: metadata (Opción B Bolsa); no se convierte en fila FAC.
-    cabecera["saldo_anterior"] = extraer_saldo_anterior(lineas_portada + lineas)
+    # Saldo anterior: metadata para la Bolsa (deuda más antigua); no es fila FAC.
+    # Solo páginas de movimientos: la portada trae saldos por concepto, no el saldo anterior.
+    cabecera["saldo_anterior"] = extraer_saldo_anterior(lineas)
 
     chars_portada = sum(len(x) for x in lineas_portada)
     sin_texto = chars_portada + chars_movimiento < _MIN_CHARS_TEXTO or not lineas
