@@ -128,9 +128,41 @@ class OAuthRoutesTests(unittest.TestCase):
                 params={"code": "authcode", "state": state},
             )
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(b"rt-test-abc", resp.content)
+        self.assertNotIn(b"rt-test-abc", resp.content)
+        self.assertNotIn(b"<textarea", resp.content)
         self.assertIn(b"guardado", resp.content.lower())
         mock_save.assert_called_once_with("rt-test-abc")
+
+    def test_callback_muestra_token_solo_si_falla_guardado(self) -> None:
+        from fastapi.testclient import TestClient
+        import google_drive_oauth as gdo
+        import permisos
+
+        client = TestClient(self.app)
+        state = gdo.mint_oauth_state(user_id="7")
+
+        def _ctx(request, uid):
+            request.state.user_id = "7"
+            request.state.perfil_codigo = permisos.PERFIL_ADMIN
+            request.state.permisos = permisos.permisos_de_perfil(permisos.PERFIL_ADMIN)
+            return None
+
+        with patch("main.verify_session", return_value="7"), patch(
+            "main._aplicar_contexto_permisos", side_effect=_ctx
+        ), patch(
+            "google_drive_oauth.exchange_code_for_tokens",
+            return_value={"refresh_token": "rt-test-abc", "access_token": "at"},
+        ), patch(
+            "app_settings.save_google_oauth_refresh_token", return_value=False
+        ):
+            client.cookies.set(gdo.STATE_COOKIE, state)
+            resp = client.get(
+                "/herramientas/google-drive/oauth/callback",
+                params={"code": "authcode", "state": state},
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"rt-test-abc", resp.content)
+        self.assertEqual(resp.headers.get("cache-control"), "no-store")
 
 
 if __name__ == "__main__":

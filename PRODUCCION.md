@@ -5,7 +5,8 @@
 ERP:
 - `DATABASE_URL`
 - `ERP_SESSION_SECRET` — secreto aleatorio largo (mínimo 32 caracteres). Es obligatorio y no se usa como fallback ninguna otra variable.
-- `LIQUIDADOR_API_KEY`
+- `BOT_API_KEY`, `RECAUDOS_API_KEY`, `BOT_PDF_PUBLIC_SECRET`, `AGENT_SUPERVISION_KEY` — llaves M2M independientes (una por propósito). Ver runbook de llaves separadas.
+- `LIQUIDADOR_API_KEY` — llave compartida HEREDADA; solo durante la transición (el ERP la acepta junto a las nuevas). Retirarla borrándola o con `M2M_LEGACY_KEY_ENABLED=false`.
 - `PUBLIC_BASE_URL` — URL pública del servicio ERP, por ejemplo `https://gestionjudicial.onrender.com`.
 - `GEMINI_API_KEY` — recomendada; primer proveedor gratis del pool PDF (visión nativa) en `/herramientas/estado-cuenta` cuando no hay texto seleccionable. Key: https://aistudio.google.com/apikey.
 - `GROQ_API_KEY` — opcional gratis; visión por imágenes (PDF→JPEG). https://console.groq.com/
