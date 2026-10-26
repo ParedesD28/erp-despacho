@@ -26,9 +26,13 @@ class MetaCuentaBolsa(TypedDict):
     conjunto: str
     movimientos_extraidos: int
     error_parseo: str | None
+    saldo_anterior_cuenta: float | None
 
 
 def _meta_cuenta(cuenta: dict[str, Any]) -> MetaCuentaBolsa:
+    saldo = cuenta.get("saldo_anterior")
+    if saldo is None and isinstance(cuenta.get("cabecera"), dict):
+        saldo = cuenta["cabecera"].get("saldo_anterior")
     return {
         "archivo": str(cuenta.get("archivo") or ""),
         "titular": str(cuenta.get("titular") or ""),
@@ -38,10 +42,15 @@ def _meta_cuenta(cuenta: dict[str, Any]) -> MetaCuentaBolsa:
         "conjunto": str(cuenta.get("conjunto") or ""),
         "movimientos_extraidos": int(cuenta.get("movimientos_extraidos") or 0),
         "error_parseo": cuenta.get("error") or None,
+        "saldo_anterior_cuenta": saldo if saldo is not None else None,
     }
 
 
-def calcular_bolsa_por_cuenta(cuenta: dict[str, Any]) -> dict[str, Any]:
+def calcular_bolsa_por_cuenta(
+    cuenta: dict[str, Any],
+    *,
+    extender_certificado_saldo_anterior: bool = False,
+) -> dict[str, Any]:
     """Ejecuta Bolsa Global sobre una cuenta (un PDF / deudor)."""
     meta = _meta_cuenta(cuenta)
     if cuenta.get("error"):
@@ -50,20 +59,40 @@ def calcular_bolsa_por_cuenta(cuenta: dict[str, Any]) -> dict[str, Any]:
         )
         return {**meta, **vacio, "omitido": True}
 
+    # Flag por cuenta o del lote: solo entonces se desglosa saldo anterior.
+    extender = bool(
+        extender_certificado_saldo_anterior
+        or cuenta.get("extender_certificado_saldo_anterior")
+    )
     rows = cuenta.get("rows") or []
-    resultado = determinar_mora_y_capital_limpio(rows)
+    resultado = determinar_mora_y_capital_limpio(
+        rows,
+        saldo_anterior=meta.get("saldo_anterior_cuenta"),
+        extender_certificado_saldo_anterior=extender,
+    )
     return {**meta, **resultado, "omitido": False}
 
 
-def calcular_bolsa_lote(cuentas: list[dict[str, Any]] | None) -> dict[str, Any]:
+def calcular_bolsa_lote(
+    cuentas: list[dict[str, Any]] | None,
+    *,
+    extender_certificado_saldo_anterior: bool = False,
+) -> dict[str, Any]:
     """
     Un bloque de resultado por deudor/archivo (sin mezclar rows entre cuentas).
 
     `cuentas` debe traer `rows` sellados (como en la caché del lote o el
     retorno interno de `procesar_lote_estados_cuenta` antes de strippear).
+    `extender_certificado_saldo_anterior`: desglose cuotas hacia atrás
+    (solo si el abogado extiende el certificado a esa fecha).
     """
     cuentas = list(cuentas or [])
-    resultados = [calcular_bolsa_por_cuenta(c) for c in cuentas]
+    resultados = [
+        calcular_bolsa_por_cuenta(
+            c, extender_certificado_saldo_anterior=extender_certificado_saldo_anterior
+        )
+        for c in cuentas
+    ]
     con_capital = 0
     total_lote = 0.0
     for r in resultados:
@@ -103,6 +132,10 @@ def generar_excel_bolsa_global(payload: dict[str, Any]) -> io.BytesIO:
                 "Codigo Cuenta": r.get("codigo_cuenta") or "",
                 "Fecha inicio mora": r.get("fecha_inicio_mora") or "",
                 "Total capital demandado": r.get("total_capital_demandado"),
+                "Saldo anterior": r.get("saldo_anterior"),
+                "Modo saldo anterior": r.get("saldo_anterior_modo") or "",
+                "Alerta saldo anterior": bool(r.get("alerta_saldo_anterior")),
+                "Bolsa abonos (Σ)": r.get("bolsa_abonos"),
                 "Bolsa inicial": r.get("bolsa_global_inicial"),
                 "Bolsa remanente": r.get("bolsa_remanente_final"),
                 "Ítems capital limpio": len(r.get("capital_limpio_a_demandar") or []),

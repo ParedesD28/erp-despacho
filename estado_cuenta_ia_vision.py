@@ -215,6 +215,7 @@ _TOOL_SCHEMA = {
                     "apartamento": {"type": ["string", "null"]},
                     "codigo_cuenta": {"type": ["string", "null"]},
                     "nit": {"type": ["string", "null"]},
+                    "saldo_anterior": {"type": ["number", "null"]},
                 },
                 "required": [
                     "conjunto",
@@ -223,6 +224,7 @@ _TOOL_SCHEMA = {
                     "apartamento",
                     "codigo_cuenta",
                     "nit",
+                    "saldo_anterior",
                 ],
                 "additionalProperties": False,
             },
@@ -247,7 +249,8 @@ con esta forma exacta:
     "bloque": "string o null",
     "apartamento": "string o null",
     "codigo_cuenta": "string o null",
-    "nit": "string o null"
+    "nit": "string o null",
+    "saldo_anterior": "number o null"
   },
   "movimientos": [
     {
@@ -263,7 +266,8 @@ con esta forma exacta:
 }
 
 Reglas estrictas:
-- Extrae SOLO filas de movimiento reales (FAC/RDC u otros docs). Ignora "Periodo N", "Saldo anterior", subtotales, totales, pie de página.
+- Extrae SOLO filas de movimiento reales (FAC/RDC u otros docs). Ignora "Periodo N", subtotales, totales, pie de página.
+- "Saldo anterior": NO inventes una fila FAC/RDC. Copia el monto numérico a cabecera.saldo_anterior (o null si no aparece). No lo uses como movimiento.
 - Fechas siempre YYYY.MM.DD (puntos, no guiones).
 - Montos como números (sin comas de miles). valor/abono/saldo >= 0.
 - No inventes movimientos. Si un campo no se lee, usa null en cabecera o omite la fila dudosa.
@@ -481,6 +485,16 @@ def validar_y_mapear_respuesta_ia(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(movs_raw, list) or not movs_raw:
         raise EstadoCuentaIaError("La IA no extrajo movimientos.")
 
+    saldo_ant_raw = cab_raw.get("saldo_anterior")
+    saldo_anterior: float | None = None
+    if saldo_ant_raw is not None and saldo_ant_raw != "":
+        try:
+            saldo_anterior = _normalizar_monto(saldo_ant_raw)
+            if saldo_anterior < 0:
+                saldo_anterior = None
+        except (ValueError, TypeError):
+            saldo_anterior = None
+
     cabecera = {
         "titular": (str(cab_raw["titular"]).strip() if cab_raw.get("titular") else None),
         "bloque": (str(cab_raw["bloque"]).strip() if cab_raw.get("bloque") is not None else None),
@@ -495,6 +509,7 @@ def validar_y_mapear_respuesta_ia(data: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
         "conjunto": (str(cab_raw["conjunto"]).strip() if cab_raw.get("conjunto") else None),
+        "saldo_anterior": saldo_anterior,
         "advertencia_encoding": False,
     }
 

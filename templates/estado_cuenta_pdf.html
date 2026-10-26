@@ -91,6 +91,19 @@
                 Un certificado por <strong>unidad</strong> (titular principal + lista de
                 co-propietarios). Analizar OK = parseo PDF; sin match = Neon no cruzó.
             </p>
+            <div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-950 space-y-1">
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="chk-extender-saldo-anterior" class="mt-1 rounded border-rose-300 text-rose-800 focus:ring-rose-500">
+                    <span>
+                        <span class="font-semibold">Extender certificado al saldo anterior</span>
+                        (desglose en cuotas de administración hacia atrás).
+                        <span class="block text-xs text-rose-800 mt-0.5">
+                            Por defecto el saldo anterior <strong>solo afecta el inicio de mora</strong>.
+                            Marque esto únicamente si la pretensión / certificado cubre ese período previo.
+                        </span>
+                    </span>
+                </label>
+            </div>
             <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
                 <label class="flex items-start gap-2 cursor-pointer">
                     <input type="checkbox" id="chk-permitir-datos-pdf" class="mt-1 rounded border-amber-300 text-amber-800 focus:ring-amber-500">
@@ -249,6 +262,7 @@
                     <p id="b-total" class="text-2xl font-black text-slate-800 mt-1">—</p>
                 </div>
             </div>
+            <div id="bolsa-alerta-lote-saldo" class="hidden rounded-lg border-2 border-rose-500 bg-rose-50 px-4 py-3 text-sm text-rose-950 font-semibold"></div>
         </div>
         <div id="bolsa-bloques" class="space-y-4"></div>
     </div>
@@ -795,10 +809,18 @@
         return fetch(url, { method: 'POST', body: fd });
     }
 
+    function extenderSaldoAnteriorOpts() {
+        return !!(document.getElementById('chk-extender-saldo-anterior') || {}).checked;
+    }
+
     async function postBolsa(url, cacheId, files) {
         const fd = new FormData();
         if (cacheId) fd.append('cache_id', cacheId);
         (files || []).forEach(f => fd.append('archivos', f));
+        fd.append(
+            'extender_certificado_saldo_anterior',
+            extenderSaldoAnteriorOpts() ? 'true' : 'false'
+        );
         return fetch(url, { method: 'POST', body: fd });
     }
 
@@ -817,6 +839,10 @@
         fd.append('modo', modo);
         const opts = pdfFallbackOpts();
         fd.append('permitir_datos_pdf', opts.permitir ? 'true' : 'false');
+        fd.append(
+            'extender_certificado_saldo_anterior',
+            extenderSaldoAnteriorOpts() ? 'true' : 'false'
+        );
         if (opts.nit) fd.append('copropiedad_nit', opts.nit);
         if (opts.cedula) fd.append('titular_cedula', opts.cedula);
         if (indices && indices.length) {
@@ -1630,7 +1656,9 @@
             const block = document.createElement('div');
             const esNoEmitible = !emitible;
             block.className = 'border rounded-lg p-4 space-y-2'
-                + (esNoEmitible ? ' border-red-300 bg-red-50/40' : ' border-slate-200')
+                + (esNoEmitible
+                    ? ' border-red-300 bg-red-50/40'
+                    : (r.alerta_saldo_anterior ? ' border-2 border-rose-500 bg-rose-50/40' : ' border-slate-200'))
                 + (visible ? '' : ' hidden');
             block.dataset.globalIdx = String(globalIdx);
             if (MODO_PHASECOB && emitible) {
@@ -1727,6 +1755,12 @@
                      Incluir en descarga
                    </label>`
                 : '<span class="text-xs text-slate-400">No emitible</span>';
+            const alertaSaCert = r.alerta_saldo_anterior
+                ? `<div class="mt-2 rounded-lg border-2 border-rose-600 bg-rose-100 px-3 py-2 text-sm text-rose-950" role="alert">
+                     <p class="font-black uppercase text-rose-800 text-xs tracking-wide">Alerta abogado · saldo anterior</p>
+                     <p class="font-semibold leading-snug">${esc(r.alerta_saldo_anterior_mensaje || (advertencias[0] || 'Revise saldo anterior antes de emitir.'))}</p>
+                   </div>`
+                : '';
             const advHtml = advertencias.length
                 ? `<ul class="mt-1 text-xs text-amber-800 list-disc list-inside">${advertencias.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`
                 : '';
@@ -1777,6 +1811,7 @@
                     ${estadoBadge(r.estado)}
                 </div>
                 ${chk}
+                ${alertaSaCert}
                 ${phaseEditHtml}
                 ${fmiHtml}
                 <div class="text-sm">
@@ -2252,14 +2287,38 @@
         document.getElementById('b-con-capital').textContent = payload.cuentas_con_capital ?? 0;
         document.getElementById('b-total').textContent = money(payload.total_capital_demandado_lote);
         bolsaBloques.innerHTML = '';
+        const conAlertaSaldo = (payload.resultados || []).filter(r => r.alerta_saldo_anterior);
+        const alertaLoteEl = document.getElementById('bolsa-alerta-lote-saldo');
+        if (alertaLoteEl) {
+            if (conAlertaSaldo.length) {
+                alertaLoteEl.classList.remove('hidden');
+                alertaLoteEl.innerHTML =
+                    `⚠ ${conAlertaSaldo.length} cuenta(s) con <strong>saldo anterior COLON</strong>. `
+                    + `Revise la alerta roja de cada bloque antes de emitir certificado o poder — `
+                    + `<strong>no se dañe el proceso</strong>.`;
+            } else {
+                alertaLoteEl.classList.add('hidden');
+                alertaLoteEl.textContent = '';
+            }
+        }
         (payload.resultados || []).forEach((r, idx) => {
             const items = r.capital_limpio_a_demandar || [];
             const errores = r.errores_procesamiento || [];
             const block = document.createElement('div');
-            block.className = 'bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-3';
+            const tieneAlertaSa = !!r.alerta_saldo_anterior;
+            block.className = tieneAlertaSa
+                ? 'bg-white rounded-xl shadow-sm border-2 border-rose-500 p-5 space-y-3 ring-2 ring-rose-200'
+                : 'bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-3';
             const badge = r.omitido
                 ? '<span class="text-xs font-bold uppercase text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">Omitido</span>'
                 : '<span class="text-xs font-bold uppercase text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">Calculado</span>';
+            const alertaSaHtml = tieneAlertaSa
+                ? `<div class="rounded-lg border-2 border-rose-600 bg-rose-100 px-4 py-3 text-sm text-rose-950 space-y-1" role="alert">
+                        <p class="font-black uppercase tracking-wide text-rose-800">Alerta abogado · saldo anterior</p>
+                        <p class="font-semibold leading-snug">${esc(r.alerta_saldo_anterior_mensaje || 'Hay saldo anterior; revise pretensión e inicio de mora antes de emitir.')}</p>
+                        <p class="text-xs font-bold text-rose-800">Modo: ${esc(r.saldo_anterior_modo || '—')} · Monto: ${money(r.saldo_anterior)}</p>
+                   </div>`
+                : '';
             let filas = items.map(it => `
                 <tr>
                     <td class="px-3 py-1.5">${esc(it.fecha || '')}</td>
@@ -2277,6 +2336,7 @@
                    </ul>`
                 : '<p class="text-sm text-slate-400">Sin errores de procesamiento.</p>';
             block.innerHTML = `
+                ${alertaSaHtml}
                 <div class="flex flex-wrap items-start justify-between gap-2">
                     <div>
                         <p class="font-bold text-slate-800">${esc(r.titular || 'Sin titular')} · ${esc(r.archivo || '')}</p>
@@ -2291,9 +2351,10 @@
                         Certificado de deuda (.docx)
                     </button>
                 </div>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                     <div><p class="text-xs uppercase text-slate-500 font-bold">Inicio mora</p><p class="font-semibold text-slate-800">${esc(r.fecha_inicio_mora || '—')}</p></div>
                     <div><p class="text-xs uppercase text-slate-500 font-bold">Capital demandado</p><p class="font-semibold text-slate-800">${money(r.total_capital_demandado)}</p></div>
+                    <div><p class="text-xs uppercase text-slate-500 font-bold">Saldo anterior</p><p class="font-semibold text-slate-800">${r.saldo_anterior == null || r.saldo_anterior === '' ? '—' : money(r.saldo_anterior)}</p></div>
                     <div><p class="text-xs uppercase text-slate-500 font-bold">Bolsa inicial</p><p class="font-semibold text-slate-800">${money(r.bolsa_global_inicial)}</p></div>
                     <div><p class="text-xs uppercase text-slate-500 font-bold">Bolsa remanente</p><p class="font-semibold text-slate-800">${money(r.bolsa_remanente_final)}</p></div>
                 </div>
@@ -2339,6 +2400,17 @@
         if (!items.length) {
             setStatus('Sin ítems de capital limpio para generar el certificado.', true);
             return;
+        }
+        if (r.alerta_saldo_anterior) {
+            const msgAlerta = r.alerta_saldo_anterior_mensaje
+                || 'Hay saldo anterior COLON. Revise pretensión e inicio de mora antes de emitir.';
+            const okSa = window.confirm(
+                msgAlerta + '\n\n¿Continuar con la descarga del certificado? Recuerde: no se dañe el proceso.'
+            );
+            if (!okSa) {
+                setStatus('Descarga cancelada: revise el saldo anterior antes de emitir.', true);
+                return;
+            }
         }
         certDescargaUnoEnCurso = true;
         const btnUno = bolsaBloques
