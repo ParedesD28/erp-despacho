@@ -27,6 +27,7 @@ AGENDA_PATHS = {
     "/acuerdos/purgar-todos",
     "/vencimientos/guardar",
     "/vencimientos/completar",
+    "/vencimientos/reabrir",
     "/vencimientos/anular",
 }
 
@@ -79,6 +80,7 @@ class AgendaSinDuplicadosTests(unittest.TestCase):
         self.assertEqual(by_key.get(("POST", "/acuerdos/cumplir")), ["agenda_cumplir_acuerdo"])
         self.assertEqual(by_key.get(("POST", "/vencimientos/guardar")), ["agenda_guardar_vencimiento"])
         self.assertEqual(by_key.get(("POST", "/vencimientos/completar")), ["agenda_completar_vencimiento"])
+        self.assertEqual(by_key.get(("POST", "/vencimientos/reabrir")), ["agenda_reabrir_vencimiento"])
 
 
 class PdfAuthTests(unittest.TestCase):

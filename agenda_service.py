@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 
 import db
 import main
+from vencimientos_estado import ESTADO_COMPLETADO, ESTADO_PENDIENTE, sql_abierto
 
 
 AGENDA_ROUTE_NAMES = {
@@ -31,6 +32,7 @@ AGENDA_ROUTE_NAMES = {
     "agenda_purgar_acuerdos",
     "agenda_guardar_vencimiento",
     "agenda_completar_vencimiento",
+    "agenda_reabrir_vencimiento",
     "agenda_anular_vencimiento",
     "agenda_log_xlsx",
 }
@@ -71,7 +73,7 @@ def ensure_schema() -> None:
         },
         "vencimientos": {
             "id", "radicado_interno", "obligacion_id", "titulo",
-            "fecha_vencimiento", "completado", "inmueble_id",
+            "fecha_vencimiento", "estado", "inmueble_id",
             "anulado", "categoria", "abogado_id",
         },
         "agenda_auditoria": {
@@ -312,9 +314,9 @@ def _crear_router_agenda() -> APIRouter:
                 # IMPORTANTE: recuperar tambien los registros historicos de
                 # vencimientos, incluidos los ACUERDO_PAGO heredados. La nueva
                 # tabla de cuotas los complementa, no los sustituye.
-                cur.execute("""
+                cur.execute(f"""
                     SELECT * FROM vencimientos
-                    WHERE COALESCE(completado,FALSE)=FALSE
+                    WHERE {sql_abierto()}
                       AND COALESCE(anulado,FALSE)=FALSE
                     ORDER BY fecha_vencimiento ASC, id ASC
                 """)
@@ -709,10 +711,10 @@ def _crear_router_agenda() -> APIRouter:
 
                     cur.execute("""
                         INSERT INTO vencimientos
-                            (radicado_interno,obligacion_id,titulo,fecha_vencimiento,observaciones,completado,
+                            (radicado_interno,obligacion_id,titulo,fecha_vencimiento,observaciones,estado,
                              tipo,valor,inmueble_id,anulado,categoria,abogado_id)
-                        VALUES (%s,%s,%s,%s,%s,FALSE,%s,0,%s,FALSE,%s,%s) RETURNING id
-                    """, (radicado_interno.strip(),obligacion_id,titulo.strip(),fecha_vencimiento,observaciones.strip(),categoria,inmueble_id,categoria,abogado_id))
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,0,%s,FALSE,%s,%s) RETURNING id
+                    """, (radicado_interno.strip(),obligacion_id,titulo.strip(),fecha_vencimiento,observaciones.strip(),ESTADO_PENDIENTE,categoria,inmueble_id,categoria,abogado_id))
                     registro_id = cur.fetchone()[0]
                     _audit(cur,request,"CREAR_VENCIMIENTO",categoria,registro_id,radicado_interno,None,None,inmueble_id,titulo.strip())
             return main._redirect("/vencimientos", mensaje="Vencimiento+registrado")
@@ -722,8 +724,7 @@ def _crear_router_agenda() -> APIRouter:
         finally:
             conn.release()
 
-    @router.post("/vencimientos/completar", name="agenda_completar_vencimiento")
-    def agenda_completar_vencimiento(request: Request, vencimiento_id: int = Form(...)):
+    def _cambiar_estado_vencimiento(request: Request, vencimiento_id: int, estado: str, accion: str, mensaje: str):
         ensure_schema()
         conn = db.get_connection()
         try:
@@ -733,11 +734,23 @@ def _crear_router_agenda() -> APIRouter:
                     v = cur.fetchone()
                     if not v:
                         raise HTTPException(status_code=404, detail="Vencimiento no encontrado")
-                    cur.execute("UPDATE vencimientos SET completado=TRUE WHERE id=%s", (vencimiento_id,))
-                    _audit(cur,request,"COMPLETAR_VENCIMIENTO","VENCIMIENTO",vencimiento_id,v["radicado_interno"],None,None,v["inmueble_id"],v["titulo"])
-            return main._redirect("/vencimientos", mensaje="Vencimiento+completado")
+                    cur.execute("UPDATE vencimientos SET estado=%s WHERE id=%s", (estado, vencimiento_id))
+                    _audit(cur,request,accion,"VENCIMIENTO",vencimiento_id,v["radicado_interno"],None,None,v["inmueble_id"],v["titulo"])
+            return main._redirect("/vencimientos", mensaje=mensaje)
         finally:
             conn.release()
+
+    @router.post("/vencimientos/completar", name="agenda_completar_vencimiento")
+    def agenda_completar_vencimiento(request: Request, vencimiento_id: int = Form(...)):
+        return _cambiar_estado_vencimiento(
+            request, vencimiento_id, ESTADO_COMPLETADO, "COMPLETAR_VENCIMIENTO", "Vencimiento+completado",
+        )
+
+    @router.post("/vencimientos/reabrir", name="agenda_reabrir_vencimiento")
+    def agenda_reabrir_vencimiento(request: Request, vencimiento_id: int = Form(...)):
+        return _cambiar_estado_vencimiento(
+            request, vencimiento_id, ESTADO_PENDIENTE, "REABRIR_VENCIMIENTO", "Vencimiento+marcado+como+pendiente",
+        )
 
     @router.post("/vencimientos/anular", name="agenda_anular_vencimiento")
     def agenda_anular_vencimiento(request: Request, vencimiento_id: int = Form(...)):
