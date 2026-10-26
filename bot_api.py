@@ -15,6 +15,7 @@ from psycopg2.extras import RealDictCursor
 
 import liquidador
 import exportaciones
+from vencimientos_estado import ESTADO_PENDIENTE
 
 router = APIRouter()
 
@@ -447,15 +448,16 @@ async def registrar_acuerdo_bot(request: Request):
                     """
                     INSERT INTO vencimientos (
                         radicado_interno,obligacion_id,titulo,fecha_vencimiento,observaciones,
-                        completado,tipo,valor,inmueble_id,anulado,categoria
+                        estado,tipo,valor,inmueble_id,anulado,categoria
                     )
-                    VALUES (%s,%s,%s,%s,%s,FALSE,'ACUERDO_PAGO',%s,%s,FALSE,'OTROS')
+                    VALUES (%s,%s,%s,%s,%s,%s,'ACUERDO_PAGO',%s,%s,FALSE,'OTROS')
                     """,
                     (
                         radicado,obligacion_id,
                         f"Cobro Cuota #{cuota_actual} ({nombre_deudor or identificacion}) - ${valor:,.0f}",
                         fecha_compromiso,
                         f"Acuerdo #{acuerdo_id}. Tel: {telefono}. Obs: {observaciones}",
+                        ESTADO_PENDIENTE,
                         valor,inmueble_id,
                     ),
                 )

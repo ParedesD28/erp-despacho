@@ -62,6 +62,7 @@ import obligaciones_service
 import obligacion_saldo_service
 import radicacion_service
 import bot_api
+from vencimientos_estado import sql_abierto
 import agent_supervision
 import estado_cuenta_pdf_service
 from estado_cuenta_pdf_service import (
@@ -450,10 +451,11 @@ def vista_dashboard(request: Request):
             # 4. Términos Judiciales Próximos (excluye procesos inactivos)
             terminos_proximos = []
             if expedientes_service._table_exists(cur, "vencimientos"):
-                cur.execute("""
+                cur.execute(f"""
                     SELECT v.*
                     FROM vencimientos v
-                    WHERE v.completado = FALSE
+                    WHERE {sql_abierto('v')}
+                      AND COALESCE(v.anulado, FALSE) = FALSE
                       AND COALESCE(v.tipo, 'PROCESAL') = 'PROCESAL'
                       AND NOT EXISTS (
                           SELECT 1
@@ -1432,7 +1434,7 @@ def _ensure_crm_and_vencimientos_schema():
                 },
                 "vencimientos": {
                     "radicado_interno", "titulo", "fecha_vencimiento",
-                    "completado", "tipo", "valor", "inmueble_id",
+                    "estado", "tipo", "valor", "inmueble_id",
                     "anulado", "categoria", "abogado_id", "obligacion_id",
                 },
                 "acuerdos_pago": {
