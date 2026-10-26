@@ -34,6 +34,16 @@ ERP Start Command:
 python start.py
 ```
 
+## Migraciones de base de datos
+
+- Las migraciones viven en `migrations/*.sql` y se registran en `schema_migrations` (versión = nombre del archivo sin `.sql`).
+- `python migrate.py status | check | apply [--dry-run]` — `apply` toma un advisory lock y ejecuta cada archivo en una transacción.
+- `start.py` verifica las migraciones antes de abrir tráfico (`MIGRATIONS_MODE=check` por defecto): si hay pendientes, el arranque aborta y Render conserva la versión anterior.
+  `MIGRATIONS_MODE=apply` hace que el arranque las aplique (con lock); `off` omite la guardia.
+- Flujo para cambios de esquema: `python migrate.py apply --dry-run` y luego `apply` contra Neon ANTES de hacer merge.
+- Migraciones nuevas: nombre `YYYYMMDD_descripcion.sql`, solo DDL/DML idempotente, sin `BEGIN/COMMIT`. Las anteriores a `20261006_usuario_conjuntos_portal_ph` son legacy (sustituidas por `migrations/baseline/`).
+- CI aplica todo sobre una BD vacía dos veces y corre las pruebas con PostgreSQL real.
+
 ## Seguridad y arquitectura aplicadas
 
 - La sesión web usa tokens HMAC versionados con expiración; la cookie no almacena el ID del usuario en texto plano.

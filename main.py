@@ -1273,31 +1273,18 @@ async def guardar_expediente_estructurado(request: Request):
         conn.release()
 
 
-def _ensure_proceso_inactivaciones(cur) -> None:
-    """Garantiza historial auditable de inactivación (migración 20260919_fase15)."""
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS proceso_inactivaciones (
-            id BIGSERIAL PRIMARY KEY,
-            radicado_interno TEXT NOT NULL,
-            accion TEXT NOT NULL CHECK (accion IN ('INACTIVAR','ACTIVAR')),
-            motivo TEXT,
-            usuario TEXT,
-            fecha TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT chk_proceso_inactivacion_motivo
-                CHECK (
-                    accion = 'ACTIVAR'
-                    OR length(trim(COALESCE(motivo,''))) >= 5
-                )
+class HistorialInactivacionNoDisponible(RuntimeError):
+    """La tabla de historial no existe: la migración 20261021 no se aplicó."""
+
+
+def _exigir_tabla_proceso_inactivaciones(cur) -> None:
+    cur.execute("SELECT to_regclass('public.proceso_inactivaciones') IS NOT NULL AS existe")
+    row = cur.fetchone()
+    existe = row["existe"] if isinstance(row, dict) else row[0]
+    if not existe:
+        raise HistorialInactivacionNoDisponible(
+            "tabla proceso_inactivaciones inexistente (migración 20261021_proceso_inactivaciones pendiente)"
         )
-        """
-    )
-    cur.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_proceso_inactivaciones_radicado_fecha
-            ON proceso_inactivaciones (radicado_interno, fecha DESC)
-        """
-    )
 
 
 @app.post("/expediente/estado", include_in_schema=False)
@@ -1318,14 +1305,14 @@ def cambiar_estado_expediente(
 
     conn = db.get_connection()
     try:
+        # Una sola transacción: el UPDATE de estado y el registro en el
+        # historial se confirman juntos o se revierten juntos.
         with conn:
             with conn.cursor() as cur:
-                _ensure_proceso_inactivaciones(cur)
+                _exigir_tabla_proceso_inactivaciones(cur)
                 cols = expedientes_service._cols(cur, "procesos")
                 if "estado" not in cols:
-                    cur.execute(
-                        "ALTER TABLE procesos ADD COLUMN IF NOT EXISTS estado TEXT DEFAULT 'Activo'"
-                    )
+                    raise RuntimeError("procesos.estado no existe en el esquema")
                 cur.execute("SELECT estado FROM procesos WHERE radicado_interno=%s FOR UPDATE", (radicado,))
                 actual = cur.fetchone()
                 if not actual:
@@ -1359,9 +1346,18 @@ def cambiar_estado_expediente(
         return _redirect(f"/expediente/{radicado}", mensaje=msg)
     except HTTPException:
         raise
+    except HistorialInactivacionNoDisponible as exc:
+        print(f"[EXPEDIENTE][ESTADO] {radicado}: {exc}", flush=True)
+        return _redirect(
+            f"/expediente/{radicado}",
+            error="No se cambió el estado: el historial de inactivaciones no está disponible (falta aplicar una migración). Avise al administrador.",
+        )
     except Exception as exc:
         print(f"[EXPEDIENTE][ESTADO] Error {radicado}: {exc!r}", flush=True)
-        return _redirect(f"/expediente/{radicado}", error="No+fue+posible+cambiar+el+estado+del+expediente")
+        return _redirect(
+            f"/expediente/{radicado}",
+            error="No se cambió el estado del expediente: no fue posible registrar el historial. Intente de nuevo o avise al administrador.",
+        )
     finally:
         conn.release()
 
