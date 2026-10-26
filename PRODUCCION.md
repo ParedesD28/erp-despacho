@@ -46,8 +46,14 @@ python start.py
 
 ## Seguridad y arquitectura aplicadas
 
-- La sesión web usa tokens HMAC versionados con expiración; la cookie no almacena el ID del usuario en texto plano.
-- La cookie de sesión usa `HttpOnly`, `Secure`, `SameSite=Lax` y `Path=/`.
+- La sesión web usa tokens HMAC `v2` (usuario, emisión, expiración y `sid` aleatorio) con verificación de firma en tiempo constante. Vigencia absoluta `ERP_SESSION_TTL` (por defecto 8 h, acotada entre 5 min y 24 h). Los tokens `v1` ya no se aceptan.
+- La cookie de sesión usa `HttpOnly`, `Secure`, `SameSite=Lax` y `Path=/`. (`Strict` rompería el retorno del OAuth de Google Drive y los enlaces externos al ERP.)
+- Cada login genera un `sid` nuevo y revoca la cookie previa; logout y re-login registran el `sid` en la tabla `sesiones_revocadas` (se crea sola con `CREATE TABLE IF NOT EXISTS` en el primer uso y en el arranque; no requiere migración previa, así que no activa la guardia de migraciones). Si Neon no responde, el ERP contesta 503 (no acepta sesiones sin verificar). Rotar `ERP_SESSION_SECRET` solo obliga a iniciar sesión una vez más.
+- RBAC default-deny: toda ruta debe estar en `permisos.py` (pública o con permiso en `_ROUTE_RULES`); lo no clasificado se deniega a todos los perfiles. `tests/test_auth_hardening.py` falla si se añade una ruta sin clasificar.
+- Fail-closed: usuario inexistente, inactivo o con perfil ausente/desconocido queda bloqueado (nunca ADMIN); un fallo de BD produce 503, no privilegios.
+- Rate limiting en memoria del proceso (instancia única; con varias instancias cada una cuenta por separado y habría que moverlo a Neon): por IP `RATE_LIMIT_GLOBAL_PER_MIN` (600), endpoints con API key `RATE_LIMIT_API_PER_MIN` (240) y bloqueo tras `RATE_LIMIT_API_FAILS` (10) respuestas 401/403; login: fallos por IP (20), por usuario (10) y por IP+usuario (5) en 15 min con bloqueo de 60 s que se duplica hasta 15 min. Los contadores se reinician al reiniciar el servicio.
+- IP del cliente: se usa `CF-Connecting-IP` (lo fija Cloudflare, delante de Render) solo si la conexión directa viene de una IP privada (el proxy). `X-Forwarded-For` no se usa salvo que se defina `ERP_TRUSTED_PROXY_COUNT` (nº de proxies de confianza contando desde la derecha). No definir `FORWARDED_ALLOW_IPS=*` en uvicorn.
+- CSRF: las peticiones POST/PUT/PATCH/DELETE autenticadas (y `/login`) validan `Origin`/`Referer`/`Sec-Fetch-Site` contra el host del ERP (`PUBLIC_BASE_URL`, `ERP_ALLOWED_ORIGINS` como CSV adicional). No hay token por formulario (diferido: requiere tocar todas las plantillas y fetch de JS; se recomienda junto con CSP).
 - `ERP_SESSION_SECRET` es obligatorio; no se deriva de `DATABASE_URL` ni de claves de otros servicios.
 - Las contraseñas del ERP se verifican únicamente con bcrypt. En el arranque, cualquier valor heredado que no sea bcrypt se transforma a bcrypt dentro de una transacción controlada.
 - Todo acceso a PostgreSQL pasa por `ThreadedConnectionPool`. Se reemplaza `psycopg2.connect()` por un proxy que devuelve la conexión al pool al cerrar o salir de un contexto.
