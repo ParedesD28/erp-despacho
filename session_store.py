@@ -5,7 +5,8 @@ se guarda en `sesiones_revocadas` el identificador (sid) de cada sesión cerrada
 La tabla solo contiene sesiones revocadas aún no expiradas y se purga sola.
 
 - La tabla se crea de forma perezosa (CREATE TABLE IF NOT EXISTS), igual que el
-  esquema de perfiles; no exige aplicar una migración antes del deploy.
+  esquema de perfiles. No hay archivo en migrations/ a propósito: la guardia de
+  migraciones de start.py abortaría el deploy si quedara pendiente.
 - Los sid revocados se cachean en memoria (efecto inmediato en esta instancia).
 - Los sid vigentes se cachean `ACTIVE_CACHE_SECONDS` para no consultar Neon en
   cada petición; con varias instancias una revocación tarda como máximo ese
