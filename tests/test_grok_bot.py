@@ -164,6 +164,26 @@ class LlaveGrokEnGrokApiTests(_Base):
             self.assertNotIn(decorador, fuente)
 
 
+class _FakeConexion:
+    """Conexión vacía: estos tests solo prueban la llave, no deben tocar PostgreSQL."""
+
+    def cursor(self, *args, **kwargs):
+        @contextmanager
+        def _ctx():
+            yield _FakeCursor()
+
+        return _ctx()
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def release(self):
+        pass
+
+
 class LlaveGrokEnRoutersDeMaquinaTests(_Base):
     """La llave Grok se suma a las llaves actuales; el bot de cobranza no cambia."""
 
@@ -178,7 +198,8 @@ class LlaveGrokEnRoutersDeMaquinaTests(_Base):
         self._sin_bloqueo()
         headers = {} if key is None else {"X-API-Key": key}
         kwargs = {"json": {}} if metodo == "post" else {}
-        return getattr(self.client, metodo)(path, headers=headers, **kwargs)
+        with mock.patch("db.get_connection", return_value=_FakeConexion()):
+            return getattr(self.client, metodo)(path, headers=headers, **kwargs)
 
     def test_llave_grok_autentica_en_bot_y_recaudos(self):
         with _env(GROK_BOT_API_KEY=GROK, BOT_API_KEY=BOT, RECAUDOS_API_KEY=REC):
