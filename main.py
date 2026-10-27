@@ -67,6 +67,8 @@ import obligaciones_service
 import obligacion_saldo_service
 import radicacion_service
 import bot_api
+import grok_api
+import m2m_keys
 from vencimientos_estado import sql_abierto
 import agent_supervision
 import estado_cuenta_pdf_service
@@ -104,6 +106,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Inclusión de routers modulares M2M y supervisión
 app.include_router(bot_api.router)
+app.include_router(grok_api.router)
 app.include_router(agent_supervision.router)
 app.include_router(sms_router.router)
 app.include_router(cartas_cobro_router.router)
@@ -249,6 +252,24 @@ async def _procesar_login(request: Request, ip: str):
         return _login_error(request, "No fue posible iniciar sesión.", status_code=500)
 
 
+def _auditar_m2m(request: Request, path: str, ip: str, status_code: int) -> None:
+    """Log de auditoría de las llamadas hechas con la llave de Grok Bot.
+
+    Solo consumidor, método, ruta (sin query), estado e IP: nunca cuerpo ni llaves.
+    """
+    if getattr(request.state, "m2m_consumer", None) != m2m_keys.CONSUMER_GROK:
+        return
+    _json_log(
+        "INFO",
+        "m2m_audit",
+        consumidor=m2m_keys.CONSUMER_GROK,
+        metodo=request.method,
+        ruta=path,
+        estado=status_code,
+        ip=ip,
+    )
+
+
 async def _flujo_seguridad(request: Request, call_next):
     path = request.url.path
     ip = _client_ip(request)
@@ -318,8 +339,13 @@ async def _flujo_seguridad(request: Request, call_next):
             except Exception as exc:
                 _json_log("WARNING", "hidratacion_publica_omitida", error=repr(exc))
 
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        _auditar_m2m(request, path, ip, 500)
+        raise
     rate_limit.limiter.record_api_response(ip, path, response.status_code)
+    _auditar_m2m(request, path, ip, response.status_code)
     return response
 
 

@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 import api_recaudos
 import bot_api
+import grok_api
 import main as main_mod
 import permisos
 import rate_limit
@@ -94,7 +95,10 @@ class AuditoriaRutasPublicasTests(unittest.TestCase):
             if ruta.path in AUTH_PROPIA:
                 continue
             deps = _dependencias(ruta)
-            if ruta.path.startswith("/api/recaudos/bot/"):
+            if ruta.path.startswith("/api/grok/"):
+                esperado = grok_api._require_grok_key
+                self.assertEqual(ruta.methods, {"GET"}, f"{ruta.path} debe ser solo GET")
+            elif ruta.path.startswith("/api/recaudos/bot/"):
                 esperado = api_recaudos._require_bot_auth
             elif ruta.path.startswith("/api/bot/"):
                 esperado = bot_api._require_api_key
@@ -107,7 +111,8 @@ class AuditoriaRutasPublicasTests(unittest.TestCase):
     def test_prefijos_publicos_solo_los_esperados(self):
         api_publicos = tuple(p for p in permisos.PUBLIC_PREFIXES if p.startswith("/api/"))
         self.assertEqual(
-            api_publicos, ("/api/bot/", "/api/recaudos/bot/", "/api/v1/cron/")
+            api_publicos,
+            ("/api/bot/", "/api/recaudos/bot/", "/api/grok/", "/api/v1/cron/"),
         )
 
     def test_rutas_recaudos_no_bot_siguen_con_sesion(self):

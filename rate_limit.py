@@ -36,6 +36,7 @@ def _env_int(name: str, default: int) -> int:
 # --- Configuración (ajustable por entorno) ---------------------------------
 GLOBAL_LIMIT = _env_int("RATE_LIMIT_GLOBAL_PER_MIN", 600)
 API_KEY_LIMIT = _env_int("RATE_LIMIT_API_PER_MIN", 240)
+GROK_LIMIT = _env_int("RATE_LIMIT_GROK_PER_MIN", 120)
 API_FAIL_LIMIT = _env_int("RATE_LIMIT_API_FAILS", 10)
 LOGIN_IP_FAILS = _env_int("RATE_LIMIT_LOGIN_IP_FAILS", 20)
 LOGIN_USER_FAILS = _env_int("RATE_LIMIT_LOGIN_USER_FAILS", 10)
@@ -46,7 +47,7 @@ LOCK_MAX = _env_int("RATE_LIMIT_LOCK_MAX_SECONDS", 900)
 STRIKE_MEMORY = 3600
 MAX_KEYS = 20000
 
-API_KEY_PREFIXES = ("/api/bot/", "/api/recaudos/", "/sms/api/", "/api/v1/cron/")
+API_KEY_PREFIXES = ("/api/bot/", "/api/recaudos/", "/api/grok/", "/sms/api/", "/api/v1/cron/")
 UNTHROTTLED_PREFIXES = ("/static/",)
 UNTHROTTLED_PATHS = frozenset({"/health"})
 
@@ -210,6 +211,7 @@ class AccessLimiter:
         self.clock = clock
         self.global_window = SlidingWindow(GLOBAL_LIMIT, 60, clock)
         self.api_window = SlidingWindow(API_KEY_LIMIT, 60, clock)
+        self.grok_window = SlidingWindow(GROK_LIMIT, 60, clock)
         self.api_failures = FailureLimiter(API_FAIL_LIMIT, 300, LOCK_BASE, LOCK_MAX, clock)
         self.login_ip = FailureLimiter(LOGIN_IP_FAILS, clock=clock)
         self.login_user = FailureLimiter(LOGIN_USER_FAILS, clock=clock)
@@ -262,6 +264,7 @@ class AccessLimiter:
             lim.reset()
         self.global_window = SlidingWindow(GLOBAL_LIMIT, 60, self.clock)
         self.api_window = SlidingWindow(API_KEY_LIMIT, 60, self.clock)
+        self.grok_window = SlidingWindow(GROK_LIMIT, 60, self.clock)
 
 
 limiter = AccessLimiter()

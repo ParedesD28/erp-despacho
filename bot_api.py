@@ -33,7 +33,8 @@ def _public_base_url() -> str:
 
 
 def _require_api_key(request: Request) -> None:
-    m2m_keys.require_api_key(m2m_keys.PURPOSE_BOT, request.headers.get("X-API-Key"))
+    """Exige X-API-Key: llave del bot (BOT_API_KEY/heredada) o la de Grok Bot (GROK_BOT_API_KEY)."""
+    m2m_keys.require_machine_request(m2m_keys.PURPOSE_BOT, request)
 
 
 def _sign(filename: str, expires: int, secret: str | None = None) -> str:

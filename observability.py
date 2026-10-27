@@ -63,7 +63,11 @@ def install_exception_handling(app) -> None:
         request_id = getattr(request.state, "request_id", str(uuid.uuid4())[:8])
         log_msg("⚠️ [HTTP ERROR]", f"{exc.status_code} en {request.method} {request.url.path}", detalle=exc.detail)
         if _es_api_path(request.url.path):
-            return JSONResponse({"error": exc.detail, "request_id": request_id}, status_code=exc.status_code)
+            return JSONResponse(
+                {"error": exc.detail, "request_id": request_id},
+                status_code=exc.status_code,
+                headers=getattr(exc, "headers", None),
+            )
         if exc.status_code in (401, 403):
             return RedirectResponse(url="/login", status_code=303)
         return JSONResponse({"error": exc.detail, "request_id": request_id}, status_code=exc.status_code)
