@@ -97,6 +97,6 @@ Se eliminaron 21 archivos de parches fragmentados y mono-dependientes que mutaba
 - `exportaciones.py`: Generador oficial ReportLab de PDF judicial en formato apaisado y reporte ejecutivo en Excel con OpenPyXL.
 - `expedientes_service.py`: Deduplicación de partes/litisconsortes, trazabilidad/auditoría y cálculo automático determinista de etapas procesales.
 - `bot_api.py`: Endpoint M2M protegido con API Key para el bot de WhatsApp y descarga segura con URLs temporales firmadas.
-- `grok_api.py`: consultas de solo lectura `/api/grok/*` para Grok Bot (solo `GET`, transacciones `READ ONLY`, sin datos de usuarios del ERP ni secretos).
+- `grok_api.py`: consultas de solo lectura `/api/grok/*` para Grok Bot (solo `GET`, sin datos de usuarios del ERP ni secretos). Incluye `GET /api/grok/liquidacion/pdf` (PDF de la liquidación calculado con `autocausar=False`: no escribe cuotas en `expensas_ph`; solo puede completar la caché de tasas oficiales `historico_tasas` si falta un mes).
 - `agent_supervision.py`: Panel y API de supervisión y toma de control humano para el agente de cobranza.
 - `start.py`: Punto de entrada único para producción (`python start.py`).
