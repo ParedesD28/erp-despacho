@@ -7,6 +7,11 @@ ejecutan en transacciones ``READ ONLY``; la liquidación (y su PDF) se calcula c
 conexiones; su único efecto lateral posible es completar la caché de tasas oficiales
 ``historico_tasas`` si falta un mes).
 
+Rama Judicial: ``/rama/consulta`` y ``/rama/novedades`` consultan con ``LegalAPIClient``
+(solo lectura; no escriben en la base ni en la Rama). Nunca se devuelve ni se registra la
+URL base ni el detalle de error del cliente: solo mensajes cortos (404 no existe, 502 la
+Rama no responde, 503 no configurada). Ver ``docs/GROK_API_README.md``.
+
 Qué NO se devuelve nunca: contraseñas, hashes, tokens, llaves, datos de usuarios del ERP
 (abogados/usuarios, perfiles) ni sus nombres. Sí se devuelven datos de deudores y
 propietarios (nombre, identificación, teléfono, correo, dirección) porque el bot los
@@ -14,18 +19,24 @@ necesita para cobrar; ver PRODUCCION.md.
 """
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from psycopg2.extras import RealDictCursor
 from starlette.background import BackgroundTask
 
+import external_legal_client
 import m2m_keys
+import sync_procesos_service as sps
+from observability import _json_log
 from vencimientos_estado import sql_abierto
 
 
@@ -410,4 +421,347 @@ def liquidacion_pdf(inmueble_id: int, fecha_corte: str, obligacion_id: int | Non
         filename=f"Liquidacion_{inmueble_id}_{corte.isoformat()}.pdf",
         headers={"Cache-Control": "private, no-store"},
         background=BackgroundTask(_borrar_archivo, str(pdf_path)),
+    )
+
+
+# --- Rama Judicial (solo lectura, vía LegalAPIClient) -------------------------
+#
+# Reglas: nunca se devuelve ni se registra LEGAL_API_BASE_URL, cabeceras ni el detalle
+# de error del cliente (puede traer base_path/fragmentos de la respuesta externa): solo
+# mensajes cortos propios. Ni la Rama ni la base de datos se escriben.
+
+_RADICADO_RAMA_RE = re.compile(r"^\d{23}$")
+_RADICADO_INTERNO_RE = re.compile(r"^[\w.\-/]{1,60}$")
+_FECHA_DIA_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+
+_MSG_NO_RESPONDE = "La Rama Judicial no responde"
+_MSG_TIEMPO = "La Rama Judicial no respondió a tiempo"
+_MSG_NO_ENCONTRADO = "Proceso no encontrado en la Rama Judicial"
+_MSG_NO_CONFIGURADA = "Consulta a la Rama Judicial no configurada"
+
+
+def _env_numero(nombre: str, defecto: float, minimo: float, maximo: float) -> float:
+    try:
+        valor = float(os.getenv(nombre, "") or defecto)
+    except ValueError:
+        valor = defecto
+    return max(minimo, min(maximo, valor))
+
+
+def _timeout_consulta_s() -> float:
+    return _env_numero("GROK_RAMA_TIMEOUT_S", 30.0, 1.0, 120.0)
+
+
+def _timeout_total_s() -> float:
+    return _env_numero("GROK_RAMA_TOTAL_TIMEOUT_S", 100.0, 5.0, 600.0)
+
+
+def _concurrencia() -> int:
+    return int(_env_numero("GROK_RAMA_CONCURRENCY", 3, 1, 5))
+
+
+def _dia(valor: Any) -> Any:
+    """Recorta fechas ISO con hora a AAAA-MM-DD (igual que la herramienta de consulta)."""
+    if isinstance(valor, str):
+        m = _FECHA_DIA_RE.match(valor.strip())
+        if m:
+            return m.group(1)
+    return valor
+
+
+def _actuacion_json(a: Any) -> dict:
+    d = a.model_dump()
+    return {
+        "id_actuacion": d.get("id_actuacion"),
+        "fecha_actuacion": _dia(d.get("fecha_actuacion")),
+        "actuacion": d.get("actuacion"),
+        "anotacion": d.get("anotacion"),
+        "inicio_termino": _dia(d.get("inicio_termino")),
+        "fin_termino": _dia(d.get("fin_termino")),
+        "fecha_registro": _dia(d.get("fecha_registro")),
+        "con_documentos": d.get("con_documentos"),
+    }
+
+
+def _fecha_orden(a: dict) -> str:
+    return str(a.get("fecha_actuacion") or "")
+
+
+def _error_rama(exc: BaseException) -> HTTPException:
+    """Traduce cualquier fallo del cliente a un mensaje corto y seguro."""
+    if isinstance(exc, HTTPException):
+        if exc.status_code == 404:
+            return HTTPException(status_code=404, detail=_MSG_NO_ENCONTRADO)
+        if exc.status_code == 503:
+            return HTTPException(status_code=503, detail=_MSG_NO_CONFIGURADA)
+    detalle = _MSG_TIEMPO if isinstance(exc, asyncio.TimeoutError) else _MSG_NO_RESPONDE
+    _json_log(
+        "WARNING",
+        "grok_rama_error",
+        tipo=type(exc).__name__,
+        estado=getattr(exc, "status_code", None),
+    )
+    return HTTPException(status_code=502, detail=detalle)
+
+
+async def _con_limite(coro: Any) -> Any:
+    return await asyncio.wait_for(coro, timeout=_timeout_consulta_s())
+
+
+def _resolver_radicado(radicado: str) -> tuple[str, str | None]:
+    """Devuelve (radicado de 23 dígitos, radicado_interno o None).
+
+    Acepta el radicado de 23 dígitos (con separadores opcionales) o el radicado
+    interno del ERP (p. ej. EXP-0001), que se resuelve en ``procesos``.
+    """
+    compacto = re.sub(r"[\s.\-]", "", radicado)
+    if _RADICADO_RAMA_RE.match(compacto):
+        return compacto, None
+    with _lectura() as cur:
+        cur.execute(
+            """
+            SELECT radicado_interno, radicado_rama
+            FROM procesos
+            WHERE UPPER(radicado_interno) = UPPER(%s)
+            LIMIT 1
+            """,
+            (radicado,),
+        )
+        fila = cur.fetchone()
+    if not fila:
+        raise HTTPException(status_code=404, detail="Proceso no encontrado")
+    rama = sps.normalizar_radicado_rama(fila.get("radicado_rama"))
+    if not _RADICADO_RAMA_RE.match(rama):
+        raise HTTPException(
+            status_code=404, detail="El proceso no tiene radicado de la Rama de 23 dígitos"
+        )
+    return rama, str(fila.get("radicado_interno") or "")
+
+
+@router.get("/rama/consulta")
+async def rama_consulta(
+    radicado: str = Query(..., min_length=1, max_length=80, description="23 dígitos o EXP-0001"),
+    limite_actuaciones: int = Query(200, ge=1, le=1000),
+):
+    """Detalle, actuaciones y sujetos de un proceso en la Rama Judicial (solo lectura)."""
+    pedido = radicado.strip()
+    if not _RADICADO_INTERNO_RE.match(re.sub(r"\s", "", pedido)):
+        raise HTTPException(status_code=422, detail="radicado inválido")
+    radicado_rama, interno = await run_in_threadpool(_resolver_radicado, pedido)
+    try:
+        async with external_legal_client.LegalAPIClient() as client:
+            id_interno = await _con_limite(client.consultar_id_por_radicado(radicado_rama))
+            detalle = await _con_limite(client.obtener_detalle(id_interno))
+            actuaciones = await _con_limite(client.obtener_actuaciones(id_interno))
+            sujetos = await _con_limite(client.obtener_sujetos(id_interno))
+    except Exception as exc:
+        raise _error_rama(exc) from None
+    acts = sorted((_actuacion_json(a) for a in actuaciones), key=_fecha_orden, reverse=True)
+    return _ok(
+        radicado=radicado_rama,
+        radicado_interno=interno,
+        id_interno=id_interno,
+        detalle=detalle.model_dump(),
+        total_actuaciones=len(acts),
+        actuaciones=acts[:limite_actuaciones],
+        sujetos=[s.model_dump() for s in sujetos],
+    )
+
+
+def _tabla_existe(cur: Any, nombre: str) -> bool:
+    cur.execute("SELECT to_regclass(%s) IS NOT NULL AS ok", (f"public.{nombre}",))
+    fila = cur.fetchone() or {}
+    return bool(fila.get("ok"))
+
+
+def _cargar_procesos_y_registros(
+    estado: str, limit: int, offset: int
+) -> tuple[int, list[dict], dict[str, dict]]:
+    """Procesos con radicado de la Rama + lo que el ERP ya tiene registrado (solo SELECT)."""
+    filtro_estado = {
+        "ACTIVOS": "UPPER(COALESCE(p.estado,'ACTIVO')) <> 'INACTIVO'",
+        "INACTIVOS": "UPPER(COALESCE(p.estado,'ACTIVO')) = 'INACTIVO'",
+        "TODOS": "TRUE",
+    }[estado]
+    base = f"""
+        FROM procesos p
+        LEFT JOIN inmuebles_ph i ON i.id = p.inmueble_id
+        WHERE {filtro_estado}
+          AND p.radicado_rama IS NOT NULL
+          AND length(regexp_replace(p.radicado_rama, '[^0-9]', '', 'g')) = 23
+    """
+    with _lectura() as cur:
+        cur.execute(f"SELECT COUNT(*) AS total {base}")
+        total = int((cur.fetchone() or {}).get("total") or 0)
+        cur.execute(
+            f"""
+            SELECT p.radicado_interno, p.radicado_rama, p.juzgado,
+                   i.conjunto_residencial, i.torre_apto,
+                   (SELECT STRING_AGG(DISTINCT c.nombre, ' | ' ORDER BY c.nombre)
+                      FROM proceso_partes pp
+                      JOIN contactos c ON c.id = pp.contacto_id
+                     WHERE pp.radicado_interno = p.radicado_interno
+                       AND UPPER(pp.rol) = 'DEMANDADO') AS demandado
+            {base}
+            ORDER BY p.radicado_interno
+            LIMIT %s OFFSET %s
+            """,
+            (limit, offset),
+        )
+        procesos = [dict(r) for r in cur.fetchall()]
+        ids = [p["radicado_interno"] for p in procesos]
+        registros: dict[str, dict] = {
+            i: {"ids": set(), "hashes": set(), "manuales": []} for i in ids
+        }
+        if ids and _tabla_existe(cur, "actuaciones_proceso"):
+            cur.execute(
+                """
+                SELECT radicado_interno, id_actuacion, content_hash
+                FROM actuaciones_proceso
+                WHERE radicado_interno = ANY(%s)
+                """,
+                (ids,),
+            )
+            for r in cur.fetchall():
+                reg = registros.get(r["radicado_interno"])
+                if reg is None:
+                    continue
+                if r.get("id_actuacion"):
+                    reg["ids"].add(str(r["id_actuacion"]).strip())
+                if r.get("content_hash"):
+                    reg["hashes"].add(r["content_hash"])
+        if ids and _tabla_existe(cur, "actuaciones"):
+            cur.execute(
+                """
+                SELECT radicado_interno, fecha, descripcion
+                FROM actuaciones
+                WHERE radicado_interno = ANY(%s)
+                """,
+                (ids,),
+            )
+            for r in cur.fetchall():
+                reg = registros.get(r["radicado_interno"])
+                texto = sps._norm_text(r.get("descripcion"))
+                fecha = sps._parse_date(r.get("fecha"))
+                if reg is not None and texto and fecha is not None:
+                    reg["manuales"].append((fecha, texto))
+    return total, procesos, registros
+
+
+def _ya_registrada(fila: dict, registro: dict) -> bool:
+    """True si la actuación de la Rama ya está en el ERP.
+
+    Coincide por id externo o hash en ``actuaciones_proceso`` (lo que llena la
+    sincronización diaria) o, en ``actuaciones`` (manual), por fecha y texto.
+    """
+    if fila.get("id_actuacion") and fila["id_actuacion"] in registro["ids"]:
+        return True
+    if fila.get("content_hash") in registro["hashes"]:
+        return True
+    fecha = fila.get("fecha_actuacion")
+    if fecha is None:
+        return False
+    rama_texto = sps._norm_text(f"{fila.get('tipo_actuacion') or ''} {fila.get('descripcion') or ''}")
+    anotacion = sps._norm_text(fila.get("descripcion"))
+    for f_manual, texto in registro["manuales"]:
+        if f_manual != fecha:
+            continue
+        if texto in rama_texto or (anotacion and anotacion in texto):
+            return True
+    return False
+
+
+async def _actuaciones_de_la_rama(client: Any, radicado_rama: str) -> list:
+    id_interno = await client.consultar_id_por_radicado(radicado_rama)
+    return await client.obtener_actuaciones(id_interno)
+
+
+@router.get("/rama/novedades")
+async def rama_novedades(
+    desde: str | None = Query(None, description="AAAA-MM-DD (inclusive)"),
+    estado: str = Query("ACTIVOS", max_length=10),
+    limit: int = Query(100, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    solo_no_registradas: bool = False,
+):
+    """Actuaciones de la Rama posteriores a ``desde`` o aún no registradas en el ERP.
+
+    Con ``solo_no_registradas=true`` se exige además que no estén registradas.
+    Una consulta fallida va a ``errores`` sin afectar al resto.
+    """
+    estado = estado.strip().upper()
+    if estado not in ("ACTIVOS", "INACTIVOS", "TODOS"):
+        raise HTTPException(status_code=422, detail="estado debe ser ACTIVOS, INACTIVOS o TODOS")
+    f_desde = _fecha(desde, "desde")
+    total, procesos, registros = await run_in_threadpool(
+        _cargar_procesos_y_registros, estado, limit, offset
+    )
+
+    loop = asyncio.get_running_loop()
+    limite_total = loop.time() + _timeout_total_s()
+    cupo = asyncio.Semaphore(_concurrencia())
+    errores: list[dict] = []
+    novedades: list[dict] = []
+
+    async def _una(client: Any, p: dict) -> None:
+        radicado_interno = p["radicado_interno"]
+        rama = sps.normalizar_radicado_rama(p["radicado_rama"])
+        async with cupo:
+            if loop.time() > limite_total:
+                errores.append({"radicado_interno": radicado_interno, "error": _MSG_TIEMPO})
+                return
+            try:
+                crudas = await _con_limite(_actuaciones_de_la_rama(client, rama))
+            except Exception as exc:
+                errores.append(
+                    {"radicado_interno": radicado_interno, "error": _error_rama(exc).detail}
+                )
+                return
+        items = []
+        for a in crudas:
+            fila = sps.mapear_actuacion_api(a, radicado_interno=radicado_interno, radicado_rama=rama)
+            registrada = _ya_registrada(fila, registros[radicado_interno])
+            posterior = bool(f_desde and fila["fecha_actuacion"] and fila["fecha_actuacion"] >= f_desde)
+            if solo_no_registradas:
+                incluir = not registrada and (f_desde is None or posterior)
+            else:
+                incluir = posterior or not registrada
+            if not incluir:
+                continue
+            item = _actuacion_json(a)
+            item["registrada_en_erp"] = registrada
+            item["motivo"] = [m for m, ok in (("posterior_a_desde", posterior), ("no_registrada", not registrada)) if ok]
+            items.append(item)
+        if items:
+            items.sort(key=_fecha_orden, reverse=True)
+            novedades.append(
+                {
+                    "radicado_interno": radicado_interno,
+                    "radicado_rama": rama,
+                    "conjunto": p.get("conjunto_residencial"),
+                    "torre_apto": p.get("torre_apto"),
+                    "demandado": p.get("demandado"),
+                    "juzgado": p.get("juzgado"),
+                    "actuaciones": items,
+                }
+            )
+
+    if procesos:
+        try:
+            async with external_legal_client.LegalAPIClient() as client:
+                await asyncio.gather(*(_una(client, p) for p in procesos))
+        except Exception as exc:
+            raise _error_rama(exc) from None
+    novedades.sort(key=lambda n: n["radicado_interno"])
+    errores.sort(key=lambda e: e["radicado_interno"])
+    return _ok(
+        desde=f_desde,
+        estado=estado,
+        total_procesos=total,
+        limit=limit,
+        offset=offset,
+        consultados=len(procesos) - len(errores),
+        con_novedades=len(novedades),
+        novedades=novedades,
+        errores=errores,
     )

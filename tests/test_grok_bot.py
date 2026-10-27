@@ -749,5 +749,497 @@ class LiquidacionPdfTests(_Base):
         self.assertIn("retry-after", resp.headers)
 
 
+BASE_SECRETA = "https://rama-secreta.invalid/api/v2"
+RAD23 = "11001400300120240012300"
+RAD23_B = "05001400300220240045600"
+
+
+def _act(fecha="2026-03-10T00:00:00", actuacion="Auto", anotacion="Se admite", idx=None, **extra):
+    import external_legal_client as elc
+
+    datos = {
+        "fechaActuacion": fecha, "actuacion": actuacion, "anotacion": anotacion,
+        "fechaInicial": "2026-03-11T00:00:00", "fechaFinal": "2026-03-20T00:00:00",
+        "fechaRegistro": "2026-03-10T15:30:00", "conDocumentos": False,
+    }
+    if idx is not None:
+        datos["idRegActuacion"] = idx
+    datos.update(extra)
+    return elc.ActuacionResponse.model_validate(datos)
+
+
+class ClienteRamaFalso:
+    """Sustituye a LegalAPIClient: sin red. ``respuestas`` = {radicado: lista | Exception}."""
+
+    instancias: list = []
+
+    def __init__(self, respuestas=None, **kw):
+        self.respuestas = respuestas or {}
+        self.llamadas: list[tuple] = []
+        self.en_vuelo = 0
+        self.max_en_vuelo = 0
+        self.retardo = 0.0
+        self.kw = kw
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def consultar_id_por_radicado(self, radicado):
+        import asyncio
+
+        self.llamadas.append(("id", radicado))
+        self.en_vuelo += 1
+        self.max_en_vuelo = max(self.max_en_vuelo, self.en_vuelo)
+        try:
+            if self.retardo:
+                await asyncio.sleep(self.retardo)
+            r = self.respuestas.get(radicado, [])
+            if isinstance(r, BaseException):
+                raise r
+            return int(radicado[-6:])
+        finally:
+            self.en_vuelo -= 1
+
+    async def obtener_detalle(self, id_interno):
+        import external_legal_client as elc
+
+        self.llamadas.append(("detalle", id_interno))
+        return elc.ProcesoDetalleResponse.model_validate(
+            {"despacho": "Juzgado 1 Civil", "estado": "Activo", "idProceso": id_interno}
+        )
+
+    async def obtener_actuaciones(self, id_interno):
+        self.llamadas.append(("actuaciones", id_interno))
+        for rad, r in self.respuestas.items():
+            if int(rad[-6:]) == id_interno and not isinstance(r, BaseException):
+                return list(r)
+        return []
+
+    async def obtener_sujetos(self, id_interno):
+        import external_legal_client as elc
+
+        self.llamadas.append(("sujetos", id_interno))
+        return [elc.SujetoResponse.model_validate(
+            {"tipoSujeto": "Demandado", "nombreRazonSocial": "DEUDOR DEMO", "identificacion": "123"}
+        )]
+
+
+class _RamaBase(_Base):
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(os.environ, {"LEGAL_API_BASE_URL": BASE_SECRETA})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def con_cliente(self, cliente):
+        return mock.patch("external_legal_client.LegalAPIClient", return_value=cliente)
+
+    def logs(self):
+        """Captura todo lo registrado (logging + print) para buscar secretos."""
+        import logging
+
+        registros: list[str] = []
+
+        class H(logging.Handler):
+            def emit(self, record):
+                registros.append(record.getMessage())
+
+        h = H(level=logging.DEBUG)
+        root = logging.getLogger()
+        root.addHandler(h)
+        self.addCleanup(root.removeHandler, h)
+        return registros
+
+
+class RamaConsultaTests(_RamaBase):
+    URL = "/api/grok/rama/consulta"
+
+    def test_sin_llave_o_invalida_401_sin_llamar_a_la_rama(self):
+        cliente = ClienteRamaFalso()
+        with _env(GROK_BOT_API_KEY=GROK, BOT_API_KEY=BOT), self.con_cliente(cliente) as ctor:
+            for key in (None, "", "mala", BOT):
+                self.assertEqual(self.get(f"{self.URL}?radicado={RAD23}", key).status_code, 401)
+        ctor.assert_not_called()
+
+    def test_consulta_por_radicado_de_23_digitos(self):
+        cliente = ClienteRamaFalso({RAD23: [_act(idx=7), _act("2026-04-01T00:00:00", "Memorial", "Pago", idx=8)]})
+        with _env(GROK_BOT_API_KEY=GROK), self.con_cliente(cliente):
+            resp = self.get(f"{self.URL}?radicado={RAD23}", GROK)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        d = resp.json()
+        self.assertEqual(d["radicado"], RAD23)
+        self.assertEqual(d["id_interno"], int(RAD23[-6:]))
+        self.assertEqual(d["detalle"]["juzgado"], "Juzgado 1 Civil")
+        self.assertEqual([a["actuacion"] for a in d["actuaciones"]], ["Memorial", "Auto"])
+        act = d["actuaciones"][1]
+        self.assertEqual(act["fecha_actuacion"], "2026-03-10")
+        self.assertEqual(act["inicio_termino"], "2026-03-11")
+        self.assertEqual(act["fin_termino"], "2026-03-20")
+        self.assertEqual(act["fecha_registro"], "2026-03-10")
+        self.assertEqual(d["sujetos"][0]["nombre"], "DEUDOR DEMO")
+        self.assertEqual(
+            [c[0] for c in cliente.llamadas], ["id", "detalle", "actuaciones", "sujetos"]
+        )
+
+    def test_radicado_con_separadores_y_limite_de_actuaciones(self):
+        cliente = ClienteRamaFalso({RAD23: [_act(f"2026-03-{d:02d}T00:00:00", idx=d) for d in range(1, 6)]})
+        con_puntos = "-".join([RAD23[:5], RAD23[5:9], RAD23[9:]])
+        with _env(GROK_BOT_API_KEY=GROK), self.con_cliente(cliente):
+            resp = self.get(f"{self.URL}?radicado={con_puntos}&limite_actuaciones=2", GROK)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(cliente.llamadas[0], ("id", RAD23))
+        self.assertEqual(resp.json()["total_actuaciones"], 5)
+        self.assertEqual(len(resp.json()["actuaciones"]), 2)
+
+    def test_exp_se_resuelve_desde_procesos(self):
+        cursor = _FakeCursor([{"radicado_interno": "EXP-0001", "radicado_rama": " 11001-4003-001-2024-00123-00 "}])
+        cliente = ClienteRamaFalso({RAD23: [_act(idx=1)]})
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch.object(
+            grok_api, "_lectura", _fake_lectura(cursor)
+        ), self.con_cliente(cliente):
+            resp = self.get(f"{self.URL}?radicado=exp-0001", GROK)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["radicado_interno"], "EXP-0001")
+        self.assertEqual(cliente.llamadas[0], ("id", RAD23))
+        self.assertTrue(cursor.sql[0].upper().startswith("SELECT"))
+
+    def test_exp_inexistente_o_sin_radicado_rama_404(self):
+        for fila in ([], [{"radicado_interno": "EXP-9", "radicado_rama": None}],
+                     [{"radicado_interno": "EXP-9", "radicado_rama": "123"}]):
+            cursor = _FakeCursor(fila)
+            cliente = ClienteRamaFalso()
+            with _env(GROK_BOT_API_KEY=GROK), mock.patch.object(
+                grok_api, "_lectura", _fake_lectura(cursor)
+            ), self.con_cliente(cliente):
+                resp = self.get(f"{self.URL}?radicado=EXP-9", GROK)
+            self.assertEqual(resp.status_code, 404, fila)
+            self.assertEqual(cliente.llamadas, [])
+
+    def test_parametros_invalidos_422(self):
+        with _env(GROK_BOT_API_KEY=GROK), self.con_cliente(ClienteRamaFalso()) as ctor:
+            for q in ("", "radicado=", "radicado=%3Cscript%3E", f"radicado={RAD23}&limite_actuaciones=0",
+                      f"radicado={RAD23}&limite_actuaciones=5000", "radicado=" + "A" * 81):
+                self.assertEqual(self.get(f"{self.URL}?{q}", GROK).status_code, 422, q)
+        ctor.assert_not_called()
+
+    def test_la_rama_no_conoce_el_radicado_404(self):
+        import external_legal_client as elc  # noqa: F401
+        from fastapi import HTTPException
+
+        cliente = ClienteRamaFalso({RAD23: HTTPException(404, "No se encontró proceso para el radicado indicado")})
+        with _env(GROK_BOT_API_KEY=GROK), self.con_cliente(cliente):
+            resp = self.get(f"{self.URL}?radicado={RAD23}", GROK)
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.json()["error"], grok_api._MSG_NO_ENCONTRADO)
+
+    def test_rama_caida_502_con_mensaje_corto_sin_secretos(self):
+        import httpx
+        from fastapi import HTTPException
+
+        errores = (
+            HTTPException(502, f"API legal externa respondió HTTP 500. base_path=/api/v2. Cuerpo: {BASE_SECRETA} token=XYZ"),
+            HTTPException(504, "Timeout de lectura con la API legal externa"),
+            httpx.ConnectError(f"no se pudo conectar a {BASE_SECRETA}"),
+            RuntimeError(f"boom {BASE_SECRETA}"),
+        )
+        for err in errores:
+            cliente = ClienteRamaFalso({RAD23: err})
+            registros = self.logs()
+            with _env(GROK_BOT_API_KEY=GROK), self.con_cliente(cliente), mock.patch(
+                "builtins.print"
+            ) as fake_print:
+                resp = self.get(f"{self.URL}?radicado={RAD23}", GROK)
+            self.assertEqual(resp.status_code, 502, repr(err))
+            self.assertEqual(resp.json()["error"], grok_api._MSG_NO_RESPONDE)
+            visible = resp.text + " ".join(registros) + repr(fake_print.call_args_list)
+            for secreto in (BASE_SECRETA, "rama-secreta", "token=XYZ", "base_path", GROK):
+                self.assertNotIn(secreto, visible, repr(err))
+
+    def test_timeout_por_consulta_502(self):
+        cliente = ClienteRamaFalso({RAD23: [_act()]})
+        cliente.retardo = 1.0
+        with _env(GROK_BOT_API_KEY=GROK, GROK_RAMA_TIMEOUT_S="1"), self.con_cliente(cliente), mock.patch.object(
+            grok_api, "_timeout_consulta_s", return_value=0.05
+        ):
+            resp = self.get(f"{self.URL}?radicado={RAD23}", GROK)
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.json()["error"], grok_api._MSG_TIEMPO)
+
+    def test_sin_base_url_configurada_503_sin_filtrar_nada(self):
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch.dict(os.environ, {"LEGAL_API_BASE_URL": ""}):
+            resp = self.get(f"{self.URL}?radicado={RAD23}", GROK)
+        self.assertEqual(resp.status_code, 503)
+        self.assertEqual(resp.json()["error"], grok_api._MSG_NO_CONFIGURADA)
+
+    def test_solo_get_y_auditoria_sin_radicado(self):
+        cliente = ClienteRamaFalso({RAD23: [_act(idx=1)]})
+        with _env(GROK_BOT_API_KEY=GROK), self.con_cliente(cliente), mock.patch("main._json_log") as log:
+            self.get(f"{self.URL}?radicado={RAD23}", GROK)
+            self.assertEqual(self.post(f"{self.URL}?radicado={RAD23}", GROK).status_code, 405)
+        llamadas = [c for c in log.call_args_list if c.args[1:2] == ("m2m_audit",)]
+        self.assertEqual(llamadas[0].kwargs["ruta"], self.URL)
+        self.assertNotIn(RAD23, repr(llamadas))
+
+    def test_respeta_el_rate_limit_de_grok(self):
+        ventana = rate_limit.SlidingWindow(1, 60)
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch.object(
+            rate_limit.limiter, "grok_window", ventana
+        ), self.con_cliente(ClienteRamaFalso({RAD23: []})):
+            self.get(f"{self.URL}?radicado={RAD23}", GROK)
+            resp = self.get(f"{self.URL}?radicado={RAD23}", GROK)
+        self.assertEqual(resp.status_code, 429)
+
+
+def _proceso(n, rama=RAD23):
+    return {
+        "radicado_interno": f"EXP-{n:04d}", "radicado_rama": rama, "juzgado": "J1",
+        "conjunto_residencial": "Conjunto Demo", "torre_apto": f"T1-{n}", "demandado": f"DEUDOR {n}",
+    }
+
+
+def _registro(ids=(), hashes=(), manuales=()):
+    return {"ids": set(ids), "hashes": set(hashes), "manuales": list(manuales)}
+
+
+class RamaNovedadesTests(_RamaBase):
+    URL = "/api/grok/rama/novedades"
+
+    def _pedir(self, procesos, registros, cliente, query="", total=None):
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch.object(
+            grok_api, "_cargar_procesos_y_registros",
+            return_value=(total if total is not None else len(procesos), procesos, registros),
+        ) as carga, self.con_cliente(cliente):
+            resp = self.get(f"{self.URL}?{query}", GROK)
+        return resp, carga
+
+    def test_sin_llave_401(self):
+        cliente = ClienteRamaFalso()
+        with _env(GROK_BOT_API_KEY=GROK), self.con_cliente(cliente) as ctor, mock.patch.object(
+            grok_api, "_cargar_procesos_y_registros"
+        ) as carga:
+            self.assertEqual(self.get(self.URL).status_code, 401)
+            self.assertEqual(self.get(self.URL, BOT).status_code, 401)
+        ctor.assert_not_called()
+        carga.assert_not_called()
+
+    def test_desde_o_no_registrada_con_datos_del_proceso(self):
+        p = _proceso(1)
+        cliente = ClienteRamaFalso({RAD23: [
+            _act("2026-01-05T00:00:00", "Auto", "Antigua y ya registrada", idx=1),
+            _act("2026-01-06T00:00:00", "Auto", "Antigua no registrada", idx=2),
+            _act("2026-03-10T00:00:00", "Sentencia", "Nueva y ya registrada", idx=3),
+            _act("2026-03-12T00:00:00", "Memorial", "Nueva", idx=4),
+        ]})
+        reg = {p["radicado_interno"]: _registro(ids={"1", "3"})}
+        resp, carga = self._pedir([p], reg, cliente, "desde=2026-03-01&estado=activos&limit=10&offset=5")
+        self.assertEqual(resp.status_code, 200, resp.text)
+        carga.assert_called_once_with("ACTIVOS", 10, 5)
+        d = resp.json()
+        self.assertEqual((d["total_procesos"], d["consultados"], d["con_novedades"]), (1, 1, 1))
+        nov = d["novedades"][0]
+        self.assertEqual(
+            (nov["radicado_interno"], nov["conjunto"], nov["demandado"], nov["juzgado"], nov["radicado_rama"]),
+            ("EXP-0001", "Conjunto Demo", "DEUDOR 1", "J1", RAD23),
+        )
+        por_id = {a["id_actuacion"]: a for a in nov["actuaciones"]}
+        self.assertEqual(set(por_id), {"2", "3", "4"})
+        self.assertEqual(por_id["2"]["motivo"], ["no_registrada"])
+        self.assertEqual(por_id["3"]["motivo"], ["posterior_a_desde"])
+        self.assertEqual(por_id["4"]["motivo"], ["posterior_a_desde", "no_registrada"])
+        self.assertTrue(por_id["3"]["registrada_en_erp"])
+        self.assertEqual(d["errores"], [])
+
+    def test_solo_no_registradas_exige_ambas_condiciones(self):
+        p = _proceso(1)
+        cliente = ClienteRamaFalso({RAD23: [
+            _act("2026-01-06T00:00:00", anotacion="vieja sin registrar", idx=2),
+            _act("2026-03-10T00:00:00", anotacion="nueva registrada", idx=3),
+            _act("2026-03-12T00:00:00", anotacion="nueva sin registrar", idx=4),
+        ]})
+        reg = {p["radicado_interno"]: _registro(ids={"3"})}
+        resp, _c = self._pedir([p], reg, cliente, "desde=2026-03-01&solo_no_registradas=true")
+        ids = [a["id_actuacion"] for a in resp.json()["novedades"][0]["actuaciones"]]
+        self.assertEqual(ids, ["4"])
+
+    def test_sin_desde_solo_trae_lo_no_registrado_y_omite_procesos_sin_novedad(self):
+        p1, p2 = _proceso(1, RAD23), _proceso(2, RAD23_B)
+        cliente = ClienteRamaFalso({
+            RAD23: [_act(idx=1)],
+            RAD23_B: [_act(idx=9), _act("2026-03-11T00:00:00", "Otro", "Nueva", idx=10)],
+        })
+        reg = {"EXP-0001": _registro(ids={"1"}), "EXP-0002": _registro(ids={"9"})}
+        resp, _c = self._pedir([p1, p2], reg, cliente)
+        d = resp.json()
+        self.assertEqual([n["radicado_interno"] for n in d["novedades"]], ["EXP-0002"])
+        self.assertEqual([a["id_actuacion"] for a in d["novedades"][0]["actuaciones"]], ["10"])
+
+    def test_error_en_un_proceso_va_a_errores_y_no_tumba_el_resto(self):
+        import httpx
+        from fastapi import HTTPException
+
+        procesos = [_proceso(1, RAD23), _proceso(2, RAD23_B), _proceso(3, "73001400300320240078900")]
+        cliente = ClienteRamaFalso({
+            RAD23: [_act(idx=1)],
+            RAD23_B: httpx.ConnectError(f"fallo {BASE_SECRETA}"),
+            "73001400300320240078900": HTTPException(404, "No se encontró proceso para el radicado indicado"),
+        })
+        reg = {p["radicado_interno"]: _registro() for p in procesos}
+        registros = self.logs()
+        resp, _c = self._pedir(procesos, reg, cliente)
+        self.assertEqual(resp.status_code, 200)
+        d = resp.json()
+        self.assertEqual([n["radicado_interno"] for n in d["novedades"]], ["EXP-0001"])
+        self.assertEqual(
+            d["errores"],
+            [
+                {"radicado_interno": "EXP-0002", "error": grok_api._MSG_NO_RESPONDE},
+                {"radicado_interno": "EXP-0003", "error": grok_api._MSG_NO_ENCONTRADO},
+            ],
+        )
+        self.assertEqual(d["consultados"], 1)
+        visible = resp.text + " ".join(registros)
+        for secreto in (BASE_SECRETA, "rama-secreta"):
+            self.assertNotIn(secreto, visible)
+
+    def test_timeout_por_consulta_va_a_errores(self):
+        cliente = ClienteRamaFalso({RAD23: [_act(idx=1)]})
+        cliente.retardo = 1.0
+        with mock.patch.object(grok_api, "_timeout_consulta_s", return_value=0.05):
+            resp, _c = self._pedir([_proceso(1)], {"EXP-0001": _registro()}, cliente)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["errores"], [{"radicado_interno": "EXP-0001", "error": grok_api._MSG_TIEMPO}])
+
+    def test_tope_de_concurrencia(self):
+        procesos = [_proceso(n, f"{n:023d}") for n in range(1, 13)]
+        cliente = ClienteRamaFalso({p["radicado_rama"]: [_act(idx=int(p["radicado_rama"]))] for p in procesos})
+        cliente.retardo = 0.02
+        reg = {p["radicado_interno"]: _registro() for p in procesos}
+        with mock.patch.dict(os.environ, {"GROK_RAMA_CONCURRENCY": "2"}):
+            resp, _c = self._pedir(procesos, reg, cliente)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["con_novedades"], 12)
+        self.assertLessEqual(cliente.max_en_vuelo, 2)
+        self.assertGreaterEqual(cliente.max_en_vuelo, 1)
+
+    def test_concurrencia_configurada_se_acota(self):
+        for valor, esperado in (("99", 5), ("0", 1), ("x", 3), ("", 3)):
+            with mock.patch.dict(os.environ, {"GROK_RAMA_CONCURRENCY": valor}):
+                self.assertEqual(grok_api._concurrencia(), esperado, valor)
+
+    def test_plazo_total_agotado_manda_el_resto_a_errores(self):
+        procesos = [_proceso(n, f"{n:023d}") for n in range(1, 5)]
+        cliente = ClienteRamaFalso({p["radicado_rama"]: [_act(idx=1)] for p in procesos})
+        cliente.retardo = 0.05
+        reg = {p["radicado_interno"]: _registro() for p in procesos}
+        with mock.patch.dict(os.environ, {"GROK_RAMA_CONCURRENCY": "1"}), mock.patch.object(
+            grok_api, "_timeout_total_s", return_value=0.0
+        ):
+            resp, _c = self._pedir(procesos, reg, cliente)
+        d = resp.json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(d["errores"]), 4)
+        self.assertTrue(all(e["error"] == grok_api._MSG_TIEMPO for e in d["errores"]))
+        self.assertEqual(cliente.llamadas, [])
+
+    def test_sin_procesos_no_abre_cliente(self):
+        cliente = ClienteRamaFalso()
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch.object(
+            grok_api, "_cargar_procesos_y_registros", return_value=(0, [], {})
+        ), self.con_cliente(cliente) as ctor:
+            resp = self.get(self.URL, GROK)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["novedades"], [])
+        ctor.assert_not_called()
+
+    def test_rama_no_configurada_503(self):
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch.dict(os.environ, {"LEGAL_API_BASE_URL": ""}), mock.patch.object(
+            grok_api, "_cargar_procesos_y_registros", return_value=(1, [_proceso(1)], {"EXP-0001": _registro()})
+        ):
+            resp = self.get(self.URL, GROK)
+        self.assertEqual(resp.status_code, 503)
+
+    def test_parametros_invalidos_422(self):
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch.object(
+            grok_api, "_cargar_procesos_y_registros"
+        ) as carga, self.con_cliente(ClienteRamaFalso()) as ctor:
+            for q in ("estado=BORRAR", "desde=ayer", "desde=2026-13-45", "limit=0", "limit=101",
+                      "offset=-1", "limit=abc"):
+                self.assertEqual(self.get(f"{self.URL}?{q}", GROK).status_code, 422, q)
+        carga.assert_not_called()
+        ctor.assert_not_called()
+
+    def test_otros_metodos_405(self):
+        with _env(GROK_BOT_API_KEY=GROK):
+            for metodo in ("post", "put", "patch", "delete"):
+                resp = getattr(self.client, metodo)(self.URL, headers={"X-API-Key": GROK})
+                self.assertEqual(resp.status_code, 405, metodo)
+
+    def test_consultas_de_base_de_datos_son_solo_select_y_en_solo_lectura(self):
+        class Cur(_FakeCursor):
+            def fetchone(self):
+                self.ultimo = self.sql[-1]
+                if "COUNT(*)" in self.ultimo:
+                    return {"total": 1}
+                if "to_regclass" in self.ultimo:
+                    return {"ok": True}
+                return None
+
+            def fetchall(self):
+                u = self.sql[-1]
+                if "FROM procesos" in u and "LIMIT" in u:
+                    return [_proceso(1)]
+                return []
+
+        cursor = Cur()
+        with mock.patch.object(grok_api, "_lectura", _fake_lectura(cursor)):
+            total, procesos, registros = grok_api._cargar_procesos_y_registros("ACTIVOS", 100, 0)
+        self.assertEqual((total, len(procesos)), (1, 1))
+        self.assertIn("EXP-0001", registros)
+        self.assertGreaterEqual(len(cursor.sql), 4)
+        for sql in cursor.sql:
+            cabeza = sql.upper().lstrip()
+            self.assertTrue(cabeza.startswith("SELECT"), sql)
+            for escritura in ("INSERT", "UPDATE ", "DELETE", "ALTER ", "DROP "):
+                self.assertNotIn(escritura, cabeza)
+
+    def test_ya_registrada_por_id_hash_o_texto_manual(self):
+        import datetime as dt
+
+        import sync_procesos_service as sps
+
+        a = sps.mapear_actuacion_api(
+            _act("2026-03-10T00:00:00", "Auto", "Se admite la demanda", idx=5),
+            radicado_interno="EXP-1", radicado_rama=RAD23,
+        )
+        self.assertTrue(grok_api._ya_registrada(a, _registro(ids={"5"})))
+        self.assertTrue(grok_api._ya_registrada(a, _registro(hashes={a["content_hash"]})))
+        manual = (dt.date(2026, 3, 10), sps._norm_text("Auto: se admite la demanda ejecutiva"))
+        self.assertTrue(grok_api._ya_registrada(a, _registro(manuales=[manual])))
+        otra_fecha = (dt.date(2026, 3, 11), manual[1])
+        self.assertFalse(grok_api._ya_registrada(a, _registro(manuales=[otra_fecha])))
+        otro_texto = (dt.date(2026, 3, 10), "algo distinto")
+        self.assertFalse(grok_api._ya_registrada(a, _registro(manuales=[otro_texto])))
+        self.assertFalse(grok_api._ya_registrada(a, _registro(ids={"99"})))
+
+    def test_auditoria_y_rate_limit_de_grok(self):
+        ventana = rate_limit.SlidingWindow(1, 60)
+        cliente = ClienteRamaFalso()
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch.object(
+            rate_limit.limiter, "grok_window", ventana
+        ), mock.patch.object(
+            grok_api, "_cargar_procesos_y_registros", return_value=(0, [], {})
+        ), self.con_cliente(cliente), mock.patch("main._json_log") as log:
+            ok = self.get(f"{self.URL}?desde=2026-01-01", GROK)
+            limitado = self.get(f"{self.URL}?desde=2026-01-01", GROK)
+        self.assertEqual((ok.status_code, limitado.status_code), (200, 429))
+        llamadas = [c for c in log.call_args_list if c.args[1:2] == ("m2m_audit",)]
+        self.assertEqual([c.kwargs["estado"] for c in llamadas], [200, 429])
+        self.assertEqual(llamadas[0].kwargs["ruta"], self.URL)
+        self.assertNotIn("2026-01-01", repr(llamadas))
+
+
 if __name__ == "__main__":
     unittest.main()
