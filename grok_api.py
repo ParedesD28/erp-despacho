@@ -1,8 +1,11 @@
 """Consultas de SOLO LECTURA para "Grok Bot" bajo ``/api/grok/*``.
 
 Autenticación: únicamente ``X-API-Key`` = ``GROK_BOT_API_KEY`` (ninguna otra llave sirve
-aquí, ni la heredada). Todas las rutas son GET y se ejecutan en transacciones
-``READ ONLY``; la liquidación se calcula con ``autocausar=False`` (no escribe).
+aquí, ni la heredada). Todas las rutas son GET. Las consultas propias de este módulo se
+ejecutan en transacciones ``READ ONLY``; la liquidación (y su PDF) se calcula con
+``autocausar=False``, que no escribe ``expensas_ph`` (el motor abre sus propias
+conexiones; su único efecto lateral posible es completar la caché de tasas oficiales
+``historico_tasas`` si falta un mes).
 
 Qué NO se devuelve nunca: contraseñas, hashes, tokens, llaves, datos de usuarios del ERP
 (abogados/usuarios, perfiles) ni sus nombres. Sí se devuelven datos de deudores y
@@ -11,14 +14,16 @@ necesita para cobrar; ver PRODUCCION.md.
 """
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from psycopg2.extras import RealDictCursor
+from starlette.background import BackgroundTask
 
 import m2m_keys
 from vencimientos_estado import sql_abierto
@@ -317,21 +322,15 @@ def unidades_de_conjunto(conjunto_id: int):
     return _ok(conjunto_id=conjunto_id, unidades=unidades)
 
 
-@router.get("/liquidacion")
-def calcular_liquidacion(
-    inmueble_id: int,
-    fecha_corte: str,
-    obligacion_id: int | None = None,
-    detalle: bool = False,
-):
-    """Calcula la liquidación PH sin escribir (sin autocausación y sin PDF)."""
-    import bot_api
+def _calcular_liquidacion(
+    inmueble_id: int, fecha_corte: date, obligacion_id: int | None
+) -> tuple[list[dict], dict, tuple]:
+    """Liquidación PH sin autocausación (no escribe ``expensas_ph``)."""
     import liquidador
 
-    corte = _fecha(fecha_corte, "fecha_corte", futura_ok=False)
     try:
         resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
-            inmueble_id, "usura", 2.5, 23.8, 0.0, corte,
+            inmueble_id, "usura", 2.5, 23.8, 0.0, fecha_corte,
             autocausar=False, obligacion_id=obligacion_id,
         )
     except HTTPException:
@@ -343,6 +342,21 @@ def calcular_liquidacion(
         raise HTTPException(status_code=404, detail="No existe información del inmueble")
     if not resultados:
         raise HTTPException(status_code=404, detail="No hay movimientos para liquidar")
+    return resultados, resumen, inm_info
+
+
+@router.get("/liquidacion")
+def calcular_liquidacion(
+    inmueble_id: int,
+    fecha_corte: str,
+    obligacion_id: int | None = None,
+    detalle: bool = False,
+):
+    """Calcula la liquidación PH sin escribir (sin autocausación y sin PDF)."""
+    import bot_api
+
+    corte = _fecha(fecha_corte, "fecha_corte", futura_ok=False)
+    resultados, resumen, inm_info = _calcular_liquidacion(inmueble_id, corte, obligacion_id)
     tasas, fuente = bot_api._resumen_tasas(resultados)
     datos = {
         "inmueble_id": inmueble_id,
@@ -362,3 +376,38 @@ def calcular_liquidacion(
     if detalle:
         datos["detalle_mensual"] = resultados
     return _ok(datos=datos)
+
+
+def _borrar_archivo(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+@router.get("/liquidacion/pdf")
+def liquidacion_pdf(inmueble_id: int, fecha_corte: str, obligacion_id: int | None = None):
+    """PDF de la liquidación, calculado sin escribir en la base y devuelto directo.
+
+    El archivo temporal se borra después de enviarlo.
+    """
+    import exportaciones
+
+    if not fecha_corte.strip():
+        raise HTTPException(status_code=422, detail="fecha_corte es obligatoria (YYYY-MM-DD)")
+    corte = _fecha(fecha_corte.strip(), "fecha_corte", futura_ok=False)
+    resultados, resumen, inm_info = _calcular_liquidacion(inmueble_id, corte, obligacion_id)
+    try:
+        pdf_path = exportaciones.generar_pdf_liquidacion(
+            inmueble_id, corte, resultados, resumen, inm_info
+        )
+    except Exception as exc:
+        print(f"[GROK LIQUIDACION PDF] error: {exc!r}", flush=True)
+        raise HTTPException(status_code=500, detail="No fue posible generar el PDF")
+    return FileResponse(
+        path=str(pdf_path),
+        media_type="application/pdf",
+        filename=f"Liquidacion_{inmueble_id}_{corte.isoformat()}.pdf",
+        headers={"Cache-Control": "private, no-store"},
+        background=BackgroundTask(_borrar_archivo, str(pdf_path)),
+    )

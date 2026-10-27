@@ -561,5 +561,193 @@ class DatosDeLecturaTests(_Base):
         self.assertEqual(limpio, {"a": 1, "x": [{"ok": 2}]})
 
 
+class _ConexionGrabadora:
+    """Conexión falsa que registra todo el SQL: el motor real corre sin base de datos."""
+
+    def __init__(self, sql: list[str], inm_info):
+        self._sql = sql
+        self._inm_info = inm_info
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def cursor(self, *a, **kw):
+        return _CursorGrabador(self._sql, self._inm_info)
+
+    def release(self):
+        pass
+
+    def commit(self):
+        self._sql.append("COMMIT")
+
+    def rollback(self):
+        pass
+
+
+class _CursorGrabador:
+    def __init__(self, sql, inm_info):
+        self._sql = sql
+        self._inm_info = inm_info
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        self._sql.append(" ".join(str(sql).split()))
+
+    def fetchone(self):
+        return self._inm_info
+
+    def fetchall(self):
+        return []
+
+
+class LiquidacionPdfTests(_Base):
+    URL = "/api/grok/liquidacion/pdf"
+    INM = ("Conjunto Demo", "T1-101", "DEUDOR DEMO", "123456")
+
+    def setUp(self):
+        super().setUp()
+        import tempfile
+
+        import pdf_storage
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        patcher = mock.patch.object(pdf_storage, "PDF_STORAGE_DIR", Path(self._tmp.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _ejecutar(self, query, key=GROK, filas=None, inm=INM):
+        """Corre el motor real con una BD falsa; devuelve (respuesta, sql_ejecutado, sql_pandas)."""
+        import pandas as pd
+
+        sql: list[str] = []
+        sql_pandas: list[str] = []
+        base = filas if filas is not None else [
+            (2026, 1, "Expensa Ordinaria", 100000.0),
+            (2026, 2, "Expensa Ordinaria", 100000.0),
+        ]
+        df = pd.DataFrame(base, columns=["periodo_anio", "periodo_mes", "concepto", "valor_capital"])
+
+        def _read_sql(consulta, conn, params=None):
+            sql_pandas.append(" ".join(str(consulta).split()))
+            return df.rename(columns={})[["concepto", "periodo_mes", "periodo_anio", "valor_capital"]]
+
+        import db
+
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch.object(
+            db, "get_connection", side_effect=lambda: _ConexionGrabadora(sql, inm)
+        ), mock.patch("liquidador.pd.read_sql_query", side_effect=_read_sql), mock.patch(
+            "tasas.obtener_tasa_bd_o_api", return_value=0.20
+        ):
+            resp = self.get(f"{self.URL}?{query}", key)
+        return resp, sql, sql_pandas
+
+    def test_devuelve_pdf_real_sin_escribir_en_expensas(self):
+        resp, sql, sql_pandas = self._ejecutar("inmueble_id=7&fecha_corte=2026-03-31")
+        self.assertEqual(resp.status_code, 200, resp.text[:300])
+        self.assertEqual(resp.headers["content-type"], "application/pdf")
+        self.assertTrue(resp.content.startswith(b"%PDF-"))
+        self.assertIn("Liquidacion_7_2026-03-31.pdf", resp.headers["content-disposition"])
+        todo = [*sql, *sql_pandas]
+        self.assertTrue(todo, "el motor debía consultar la base")
+        for consulta in todo:
+            cabeza = consulta.upper().lstrip()
+            self.assertTrue(cabeza.startswith("SELECT"), consulta)
+            for escritura in ("INSERT", "UPDATE ", "DELETE", "ALTER ", "DROP "):
+                self.assertNotIn(escritura, cabeza, consulta)
+        self.assertNotIn("COMMIT", sql)
+
+    def test_archivo_temporal_se_borra_despues_de_enviar(self):
+        resp, _sql, _p = self._ejecutar("inmueble_id=7&fecha_corte=2026-03-31")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(list(Path(self._tmp.name).glob("*.pdf")), [])
+
+    def test_motor_se_llama_sin_autocausar_y_con_obligacion(self):
+        resultados = [{"periodo": "2026-01", "desde": "2026-01-01", "tasa_ea": 20, "tasa_mes": 1.5}]
+        resumen = {"capital": 1, "intereses": 0, "honorarios_pct": 0, "honorarios": 0, "gastos": 0, "gran_total": 1}
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch(
+            "liquidador.motor_calculo_judicial", return_value=(resultados, resumen, self.INM)
+        ) as motor, mock.patch(
+            "exportaciones.generar_pdf_liquidacion"
+        ) as gen:
+            ruta = Path(self._tmp.name) / "x.pdf"
+            ruta.write_bytes(b"%PDF-1.4 prueba")
+            gen.return_value = str(ruta)
+            resp = self.get(f"{self.URL}?inmueble_id=7&fecha_corte=2026-03-31&obligacion_id=55", GROK)
+        self.assertEqual(resp.status_code, 200)
+        motor.assert_called_once_with(
+            7, "usura", 2.5, 23.8, 0.0, date(2026, 3, 31), autocausar=False, obligacion_id=55
+        )
+        self.assertEqual(gen.call_args.args[:2], (7, date(2026, 3, 31)))
+
+    def test_sin_llave_o_invalida_401(self):
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch("liquidador.motor_calculo_judicial") as motor:
+            self.assertEqual(self.get(f"{self.URL}?inmueble_id=7&fecha_corte=2026-03-31").status_code, 401)
+            for otra in ("mala", BOT, OLD):
+                self.assertEqual(
+                    self.get(f"{self.URL}?inmueble_id=7&fecha_corte=2026-03-31", otra).status_code, 401
+                )
+        motor.assert_not_called()
+
+    def test_parametros_invalidos_422(self):
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch("liquidador.motor_calculo_judicial") as motor:
+            for query in (
+                "fecha_corte=2026-03-31",
+                "inmueble_id=7",
+                "inmueble_id=abc&fecha_corte=2026-03-31",
+                "inmueble_id=7&fecha_corte=31-03-2026",
+                "inmueble_id=7&fecha_corte=2999-01-01",
+                "inmueble_id=7&fecha_corte=",
+                "inmueble_id=7&fecha_corte=2026-03-31&obligacion_id=x",
+            ):
+                self.assertEqual(self.get(f"{self.URL}?{query}", GROK).status_code, 422, query)
+        motor.assert_not_called()
+
+    def test_sin_inmueble_o_sin_movimientos_404(self):
+        resp, _s, _p = self._ejecutar("inmueble_id=999&fecha_corte=2026-03-31", filas=[], inm=None)
+        self.assertEqual(resp.status_code, 404)
+        resp, _s, _p = self._ejecutar("inmueble_id=999&fecha_corte=2026-03-31", filas=[], inm=self.INM)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_otros_metodos_405(self):
+        with _env(GROK_BOT_API_KEY=GROK):
+            for metodo in ("post", "put", "patch", "delete"):
+                resp = getattr(self.client, metodo)(
+                    f"{self.URL}?inmueble_id=7&fecha_corte=2026-03-31",
+                    headers={"X-API-Key": GROK},
+                )
+                self.assertEqual(resp.status_code, 405, metodo)
+
+    def test_auditoria_registra_la_llamada_sin_query(self):
+        with mock.patch("main._json_log") as log:
+            resp, _s, _p = self._ejecutar("inmueble_id=7&fecha_corte=2026-03-31")
+        self.assertEqual(resp.status_code, 200)
+        llamadas = [c for c in log.call_args_list if c.args[1:2] == ("m2m_audit",)]
+        self.assertEqual(len(llamadas), 1)
+        self.assertEqual(llamadas[0].kwargs["ruta"], self.URL)
+        self.assertEqual(llamadas[0].kwargs["metodo"], "GET")
+        self.assertEqual(llamadas[0].kwargs["estado"], 200)
+        self.assertNotIn("inmueble_id", repr(llamadas[0]))
+
+    def test_respeta_el_rate_limit_de_grok(self):
+        ventana = rate_limit.SlidingWindow(1, 60)
+        with _env(GROK_BOT_API_KEY=GROK), mock.patch.object(
+            rate_limit.limiter, "grok_window", ventana
+        ), mock.patch("liquidador.motor_calculo_judicial") as motor:
+            motor.return_value = ([], {}, None)
+            self.get(f"{self.URL}?inmueble_id=7&fecha_corte=2026-03-31", GROK)
+            resp = self.get(f"{self.URL}?inmueble_id=7&fecha_corte=2026-03-31", GROK)
+        self.assertEqual(resp.status_code, 429)
+        self.assertIn("retry-after", resp.headers)
+
+
 if __name__ == "__main__":
     unittest.main()
