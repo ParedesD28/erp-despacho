@@ -6,6 +6,7 @@ ERP:
 - `DATABASE_URL`
 - `ERP_SESSION_SECRET` — secreto aleatorio largo (mínimo 32 caracteres). Es obligatorio y no se usa como fallback ninguna otra variable.
 - `BOT_API_KEY`, `RECAUDOS_API_KEY`, `BOT_PDF_PUBLIC_SECRET`, `AGENT_SUPERVISION_KEY` — llaves M2M independientes (una por propósito). Ver runbook de llaves separadas.
+- `GROK_BOT_API_KEY` — llave de "Grok Bot" (opcional, distinta de las demás; generar con `python -c "import secrets;print(secrets.token_urlsafe(48))"`). Se acepta **además** de las llaves actuales en `/api/bot/*` y `/api/recaudos/bot/*` (con escritura: liquidar, acuerdo, abono) y es la única que abre `/api/grok/*` (solo lectura). Nunca acepta la llave heredada. No abre administración de usuarios/perfiles/permisos, llaves, sesiones, `purgar-todos`, `/sms/api/`, `/api/v1/cron/` ni configuración. Si falta, `/api/grok/*` responde 503 y nada cambia para el bot de cobranza. Límite propio: `RATE_LIMIT_GROK_PER_MIN` (120/min en total). Cada llamada con esta llave deja un log `m2m_audit` (consumidor `grok`, método, ruta, estado, IP; sin cuerpo ni llaves). Revocar: borrar la variable en Render.
 - `LIQUIDADOR_API_KEY` — llave compartida HEREDADA; solo durante la transición (el ERP la acepta junto a las nuevas). Retirarla borrándola o con `M2M_LEGACY_KEY_ENABLED=false`.
 - `DRIVE_TOKEN_KEY` — llave propia (>= 32 caracteres) que cifra el refresh token de Drive en la base. Recomendada: permite rotar `ERP_SESSION_SECRET` sin reconectar Drive. Si falta, se usa la derivada de `ERP_SESSION_SECRET` (descifra con ambas y re-cifra con la propia al leer).
 - `PUBLIC_BASE_URL` — URL pública del servicio ERP, por ejemplo `https://gestionjudicial.onrender.com`.
@@ -96,5 +97,6 @@ Se eliminaron 21 archivos de parches fragmentados y mono-dependientes que mutaba
 - `exportaciones.py`: Generador oficial ReportLab de PDF judicial en formato apaisado y reporte ejecutivo en Excel con OpenPyXL.
 - `expedientes_service.py`: Deduplicación de partes/litisconsortes, trazabilidad/auditoría y cálculo automático determinista de etapas procesales.
 - `bot_api.py`: Endpoint M2M protegido con API Key para el bot de WhatsApp y descarga segura con URLs temporales firmadas.
+- `grok_api.py`: consultas de solo lectura `/api/grok/*` para Grok Bot (solo `GET`, transacciones `READ ONLY`, sin datos de usuarios del ERP ni secretos).
 - `agent_supervision.py`: Panel y API de supervisión y toma de control humano para el agente de cobranza.
 - `start.py`: Punto de entrada único para producción (`python start.py`).

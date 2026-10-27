@@ -20,7 +20,8 @@ router = APIRouter(prefix="/api/recaudos", tags=["Recaudos y Paz y Salvo"])
 PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
 
 def _require_bot_auth(request: Request):
-    m2m_keys.require_api_key(m2m_keys.PURPOSE_RECAUDOS, request.headers.get("X-API-Key"))
+    """Exige X-API-Key: llave de recaudos (RECAUDOS_API_KEY/heredada) o la de Grok Bot."""
+    m2m_keys.require_machine_request(m2m_keys.PURPOSE_RECAUDOS, request)
 
 @router.post("/bot/abono", dependencies=[Depends(_require_bot_auth)])
 async def reportar_abono_agente(request: Request):

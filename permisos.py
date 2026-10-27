@@ -1,6 +1,6 @@
 """Perfiles humanos y permisos del ERP (RBAC).
 
-El bot/API key NO usa estos perfiles: sigue con LIQUIDADOR_API_KEY.
+Las llaves M2M (bot, recaudos, Grok Bot) NO usan estos perfiles: ver m2m_keys.py.
 Los permisos viven en código; en BD solo se asigna el perfil al usuario (`abogados`).
 """
 from __future__ import annotations
@@ -175,7 +175,8 @@ def puede_ver_cobro(permisos: Optional[Iterable[str]]) -> bool:
 
 # Rutas públicas (sin sesión). Cada una se protege con su propio mecanismo:
 # login/landing/health son abiertas; /static no sirve PDFs sensibles;
-# /api/bot/ y /api/recaudos/bot/ usan llave M2M (m2m_keys); /sms/api/ usa token;
+# /api/bot/, /api/recaudos/bot/ y /api/grok/ usan llave M2M (m2m_keys; /api/grok/ solo
+# acepta GROK_BOT_API_KEY); /sms/api/ usa token;
 # /api/v1/cron/ usa X-Cron-Secret. tests/test_m2m_rutas_publicas.py audita que toda
 # ruta registrada bajo estos prefijos se autentique por sí misma.
 PUBLIC_EXACT_PATHS: frozenset[str] = frozenset(
@@ -185,6 +186,7 @@ PUBLIC_PREFIXES: tuple[str, ...] = (
     "/static/",
     "/api/bot/",
     "/api/recaudos/bot/",
+    "/api/grok/",
     "/sms/api/",
     "/api/v1/cron/",
 )
