@@ -1,9 +1,10 @@
 """Cargador de facturación mensual COLON: barreras B1–B5 y B7.
 
 Pre-vista en memoria (0 escrituras). Aplicar solo al confirmar.
-De la factura solo se causa `VALOR MES` de cuota ordinaria, extraordinaria o
-multa. Nunca intereses de mora ni abonos/anticipos: el liquidador calcula la
-mora; los pagos no se imputan desde este PDF.
+De la factura se causa `VALOR MES` de cuota ordinaria, extraordinaria o multa.
+`Abono último Mes` se lee y se muestra desmarcado; solo se inserta (periodo M-1)
+si el abogado marca esa fila. Nunca intereses de mora ni cierre automático
+de desfase (p. ej. 25-103). El liquidador calcula la mora.
 """
 from __future__ import annotations
 
@@ -191,7 +192,7 @@ def clasificar_cargo_mes_recibo(concepto_pdf: str) -> dict:
             "accion": "IGNORAR_SIEMPRE",
             "concepto_erp": None,
             "requiere_confirmacion": False,
-            "motivo": "Este cargador no imputa abonos ni anticipos; los pagos no salen de la factura",
+            "motivo": "El VALOR MES de una línea de abono/anticipo no se carga como cuota; el pago del pie se propone aparte",
         }
     if (
         ("CUOTA" in tokens or "APORTE" in tokens or "EXPENSA" in tokens)
@@ -286,10 +287,82 @@ def evaluar_elegibilidad(
 _CONCEPTOS_CAUSABLES = frozenset({"Expensa Ordinaria", "Cuota Extraordinaria"})
 
 
+def hay_abono_igual(expensas: list[dict], anio: int, mes: int, monto: float) -> bool:
+    for e in expensas or []:
+        if str(e.get("concepto") or "") != "Abono":
+            continue
+        if int(e.get("periodo_anio") or 0) != anio or int(e.get("periodo_mes") or 0) != mes:
+            continue
+        if abs(_money(e.get("valor_capital")) - _money(monto)) < 0.01:
+            return True
+    return False
+
+
+def abono_del_periodo(expensas: list[dict], anio: int, mes: int) -> Optional[float]:
+    for e in expensas or []:
+        if str(e.get("concepto") or "") != "Abono":
+            continue
+        if int(e.get("periodo_anio") or 0) == anio and int(e.get("periodo_mes") or 0) == mes:
+            return _money(e.get("valor_capital"))
+    return None
+
+
+def detectar_abono_ultimo_mes(
+    inv: dict,
+    expensas: list[dict],
+    periodo_anio: int,
+    periodo_mes: int,
+) -> Optional[dict]:
+    """Lee `Abono último Mes` y lo propone como Abono de M-1, sin insertarlo.
+
+    Checkbox desmarcado. No hay abono de cierre ni imputación automática.
+    """
+    monto = _money(inv.get("abono_ultimo_mes"))
+    if monto <= 0:
+        return None
+    prev_a, prev_m = mes_anterior(periodo_anio, periodo_mes)
+    periodo = f"{prev_a}-{prev_m:02d}"
+    base = {
+        "monto": monto,
+        "periodo_anio": prev_a,
+        "periodo_mes": prev_m,
+        "periodo": periodo,
+        "marcado_por_defecto": False,
+        "inmueble_id": None,
+    }
+    if hay_abono_igual(expensas, prev_a, prev_m, monto):
+        return {
+            **base,
+            "accion": "NO_OP_YA_EXISTE",
+            "requiere_confirmacion": False,
+            "motivo": f"Ya existe un Abono de ${monto:,.0f} en {periodo}; no se duplica.",
+        }
+    existente = abono_del_periodo(expensas, prev_a, prev_m)
+    if existente is not None and abs(existente - monto) >= 0.01:
+        return {
+            **base,
+            "accion": "NO_PISAR",
+            "requiere_confirmacion": False,
+            "motivo": (
+                f"Ya hay un abono de ${existente:,.0f} en {periodo}; la factura trae "
+                f"${monto:,.0f}. No se pisa."
+            ),
+        }
+    return {
+        **base,
+        "accion": "PROPONER_ABONO_MES_ANTERIOR",
+        "requiere_confirmacion": True,
+        "motivo": (
+            f"Abono último Mes ${monto:,.0f} → Abono {periodo} "
+            "(mes anterior a la factura). Desmarcado: márquelo para registrarlo."
+        ),
+    }
+
+
 def cargos_desde_factura(inv: dict, expensas: list[dict], anio: int, mes: int) -> list[dict]:
     """Solo VALOR MES > 0 de cuota ordinaria, extraordinaria o multa.
 
-    Nunca intereses de mora ni abonos/anticipos.
+    Nunca intereses de mora. El abono del pie no entra por esta vía.
     """
     cargos: list[dict] = []
     for c in inv.get("conceptos") or []:
@@ -370,6 +443,10 @@ def evaluar_unidad(
         )
 
     cargos = cargos_desde_factura(inv, expensas, periodo_anio, periodo_mes)
+    abono = detectar_abono_ultimo_mes(inv, expensas, periodo_anio, periodo_mes)
+    if abono:
+        abono["inmueble_id"] = unidad.get("inmueble_id")
+        abono["torre_apto"] = unidad.get("torre_apto")
     ultima = ultima_ordinaria(expensas)
     if ultima and cargos:
         u_anio, u_mes, u_val = ultima
@@ -405,6 +482,7 @@ def evaluar_unidad(
         "bloqueos": bloqueos,
         "alertas": alertas,
         "cargos": cargos,
+        "abono": abono,
         "ref_pago": inv.get("ref_pago"),
     }
 
@@ -448,6 +526,9 @@ def cruzar_lote(
             "nuestras": len(nuestras),
             "listas": len(listas),
             "bloqueadas": len(bloqueadas),
+            "abonos_detectados": sum(
+                1 for u in nuestras if (u.get("abono") or {}).get("monto")
+            ),
         },
         "unidades": sorted(nuestras, key=lambda x: int(x.get("inmueble_id") or 0)),
     }
@@ -645,11 +726,51 @@ def _upsert_expensa(cur, *, inmueble_id, obligation_id, concepto, anio, mes, val
     return "INSERT"
 
 
-def aplicar_lote(lote_id: str, *, usuario_id: str = "", confirmar_sanciones: Optional[set] = None) -> dict:
+def _insertar_abono(cur, *, inmueble_id, obligation_id, anio, mes, valor) -> str:
+    """Inserta Abono de M-1. Idempotente por inmueble+periodo+monto. Nunca pisa otro monto."""
+    monto = _money(valor)
+    if monto <= 0:
+        return "OMITIDO_SIN_MONTO"
+    cur.execute(
+        """
+        SELECT id, valor_capital FROM expensas_ph
+         WHERE inmueble_id = %s AND concepto = %s
+           AND periodo_anio = %s AND periodo_mes = %s
+         LIMIT 1
+        """,
+        (inmueble_id, "Abono", anio, mes),
+    )
+    row = cur.fetchone()
+    if row:
+        actual = _money(row["valor_capital"] if isinstance(row, dict) else row[1])
+        if abs(actual - monto) < 0.01:
+            return "NO_OP"
+        return "NO_PISAR"
+    f_venc = liquidador.fecha_vencimiento_fin_mes(anio, mes).isoformat()
+    cur.execute(
+        """
+        INSERT INTO expensas_ph
+            (inmueble_id, obligation_id, concepto, periodo_mes, periodo_anio,
+             valor_capital, fecha_vencimiento, estado)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (inmueble_id, obligation_id, "Abono", mes, anio, monto, f_venc, "Pagado"),
+    )
+    return "INSERT"
+
+
+def aplicar_lote(
+    lote_id: str,
+    *,
+    usuario_id: str = "",
+    confirmar_sanciones: Optional[set] = None,
+    confirmar_abonos: Optional[set] = None,
+) -> dict:
     lote = obtener_lote(lote_id)
     if not lote:
         raise FacturacionMensualError("La pre-vista venció o no existe. Vuelva a subir el PDF.")
     confirmar_sanciones = confirmar_sanciones or set()
+    confirmar_abonos = {int(x) for x in (confirmar_abonos or set())}
     invoices = lote["invoices"]
     periodo_anio = int(lote["periodo_anio"])
     periodo_mes = int(lote["periodo_mes"])
@@ -692,6 +813,22 @@ def aplicar_lote(lote_id: str, *, usuario_id: str = "", confirmar_sanciones: Opt
                             valor=cargo["valor_mes"],
                         )
                         ops.append({**cargo, "aplicado": hecho})
+                    abono = u.get("abono") or {}
+                    if abono.get("accion") == "PROPONER_ABONO_MES_ANTERIOR":
+                        if inm_id not in confirmar_abonos:
+                            ops.append({**abono, "concepto_erp": "Abono", "aplicado": "OMITIDO_SIN_CONFIRMACION"})
+                        else:
+                            hecho = _insertar_abono(
+                                cur,
+                                inmueble_id=inm_id,
+                                obligation_id=ob_id,
+                                anio=int(abono["periodo_anio"]),
+                                mes=int(abono["periodo_mes"]),
+                                valor=abono["monto"],
+                            )
+                            ops.append({**abono, "concepto_erp": "Abono", "aplicado": hecho})
+                    elif abono.get("accion") in ("NO_OP_YA_EXISTE", "NO_PISAR"):
+                        ops.append({**abono, "concepto_erp": "Abono", "aplicado": abono["accion"]})
                     aplicadas.append({"inmueble_id": inm_id, "torre_apto": u["torre_apto"], "ops": ops})
 
                 detalle = {

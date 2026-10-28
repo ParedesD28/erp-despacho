@@ -19,6 +19,23 @@ router = APIRouter(tags=["Facturación mensual"])
 templates = Jinja2Templates(directory="templates")
 
 
+def _ids_form(raw: str) -> set[int]:
+    out: set[int] = set()
+    texto = (raw or "").strip()
+    if not texto:
+        return out
+    try:
+        parsed = json.loads(texto) if texto.startswith("[") else texto.split(",")
+    except json.JSONDecodeError:
+        parsed = texto.split(",")
+    for item in parsed:
+        try:
+            out.add(int(item))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _render(name: str, context: dict, status_code: int = 200):
     try:
         return templates.TemplateResponse(name, context, status_code=status_code)
@@ -65,22 +82,16 @@ async def aplicar_facturacion_mensual(
     request: Request,
     lote_id: str = Form(...),
     confirmar_sanciones: str = Form(""),
+    confirmar_abonos: str = Form(""),
 ):
-    sanciones: set[int] = set()
-    raw = (confirmar_sanciones or "").strip()
-    if raw:
-        try:
-            parsed = json.loads(raw) if raw.startswith("[") else raw.split(",")
-        except json.JSONDecodeError:
-            parsed = raw.split(",")
-        for item in parsed:
-            try:
-                sanciones.add(int(item))
-            except (TypeError, ValueError):
-                continue
     usuario = str(getattr(request.state, "user_id", "") or "")
     try:
-        resultado = aplicar_lote(lote_id, usuario_id=usuario, confirmar_sanciones=sanciones)
+        resultado = aplicar_lote(
+            lote_id,
+            usuario_id=usuario,
+            confirmar_sanciones=_ids_form(confirmar_sanciones),
+            confirmar_abonos=_ids_form(confirmar_abonos),
+        )
     except FacturacionMensualError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(resultado)

@@ -13,10 +13,11 @@
         <p class="font-bold">Pre-vista primero, escribir después</p>
         <p class="mt-1">
             Sube el PDF de Recibo de Cobro Mensual (COLON, 2 facturas por página).
-            El sistema lee solo la columna <strong>VALOR MES</strong> de cuota ordinaria,
-            extraordinaria o multa, y no toca Neon hasta que pulse
-            <strong>Confirmar y actualizar cuotas</strong>.
-            No se extraen ni se cargan intereses de mora ni abonos: la mora la calcula el liquidador.
+            El sistema lee la columna <strong>VALOR MES</strong> de cuota ordinaria,
+            extraordinaria o multa, y el <strong>Abono último Mes</strong> (desmarcado:
+            márquelo si quiere registrarlo como Abono del mes anterior).
+            No toca Neon hasta que pulse <strong>Confirmar y actualizar cuotas</strong>.
+            Los intereses de mora no se cargan: los calcula el liquidador.
         </p>
     </div>
 
@@ -85,7 +86,16 @@
     }).join("<br>");
   }
 
-  function renderTabla(titulo, rows, extraClass) {
+  function abonoHtml(u, permitirMarcar) {
+    const a = u.abono;
+    if (!a || !a.monto) return "—";
+    const check = (permitirMarcar && a.accion === "PROPONER_ABONO_MES_ANTERIOR")
+      ? `<label class="mt-1 flex items-center gap-1 text-xs"><input type="checkbox" class="abono-ok" data-inm="${u.inmueble_id}" /> registrar ${a.periodo}</label>`
+      : `<div class="text-xs text-slate-500">${a.accion === "NO_OP_YA_EXISTE" ? "ya está en Neon" : (a.motivo || "")}</div>`;
+    return `${money(a.monto)}<div class="text-xs text-slate-500">${u.torre_apto || ""} · ${a.periodo || ""}</div>${check}`;
+  }
+
+  function renderTabla(titulo, rows, extraClass, permitirMarcar) {
     if (!rows.length) return "";
     const body = rows.map(u => {
       (u.cargos || []).forEach(c => c._inm = u.inmueble_id);
@@ -96,6 +106,7 @@
         <td class="p-3 font-mono text-sm">${u.torre_apto || ""}<div class="text-xs text-slate-400">#${u.factura_no || ""} · ${u.radicado || ""}</div></td>
         <td class="p-3 text-sm">${u.titular_neon || ""}<div class="text-xs text-slate-500">PDF: ${u.titular_pdf || ""}</div></td>
         <td class="p-3 text-sm">${cargosHtml(u.cargos)}</td>
+        <td class="p-3 text-sm">${abonoHtml(u, permitirMarcar)}</td>
         <td class="p-3">${alertas || "—"}</td>
         <td class="p-3">${filaBotonVer(u)}</td>
       </tr>`;
@@ -107,7 +118,7 @@
         <thead class="bg-slate-50 text-xs uppercase text-slate-500">
           <tr>
             <th class="p-3">Unidad</th><th class="p-3">Titular</th><th class="p-3">Cuota del mes (VALOR MES)</th>
-            <th class="p-3">Alertas</th><th class="p-3">PDF</th>
+            <th class="p-3">Último pago (PDF)</th><th class="p-3">Alertas</th><th class="p-3">PDF</th>
           </tr>
         </thead>
         <tbody>${body}</tbody>
@@ -136,12 +147,12 @@
 
     const tListas = document.getElementById("tabla-listas");
     tListas.classList.remove("hidden");
-    tListas.innerHTML = renderTabla("Unidades listas para el mes", listas, "border-slate-200");
+    tListas.innerHTML = renderTabla("Unidades listas para el mes", listas, "border-slate-200", true);
 
     const tBl = document.getElementById("tabla-bloqueadas");
     if (bloqueadas.length) {
       tBl.classList.remove("hidden");
-      tBl.innerHTML = renderTabla("Unidades bloqueadas (no se tocan)", bloqueadas, "border-red-200");
+      tBl.innerHTML = renderTabla("Unidades bloqueadas (no se tocan)", bloqueadas, "border-red-200", false);
     } else {
       tBl.classList.add("hidden");
       tBl.innerHTML = "";
@@ -174,11 +185,13 @@
 
   document.getElementById("btn-aplicar").addEventListener("click", async () => {
     if (!loteId) return;
-    if (!confirm("¿Confirmar y escribir en Neon solo las cuotas del mes (VALOR MES) de esta pre-vista?")) return;
+    if (!confirm("¿Confirmar las cuotas del mes y, si marcó alguno, los abonos del mes anterior?")) return;
     const sanciones = [...document.querySelectorAll(".sancion-ok:checked")].map(el => el.dataset.inm);
+    const abonos = [...document.querySelectorAll(".abono-ok:checked")].map(el => el.dataset.inm);
     const fd = new FormData();
     fd.append("lote_id", loteId);
     fd.append("confirmar_sanciones", JSON.stringify(sanciones));
+    fd.append("confirmar_abonos", JSON.stringify(abonos));
     setStatus("Guardando…");
     try {
       const resp = await fetch("/api/facturacion-mensual/aplicar", { method: "POST", body: fd });

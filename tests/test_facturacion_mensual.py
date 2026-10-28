@@ -29,6 +29,7 @@ from facturacion_mensual_service import (
     cruzar_conjunto_estricto,
     cruzar_lote,
     cruzar_unidad_en_conjunto,
+    detectar_abono_ultimo_mes,
     evaluar_elegibilidad,
     extraer_etapa_o_manzana,
     mes_anterior,
@@ -238,25 +239,59 @@ class ElegibilidadTests(unittest.TestCase):
         self.assertEqual(mes_anterior(2026, 1), (2025, 12))
 
 
-class AlcanceSoloValorMesTests(unittest.TestCase):
-    """El cargador nunca extrae ni inserta intereses de mora, abonos ni anticipos."""
+class AbonoOpcionalTests(unittest.TestCase):
+    """Lee Abono último Mes, lo muestra desmarcado y solo inserta M-1 si se marca."""
 
-    def test_servicio_no_define_logica_de_abono(self):
-        src = (ROOT / "facturacion_mensual_service.py").read_text(encoding="utf-8")
-        self.assertNotIn("def decidir_abono", src)
-        self.assertNotIn("def capital_neto_antes", src)
-        self.assertNotIn("INSERTAR_ABONO", src)
-        self.assertNotIn("Abono último Mes", src)
-        self.assertNotIn("580.237", src)
-        cuerpo_aplicar = src.split("def aplicar_lote", 1)[1]
-        self.assertNotIn('"Abono"', cuerpo_aplicar)
-        self.assertNotIn("'Abono'", cuerpo_aplicar)
-        parser = (ROOT / "facturacion_mensual_parser.py").read_text(encoding="utf-8")
-        self.assertNotIn("abono_ultimo_mes", parser)
-        self.assertNotIn("anticipos_pie", parser)
-        self.assertNotIn("Abono último Mes", parser)
+    def test_23_401_propone_mes_anterior_desmarcado(self):
+        r = detectar_abono_ultimo_mes(
+            {"abono_ultimo_mes": 250000},
+            [],
+            2026,
+            10,
+        )
+        self.assertEqual(r["accion"], "PROPONER_ABONO_MES_ANTERIOR")
+        self.assertEqual(r["monto"], 250000)
+        self.assertEqual(r["periodo"], "2026-09")
+        self.assertEqual(r["periodo_anio"], 2026)
+        self.assertEqual(r["periodo_mes"], 9)
+        self.assertTrue(r["requiere_confirmacion"])
+        self.assertFalse(r["marcado_por_defecto"])
 
-    def test_upsert_omite_abono_e_interes(self):
+    def test_no_duplica_mismo_monto(self):
+        r = detectar_abono_ultimo_mes(
+            {"abono_ultimo_mes": 250000},
+            [{"concepto": "Abono", "periodo_anio": 2026, "periodo_mes": 9, "valor_capital": 250000}],
+            2026,
+            10,
+        )
+        self.assertEqual(r["accion"], "NO_OP_YA_EXISTE")
+        self.assertFalse(r["requiere_confirmacion"])
+
+    def test_no_pisa_otro_abono_del_periodo(self):
+        r = detectar_abono_ultimo_mes(
+            {"abono_ultimo_mes": 250000},
+            [{"concepto": "Abono", "periodo_anio": 2026, "periodo_mes": 9, "valor_capital": 100000}],
+            2026,
+            10,
+        )
+        self.assertEqual(r["accion"], "NO_PISAR")
+
+    def test_25_103_no_cierra_desfase(self):
+        r = detectar_abono_ultimo_mes(
+            {"abono_ultimo_mes": 70800},
+            [],
+            2026,
+            10,
+        )
+        self.assertEqual(r["accion"], "PROPONER_ABONO_MES_ANTERIOR")
+        self.assertEqual(r["monto"], 70800)
+        self.assertNotEqual(r["monto"], 580237)
+        self.assertFalse(r["marcado_por_defecto"])
+
+    def test_sin_abono_ultimo_mes_no_propone(self):
+        self.assertIsNone(detectar_abono_ultimo_mes({"abono_ultimo_mes": 0}, [], 2026, 10))
+
+    def test_upsert_de_cuotas_sigue_sin_abono_ni_mora(self):
         from facturacion_mensual_service import _CONCEPTOS_CAUSABLES, _upsert_expensa
 
         self.assertEqual(_CONCEPTOS_CAUSABLES, frozenset({"Expensa Ordinaria", "Cuota Extraordinaria"}))
@@ -272,11 +307,23 @@ class AlcanceSoloValorMesTests(unittest.TestCase):
             "OMITIDO_NO_CAUSABLE",
         )
 
-    def test_ui_sin_bandeja_ni_columna_de_abono(self):
+    def test_aplicar_solo_inserta_abono_marcado(self):
+        src = (ROOT / "facturacion_mensual_service.py").read_text(encoding="utf-8")
+        self.assertNotIn("INSERTAR_ABONO_CIERRE", src)
+        self.assertNotIn("580.237", src)
+        self.assertNotIn("def capital_neto_antes", src)
+        cuerpo = src.split("def aplicar_lote", 1)[1]
+        self.assertIn("confirmar_abonos", cuerpo)
+        self.assertIn("OMITIDO_SIN_CONFIRMACION", cuerpo)
+        self.assertIn("_insertar_abono", cuerpo)
+
+    def test_ui_checkbox_desmarcado_junto_a_cuotas(self):
         html = (ROOT / "templates" / "facturacion_mensual.html").read_text(encoding="utf-8")
+        self.assertIn("abono-ok", html)
+        self.assertIn("Último pago (PDF)", html)
+        self.assertIn("confirmar_abonos", html)
         self.assertNotIn("tabla-abonos", html)
-        self.assertNotIn("Abono mes anterior", html)
-        self.assertNotIn("cuotas y abonos", html)
+        self.assertNotRegex(html, r'class="abono-ok"[^>]*\schecked')
         self.assertIn("VALOR MES", html)
 
 
@@ -291,6 +338,7 @@ class CruceLoteSinteticoTests(unittest.TestCase):
             "propietario_nombre": "TELLEZ ARIAS CHRIATIAN DAVID",
             "propietario_identificacion": "1089386615",
             "saldo_anterior_pie": 382338,
+            "abono_ultimo_mes": 250000,
             "conceptos": [{
                 "concepto": "INTERESES DE MORA",
                 "saldo_ant": 0,
@@ -342,18 +390,23 @@ class CruceLoteSinteticoTests(unittest.TestCase):
                 unidad_dir="Bloque 25   APTO 103", ref_pago="25103",
                 propietario_nombre="MOLINA MONTES PAOLA ANDREA",
                 propietario_identificacion="1088316771",
-                saldo_anterior_pie=0,
+                saldo_anterior_pie=0, abono_ultimo_mes=70800,
             ),
         ]
         plan = cruzar_lote(invoices, conjunto, [u13, u15], periodo_anio=2026, periodo_mes=10)
         self.assertEqual(plan["resumen"]["nuestras"], 2)
         by_id = {u["inmueble_id"]: u for u in plan["unidades"]}
-        self.assertNotIn("abono", by_id[13])
-        self.assertNotIn("abono", by_id[15])
+        self.assertEqual(by_id[13]["abono"]["accion"], "PROPONER_ABONO_MES_ANTERIOR")
+        self.assertEqual(by_id[13]["abono"]["monto"], 250000)
+        self.assertEqual(by_id[13]["abono"]["periodo"], "2026-09")
+        self.assertFalse(by_id[13]["abono"]["marcado_por_defecto"])
+        self.assertEqual(by_id[15]["abono"]["accion"], "PROPONER_ABONO_MES_ANTERIOR")
+        self.assertEqual(by_id[15]["abono"]["monto"], 70800)
+        self.assertNotEqual(by_id[15]["abono"]["monto"], 580237)
+        self.assertFalse(by_id[15]["abono"]["marcado_por_defecto"])
         for u in plan["unidades"]:
             self.assertNotIn("Abono", {c["concepto_erp"] for c in u["cargos"]})
             self.assertNotIn("INTERESES DE MORA", {c.get("concepto_pdf") for c in u["cargos"]})
-        # 23-401 ya tiene octubre: NO_OP de la ordinaria; 25-103 inserta VALOR MES
         ops13 = {c["operacion"] for c in by_id[13]["cargos"] if c["concepto_erp"] == "Expensa Ordinaria"}
         self.assertEqual(ops13, {"NO_OP"})
         self.assertNotEqual(by_id[15]["estado"], "BLOQUEADO")
@@ -422,15 +475,14 @@ class ParserPdfRealTests(unittest.TestCase):
     def test_23_401_y_25_103_en_el_pdf(self):
         by_ref = {i["ref_pago"]: i for i in self.invoices}
         a = by_ref["23401"]
-        self.assertNotIn("abono_ultimo_mes", a)
+        self.assertEqual(a["abono_ultimo_mes"], 250000)
         self.assertNotIn("anticipos_pie", a)
-        self.assertNotIn("menos_anticipos", a)
         self.assertEqual(a["page"], 7)
         self.assertEqual(a["half"], "top")
         cuota_a = next(c for c in a["conceptos"] if "ADMINISTRACION" in (c["concepto"] or ""))
         self.assertEqual(cuota_a["valor_mes"], 35000)
         b = by_ref["25103"]
-        self.assertNotIn("abono_ultimo_mes", b)
+        self.assertEqual(b["abono_ultimo_mes"], 70800)
         self.assertEqual(b["saldo_anterior_pie"], 0)
         self.assertEqual(b["page"], 22)
         self.assertEqual(b["half"], "top")
@@ -445,8 +497,13 @@ class ParserPdfRealTests(unittest.TestCase):
         self.assertIn("Expensa Ordinaria", {c["concepto_erp"] for c in cargos_a})
         self.assertEqual({c["concepto_erp"] for c in cargos_b}, {"Expensa Ordinaria"})
         self.assertTrue(all(c["valor_mes"] == 35000 for c in cargos_b if c["concepto_erp"] == "Expensa Ordinaria"))
+        prop_a = detectar_abono_ultimo_mes(a, [], 2026, 10)
+        prop_b = detectar_abono_ultimo_mes(b, [], 2026, 10)
+        self.assertEqual(prop_a["monto"], 250000)
+        self.assertEqual(prop_b["monto"], 70800)
+        self.assertFalse(prop_a["marcado_por_defecto"])
+        self.assertFalse(prop_b["marcado_por_defecto"])
         for inv in self.invoices:
-            self.assertNotIn("abono_ultimo_mes", inv)
             self.assertNotIn("anticipos_pie", inv)
 
     def test_visor_recorta_media_pagina_no_entera(self):
@@ -502,8 +559,7 @@ class PreviewNoEscribeTests(unittest.TestCase):
         self.assertNotIn("UPDATE expensas_ph", cuerpo)
         self.assertIn("cruzar_lote", cuerpo)
         self.assertTrue(callable(preview_pdf))
-        src_full = Path(ROOT / "facturacion_mensual_service.py").read_text(encoding="utf-8")
-        self.assertNotIn("concepto == \"Abono\"", src_full)
+        self.assertNotIn("_insertar_abono", cuerpo)
 
 
 if __name__ == "__main__":

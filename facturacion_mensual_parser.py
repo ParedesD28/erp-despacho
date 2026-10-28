@@ -1,9 +1,9 @@
 """Parser determinista del Recibo de Cobro Mensual COLON (`COBRO EXPENSA COMUN`).
 
 El PDF es texto nativo (Haru / COLON). Hay 2 facturas por página Letter:
-mitad superior Y >= 395, mitad inferior Y < 395. Solo se usa la columna
-VALOR MES para proponer cargos; SALDO ANT. e INTERESES sirven para
-cuadrar la fila, nunca para insertar en expensas_ph.
+mitad superior Y >= 395, mitad inferior Y < 395. VALOR MES propone las
+cuotas; `Abono último Mes` se lee para la pre-vista (no se inserta solo).
+SALDO ANT. e INTERESES cuadran la fila; INTERESES DE MORA nunca se causa.
 """
 from __future__ import annotations
 
@@ -108,6 +108,7 @@ def parse_invoice_half(items: list[dict[str, Any]], page_num: int, half: str) ->
         "conceptos": [],
         "saldo_anterior_pie": None,
         "base_calculo_intereses": None,
+        "abono_ultimo_mes": None,
         "subtotal": None,
         "descuento": None,
         "iva": None,
@@ -183,6 +184,10 @@ def parse_invoice_half(items: list[dict[str, Any]], page_num: int, half: str) ->
             for i in ln["items"]:
                 if i["x"] > 500:
                     inv["descuento"] = parse_money(i["text"])
+        if any(i["text"].startswith("Abono último Mes") for i in ln["items"]):
+            for i in ln["items"]:
+                if 280 <= i["x"] <= 385 and re.search(r"\d", i["text"]):
+                    inv["abono_ultimo_mes"] = parse_money(i["text"])
         if any(i["text"].startswith("IVA") for i in ln["items"]):
             for i in ln["items"]:
                 if i["x"] > 500:
