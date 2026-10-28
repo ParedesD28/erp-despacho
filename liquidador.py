@@ -50,6 +50,13 @@ def dedupe_expensas():
         conn.release()
 
 
+# 2026-10-28: autocausación apagada en TODOS los conjuntos (decisión global).
+# Las cuotas de expensas_ph solo entran por certificado/estado de cuenta,
+# por el cargador de facturación mensual o por edición manual
+# (POST /liquidador/actualizar). No hay flag por conjunto.
+AUTOCAUSACION_HABILITADA = False
+
+
 def motor_calculo_judicial(
     inmueble_id,
     tipo_tasa,
@@ -58,7 +65,7 @@ def motor_calculo_judicial(
     gastos_globales,
     fecha_corte,
     *,
-    autocausar: bool = True,
+    autocausar: bool = False,
     obligacion_id: int | None = None,
 ):
     """Calcula la liquidación de crédito de expensas comunes conforme al régimen legal colombiano."""
@@ -70,7 +77,7 @@ def motor_calculo_judicial(
         else fecha_corte
     )
 
-    if autocausar:
+    if autocausar and AUTOCAUSACION_HABILITADA:
         # Auto-causación: si existe última cuota ordinaria, genera las cuotas faltantes hasta fecha_corte
         conn = db.get_connection()
         try:

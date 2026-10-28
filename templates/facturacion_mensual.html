@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+
+{% block contenido %}
+<header class="h-16 bg-white border-b border-slate-200 flex items-center px-8 shadow-sm gap-4">
+    <a href="/informes" class="text-slate-400 hover:text-slate-700" title="Volver a Informes">
+        <i data-lucide="arrow-left" class="w-5 h-5"></i>
+    </a>
+    <h2 class="text-xl font-semibold text-slate-800">Facturación mensual PH</h2>
+</header>
+
+<div class="p-8 max-w-6xl mx-auto mt-4 space-y-6">
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-950">
+        <p class="font-bold">Pre-vista primero, escribir después</p>
+        <p class="mt-1">
+            Sube el PDF de Recibo de Cobro Mensual (COLON, 2 facturas por página).
+            El sistema lee la columna <strong>VALOR MES</strong> de cuota ordinaria,
+            extraordinaria o multa, y el <strong>Abono último Mes</strong> (desmarcado:
+            márquelo si quiere registrarlo como Abono del mes anterior).
+            No toca Neon hasta que pulse <strong>Confirmar y actualizar cuotas</strong>.
+            Los intereses de mora no se cargan: los calcula el liquidador.
+        </p>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
+        <label class="block text-sm font-semibold text-slate-700">PDF de facturación (máx. {{ max_mb }} MB)</label>
+        <input id="pdf-file" type="file" accept=".pdf,application/pdf"
+               class="block w-full text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-slate-800 file:text-white file:font-semibold hover:file:bg-slate-700" />
+        <div class="flex flex-wrap gap-3">
+            <button type="button" id="btn-preview"
+                    class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-bold py-2.5 px-5 rounded-lg">
+                <i data-lucide="scan-search" class="w-4 h-4"></i>
+                Ver pre-vista
+            </button>
+            <button type="button" id="btn-aplicar" disabled
+                    class="inline-flex items-center gap-2 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-2.5 px-5 rounded-lg">
+                <i data-lucide="check-circle" class="w-4 h-4"></i>
+                Confirmar y actualizar cuotas
+            </button>
+        </div>
+        <p id="status" class="text-sm text-slate-500"></p>
+    </div>
+
+    <div id="encabezado" class="hidden bg-white rounded-xl shadow-sm border border-slate-200 p-6"></div>
+    <div id="tabla-listas" class="hidden"></div>
+    <div id="tabla-bloqueadas" class="hidden"></div>
+</div>
+
+<div id="modal-factura" class="hidden fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-auto">
+        <div class="flex items-center justify-between px-5 py-3 border-b">
+            <h3 id="modal-titulo" class="font-bold text-slate-800">Factura</h3>
+            <button type="button" id="modal-cerrar" class="text-slate-500 hover:text-slate-800">Cerrar</button>
+        </div>
+        <div class="p-4 bg-slate-100">
+            <img id="modal-img" alt="Media página de la factura" class="w-full border bg-white" />
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+  const money = (n) => Number(n || 0).toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 });
+  let loteId = null;
+  const statusEl = document.getElementById("status");
+  const setStatus = (t, ok) => {
+    statusEl.textContent = t || "";
+    statusEl.className = "text-sm " + (ok === false ? "text-red-700" : "text-slate-500");
+  };
+
+  function filaBotonVer(u) {
+    if (!loteId || !u.page || !u.half) return "";
+    const halfLabel = u.half === "top" ? "arriba" : "abajo";
+    return `<button type="button" class="ver-factura text-indigo-700 font-semibold underline text-sm"
+              data-page="${u.page}" data-half="${u.half}"
+              data-titulo="Factura #${u.factura_no || ""} · pág. ${u.page} ${halfLabel} · ${u.torre_apto || ""}">
+              Ver factura</button>`;
+  }
+
+  function cargosHtml(cargos) {
+    if (!cargos || !cargos.length) return "—";
+    return cargos.map(c => {
+      const conf = c.requiere_confirmacion
+        ? ` <label class="ml-2 text-xs"><input type="checkbox" class="sancion-ok" data-inm="${c._inm}" /> incluir sanción</label>`
+        : "";
+      return `${c.concepto_erp} ${money(c.valor_mes)} (${c.operacion})${conf}`;
+    }).join("<br>");
+  }
+
+  function abonoHtml(u, permitirMarcar) {
+    const a = u.abono;
+    if (!a || !a.monto) return "—";
+    const check = (permitirMarcar && a.accion === "PROPONER_ABONO_MES_ANTERIOR")
+      ? `<label class="mt-1 flex items-center gap-1 text-xs"><input type="checkbox" class="abono-ok" data-inm="${u.inmueble_id}" /> registrar ${a.periodo}</label>`
+      : `<div class="text-xs text-slate-500">${a.accion === "NO_OP_YA_EXISTE" ? "ya está en Neon" : (a.motivo || "")}</div>`;
+    return `${money(a.monto)}<div class="text-xs text-slate-500">${u.torre_apto || ""} · ${a.periodo || ""}</div>${check}`;
+  }
+
+  function renderTabla(titulo, rows, extraClass, permitirMarcar) {
+    if (!rows.length) return "";
+    const body = rows.map(u => {
+      (u.cargos || []).forEach(c => c._inm = u.inmueble_id);
+      const alertas = (u.alertas || []).concat(u.bloqueos || []).map(a =>
+        `<div class="text-xs ${String(a).includes("CRÍTICA") ? "text-red-700 font-bold" : "text-amber-800"}">${a}</div>`
+      ).join("");
+      return `<tr class="border-b border-slate-100 align-top">
+        <td class="p-3 font-mono text-sm">${u.torre_apto || ""}<div class="text-xs text-slate-400">#${u.factura_no || ""} · ${u.radicado || ""}</div></td>
+        <td class="p-3 text-sm">${u.titular_neon || ""}<div class="text-xs text-slate-500">PDF: ${u.titular_pdf || ""}</div></td>
+        <td class="p-3 text-sm">${cargosHtml(u.cargos)}</td>
+        <td class="p-3 text-sm">${abonoHtml(u, permitirMarcar)}</td>
+        <td class="p-3">${alertas || "—"}</td>
+        <td class="p-3">${filaBotonVer(u)}</td>
+      </tr>`;
+    }).join("");
+    return `<div class="bg-white rounded-xl shadow-sm border ${extraClass} overflow-hidden">
+      <div class="px-5 py-3 font-bold text-slate-800 border-b">${titulo} (${rows.length})</div>
+      <div class="overflow-x-auto">
+      <table class="w-full text-left">
+        <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+          <tr>
+            <th class="p-3">Unidad</th><th class="p-3">Titular</th><th class="p-3">Cuota del mes (VALOR MES)</th>
+            <th class="p-3">Último pago (PDF)</th><th class="p-3">Alertas</th><th class="p-3">PDF</th>
+          </tr>
+        </thead>
+        <tbody>${body}</tbody>
+      </table>
+      </div>
+    </div>`;
+  }
+
+  function pintar(prev) {
+    loteId = prev.lote_id;
+    const r = prev.resumen || {};
+    document.getElementById("encabezado").classList.remove("hidden");
+    document.getElementById("encabezado").innerHTML = `
+      <h3 class="font-bold text-lg text-slate-800">${(prev.conjunto && prev.conjunto.nombre) || "Conjunto"}</h3>
+      <p class="text-sm text-slate-600 mt-1">Período <strong>${prev.periodo_etiqueta || ""}</strong>
+        · Factura ${prev.fecha_factura || ""} · Vence ${prev.fecha_vencimiento || ""}
+        · NIT ${(prev.conjunto && prev.conjunto.nit) || ""}</p>
+      <p class="text-sm mt-2">${r.facturas_pdf || 0} facturas en el PDF →
+        ${r.descartadas || 0} descartadas (no son nuestras) →
+        <strong>${r.nuestras || 0} unidades nuestras</strong>
+        (${r.listas || 0} listas, ${r.bloqueadas || 0} bloqueadas).</p>`;
+
+    const unidades = prev.unidades || [];
+    const listas = unidades.filter(u => u.estado !== "BLOQUEADO");
+    const bloqueadas = unidades.filter(u => u.estado === "BLOQUEADO");
+
+    const tListas = document.getElementById("tabla-listas");
+    tListas.classList.remove("hidden");
+    tListas.innerHTML = renderTabla("Unidades listas para el mes", listas, "border-slate-200", true);
+
+    const tBl = document.getElementById("tabla-bloqueadas");
+    if (bloqueadas.length) {
+      tBl.classList.remove("hidden");
+      tBl.innerHTML = renderTabla("Unidades bloqueadas (no se tocan)", bloqueadas, "border-red-200", false);
+    } else {
+      tBl.classList.add("hidden");
+      tBl.innerHTML = "";
+    }
+
+    document.getElementById("btn-aplicar").disabled = listas.length === 0;
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  document.getElementById("btn-preview").addEventListener("click", async () => {
+    const f = document.getElementById("pdf-file").files[0];
+    if (!f) { setStatus("Elija un PDF.", false); return; }
+    setStatus("Leyendo el PDF…");
+    document.getElementById("btn-aplicar").disabled = true;
+    const fd = new FormData();
+    fd.append("archivo", f);
+    try {
+      const resp = await fetch("/api/facturacion-mensual/preview", { method: "POST", body: fd });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setStatus(data.detail || "No se pudo leer el PDF.", false);
+        return;
+      }
+      pintar(data);
+      setStatus("Pre-vista lista. Revise cada fila (Ver factura) y confirme si está de acuerdo.");
+    } catch (e) {
+      setStatus("Error de red al leer el PDF.", false);
+    }
+  });
+
+  document.getElementById("btn-aplicar").addEventListener("click", async () => {
+    if (!loteId) return;
+    if (!confirm("¿Confirmar las cuotas del mes y, si marcó alguno, los abonos del mes anterior?")) return;
+    const sanciones = [...document.querySelectorAll(".sancion-ok:checked")].map(el => el.dataset.inm);
+    const abonos = [...document.querySelectorAll(".abono-ok:checked")].map(el => el.dataset.inm);
+    const fd = new FormData();
+    fd.append("lote_id", loteId);
+    fd.append("confirmar_sanciones", JSON.stringify(sanciones));
+    fd.append("confirmar_abonos", JSON.stringify(abonos));
+    setStatus("Guardando…");
+    try {
+      const resp = await fetch("/api/facturacion-mensual/aplicar", { method: "POST", body: fd });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setStatus(data.detail || "No se pudo guardar.", false);
+        return;
+      }
+      document.getElementById("btn-aplicar").disabled = true;
+      setStatus("Listo: " + (data.aplicadas || 0) + " unidades actualizadas en " + (data.conjunto || "") + " (" + (data.periodo || "") + ").");
+    } catch (e) {
+      setStatus("Error de red al guardar.", false);
+    }
+  });
+
+  const modal = document.getElementById("modal-factura");
+  document.body.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".ver-factura");
+    if (!btn || !loteId) return;
+    const page = btn.dataset.page;
+    const half = btn.dataset.half;
+    document.getElementById("modal-titulo").textContent = btn.dataset.titulo || "Factura";
+    document.getElementById("modal-img").src = `/api/facturacion-mensual/factura/${loteId}/${page}/${half}`;
+    modal.classList.remove("hidden");
+  });
+  document.getElementById("modal-cerrar").addEventListener("click", () => modal.classList.add("hidden"));
+  modal.addEventListener("click", (ev) => { if (ev.target === modal) modal.classList.add("hidden"); });
+})();
+</script>
+{% endblock %}
