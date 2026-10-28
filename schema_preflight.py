@@ -32,6 +32,9 @@ REQUIRED_COLUMNS = {
     "inmuebles_ph": {"id", "contacto_id", "conjunto_id", "torre_apto"},
     "conjuntos_residenciales": {"id", "nombre", "contacto_id"},
     "expensas_ph": {"id", "inmueble_id", "concepto", "valor_capital", "obligation_id"},
+    "lotes_facturacion_ph": {
+        "id", "sha256", "conjunto_id", "periodo_anio", "periodo_mes", "detalle",
+    },
     "gestiones_crm": {"id", "obligacion_id", "radicado_interno"},
     "acuerdos_pago": {"id", "obligacion_id"},
     "acuerdos_pago_cuotas": {

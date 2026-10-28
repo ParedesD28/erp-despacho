@@ -88,6 +88,7 @@ def _obtener_datos_liquidacion(
         23.8,
         0.0,
         fecha_corte,
+        autocausar=False,
         obligacion_id=obligacion_id,
     )
     if not inm_info:

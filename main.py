@@ -83,6 +83,7 @@ import usuarios_service
 import usuarios_router
 import portal_ph_router
 import sync_rama_router
+import facturacion_mensual_router
 
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
@@ -113,6 +114,7 @@ app.include_router(cartas_cobro_router.router)
 app.include_router(certificados_deuda_router.router)
 app.include_router(usuarios_router.router)
 app.include_router(portal_ph_router.router)
+app.include_router(facturacion_mensual_router.router)
 
 # Configuración global de observabilidad y captura de excepciones
 observability.install_exception_handling(app)
@@ -3131,7 +3133,7 @@ def vista_liquidador(
                 conn.release()
             resultados, resumen, _ = liquidador.motor_calculo_judicial(
                 inm_id_clean, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte_obj,
-                obligacion_id=ob_id_clean,
+                autocausar=False, obligacion_id=ob_id_clean,
             )
         except Exception as e:
             print(f"[LIQUIDADOR] Error en auto-cálculo: {e}", flush=True)
@@ -3158,7 +3160,7 @@ def calcular_liquidador(
 
     resultados, resumen, _ = liquidador.motor_calculo_judicial(
         inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
-        obligacion_id=obligacion_id,
+        autocausar=False, obligacion_id=obligacion_id,
     )
     if not resultados:
         return render_template("liquidador.html", {"request": request, "inmuebles": cargar_inmuebles_ph(), "error": "No hay deudas.", "resultados": None})
@@ -3284,6 +3286,7 @@ async def actualizar_cuotas(request: Request):
             honorarios_pct,
             gastos,
             fecha_corte,
+            autocausar=False,
             obligacion_id=obligacion_id,
         )
         lista_inmuebles = cargar_inmuebles_ph()
@@ -3369,7 +3372,7 @@ async def exportar_pdf(
 
     resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
         inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
-        obligacion_id=obligacion_id,
+        autocausar=False, obligacion_id=obligacion_id,
     )
     path = exportaciones.generar_pdf_liquidacion(inmueble_id, fecha_corte, resultados, resumen, inm_info)
     return FileResponse(
@@ -3399,7 +3402,7 @@ async def exportar_excel(
 
     resultados, resumen, inm_info = liquidador.motor_calculo_judicial(
         inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
-        obligacion_id=obligacion_id,
+        autocausar=False, obligacion_id=obligacion_id,
     )
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -3575,7 +3578,7 @@ async def carga_masiva_excel(
 
     resultados, resumen, _ = liquidador.motor_calculo_judicial(
         inmueble_id, tipo_tasa, tasa_fija, honorarios_pct, gastos, fecha_corte,
-        obligacion_id=obligacion_id,
+        autocausar=False, obligacion_id=obligacion_id,
     )
     lista_inmuebles = cargar_inmuebles_ph()
     return render_template("liquidador.html", {"request": request, "inmuebles": lista_inmuebles, "resultados": resultados, "resumen": resumen, "parametros": {"inmueble_id": inmueble_id, "obligacion_id": obligacion_id, "tipo_tasa": tipo_tasa, "tasa_fija": tasa_fija, "honorarios_pct": honorarios_pct, "gastos": gastos, "fecha_corte": fecha_corte.strftime("%Y-%m-%d")}})
