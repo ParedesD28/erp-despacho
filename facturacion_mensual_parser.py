@@ -108,11 +108,8 @@ def parse_invoice_half(items: list[dict[str, Any]], page_num: int, half: str) ->
         "conceptos": [],
         "saldo_anterior_pie": None,
         "base_calculo_intereses": None,
-        "anticipos_pie": None,
         "subtotal": None,
         "descuento": None,
-        "menos_anticipos": None,
-        "abono_ultimo_mes": None,
         "iva": None,
         "total_a_pagar": None,
         "convenio": None,
@@ -146,13 +143,10 @@ def parse_invoice_half(items: list[dict[str, Any]], page_num: int, half: str) ->
                 y_footer_subtotal = ln["y"]
                 m_sa = re.search(r"Saldo Anterior\s*:\s*([\d,.\-]+)", t)
                 m_bi = re.search(r"Base calculo de intereses\s*\$\s*([\d,.\-]+)", t)
-                m_an = re.search(r"Anticipos\s*\$\s*([\d,.\-]+)", t)
                 if m_sa:
                     inv["saldo_anterior_pie"] = parse_money(m_sa.group(1))
                 if m_bi:
                     inv["base_calculo_intereses"] = parse_money(m_bi.group(1))
-                if m_an:
-                    inv["anticipos_pie"] = parse_money(m_an.group(1))
             if t.startswith("Consigne en"):
                 inv["convenio"] = t
 
@@ -189,14 +183,6 @@ def parse_invoice_half(items: list[dict[str, Any]], page_num: int, half: str) ->
             for i in ln["items"]:
                 if i["x"] > 500:
                     inv["descuento"] = parse_money(i["text"])
-        if any(i["text"] == "- Anticipos" for i in ln["items"]):
-            for i in ln["items"]:
-                if i["x"] > 500:
-                    inv["menos_anticipos"] = parse_money(i["text"])
-        if any(i["text"].startswith("Abono último Mes") for i in ln["items"]):
-            for i in ln["items"]:
-                if 280 <= i["x"] <= 385 and re.search(r"\d", i["text"]):
-                    inv["abono_ultimo_mes"] = parse_money(i["text"])
         if any(i["text"].startswith("IVA") for i in ln["items"]):
             for i in ln["items"]:
                 if i["x"] > 500:

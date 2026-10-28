@@ -1,4 +1,4 @@
-"""Cargador de facturación mensual: barreras, abonos, visor y autocausación apagada."""
+"""Cargador de facturación mensual: barreras, solo VALOR MES, visor y autocausación apagada."""
 from __future__ import annotations
 
 import os
@@ -24,12 +24,11 @@ from facturacion_mensual_parser import (
     recortar_media_pagina_png,
 )
 from facturacion_mensual_service import (
-    capital_neto_antes,
     clasificar_cargo_mes_recibo,
+    cargos_desde_factura,
     cruzar_conjunto_estricto,
     cruzar_lote,
     cruzar_unidad_en_conjunto,
-    decidir_abono,
     evaluar_elegibilidad,
     extraer_etapa_o_manzana,
     mes_anterior,
@@ -162,6 +161,35 @@ class BarreraConceptosTests(unittest.TestCase):
         r = clasificar_cargo_mes_recibo("HONORARIOS ABOGADO / COBRO JURIDICO")
         self.assertIsNone(r["concepto_erp"])
 
+    def test_abonos_y_anticipos_se_ignoran(self):
+        for nombre in (
+            "ABONO ULTIMO MES",
+            "ANTICIPOS",
+            "MENOS ANTICIPOS",
+            "ADELANTO",
+        ):
+            r = clasificar_cargo_mes_recibo(nombre)
+            self.assertIsNone(r["concepto_erp"], nombre)
+            self.assertEqual(r["accion"], "IGNORAR_SIEMPRE", nombre)
+
+    def test_cargos_solo_valor_mes_causable(self):
+        inv = {
+            "conceptos": [
+                {"concepto": "APORTE CUOTA DE ADMINISTRACION", "valor_mes": 35000, "intereses_mes": 1200},
+                {"concepto": "INTERESES DE MORA", "valor_mes": 1200, "intereses_mes": 0},
+                {"concepto": "ABONO ULTIMO MES", "valor_mes": 250000},
+                {"concepto": "SANCION REGLAMENTO", "valor_mes": 50000},
+                {"concepto": "CUOTA EXTRAORDINARIA SEGURO", "valor_mes": 0},
+            ]
+        }
+        cargos = cargos_desde_factura(inv, [], 2026, 10)
+        conceptos = [c["concepto_erp"] for c in cargos]
+        self.assertEqual(conceptos, ["Expensa Ordinaria", "Cuota Extraordinaria"])
+        self.assertEqual(cargos[0]["valor_mes"], 35000)
+        self.assertEqual(cargos[1]["valor_mes"], 50000)
+        self.assertTrue(cargos[1]["requiere_confirmacion"])
+        self.assertNotIn("Abono", conceptos)
+
 
 class ElegibilidadTests(unittest.TestCase):
     def test_proceso_inactivo_bloquea(self):
@@ -205,69 +233,51 @@ class ElegibilidadTests(unittest.TestCase):
             )
             self.assertEqual(b, [], mes)
 
-
-class AbonoReglaTests(unittest.TestCase):
-    """Regla 3: sin bandeja. 23-401 inserta $250.000 en sep; 25-103 cierra desfase."""
-
     def test_mes_anterior_octubre_es_septiembre(self):
         self.assertEqual(mes_anterior(2026, 10), (2026, 9))
         self.assertEqual(mes_anterior(2026, 1), (2025, 12))
 
-    def test_23_401_abono_mes_anterior(self):
-        # 14 ord * 35000 + 1 ext 35000 = 525000 antes de octubre; PDF saldo 382338; abono 250000
-        r = decidir_abono(
-            abono_ultimo_mes=250000,
-            saldo_anterior_pdf=382338,
-            capital_neon=525000,
-            expensas=[],
-            periodo_anio=2026,
-            periodo_mes=10,
-        )
-        self.assertEqual(r["accion"], "INSERTAR_ABONO_MES_ANTERIOR")
-        self.assertEqual(r["monto"], 250000)
-        self.assertEqual(r["periodo"], "2026-09")
-        self.assertFalse(r["alerta_fuerte"])
 
-    def test_23_401_no_duplica_mismo_monto(self):
-        r = decidir_abono(
-            abono_ultimo_mes=250000,
-            saldo_anterior_pdf=382338,
-            capital_neon=525000,
-            expensas=[{
-                "concepto": "Abono",
-                "periodo_anio": 2026,
-                "periodo_mes": 9,
-                "valor_capital": 250000,
-            }],
-            periodo_anio=2026,
-            periodo_mes=10,
-        )
-        self.assertEqual(r["accion"], "NO_OP_YA_EXISTE")
+class AlcanceSoloValorMesTests(unittest.TestCase):
+    """El cargador nunca extrae ni inserta intereses de mora, abonos ni anticipos."""
 
-    def test_25_103_cierra_desfase_no_solo_ultimo_abono(self):
-        capital = 471400 + 108837  # 580237
-        r = decidir_abono(
-            abono_ultimo_mes=70800,
-            saldo_anterior_pdf=0,
-            capital_neon=capital,
-            expensas=[],
-            periodo_anio=2026,
-            periodo_mes=10,
-        )
-        self.assertEqual(r["accion"], "INSERTAR_ABONO_CIERRE")
-        self.assertEqual(r["monto"], capital)
-        self.assertEqual(r["periodo"], "2026-09")
-        self.assertTrue(r["alerta_fuerte"])
-        self.assertNotEqual(r["monto"], 70800)
-        self.assertIn("70", r["motivo"] or "")
+    def test_servicio_no_define_logica_de_abono(self):
+        src = (ROOT / "facturacion_mensual_service.py").read_text(encoding="utf-8")
+        self.assertNotIn("def decidir_abono", src)
+        self.assertNotIn("def capital_neto_antes", src)
+        self.assertNotIn("INSERTAR_ABONO", src)
+        self.assertNotIn("Abono último Mes", src)
+        self.assertNotIn("580.237", src)
+        cuerpo_aplicar = src.split("def aplicar_lote", 1)[1]
+        self.assertNotIn('"Abono"', cuerpo_aplicar)
+        self.assertNotIn("'Abono'", cuerpo_aplicar)
+        parser = (ROOT / "facturacion_mensual_parser.py").read_text(encoding="utf-8")
+        self.assertNotIn("abono_ultimo_mes", parser)
+        self.assertNotIn("anticipos_pie", parser)
+        self.assertNotIn("Abono último Mes", parser)
 
-    def test_capital_neto_antes_excluye_mes_factura(self):
-        exp = [
-            {"concepto": "Expensa Ordinaria", "periodo_anio": 2026, "periodo_mes": 9, "valor_capital": 35000},
-            {"concepto": "Expensa Ordinaria", "periodo_anio": 2026, "periodo_mes": 10, "valor_capital": 35000},
-            {"concepto": "Abono", "periodo_anio": 2026, "periodo_mes": 8, "valor_capital": 10000},
-        ]
-        self.assertEqual(capital_neto_antes(exp, 2026, 10), 25000.0)
+    def test_upsert_omite_abono_e_interes(self):
+        from facturacion_mensual_service import _CONCEPTOS_CAUSABLES, _upsert_expensa
+
+        self.assertEqual(_CONCEPTOS_CAUSABLES, frozenset({"Expensa Ordinaria", "Cuota Extraordinaria"}))
+        self.assertNotIn("Abono", _CONCEPTOS_CAUSABLES)
+        self.assertEqual(
+            _upsert_expensa(None, inmueble_id=1, obligation_id=1, concepto="Abono", anio=2026, mes=9, valor=250000),
+            "OMITIDO_NO_CAUSABLE",
+        )
+        self.assertEqual(
+            _upsert_expensa(
+                None, inmueble_id=1, obligation_id=1, concepto="INTERESES DE MORA", anio=2026, mes=10, valor=1200
+            ),
+            "OMITIDO_NO_CAUSABLE",
+        )
+
+    def test_ui_sin_bandeja_ni_columna_de_abono(self):
+        html = (ROOT / "templates" / "facturacion_mensual.html").read_text(encoding="utf-8")
+        self.assertNotIn("tabla-abonos", html)
+        self.assertNotIn("Abono mes anterior", html)
+        self.assertNotIn("cuotas y abonos", html)
+        self.assertIn("VALOR MES", html)
 
 
 class CruceLoteSinteticoTests(unittest.TestCase):
@@ -281,8 +291,13 @@ class CruceLoteSinteticoTests(unittest.TestCase):
             "propietario_nombre": "TELLEZ ARIAS CHRIATIAN DAVID",
             "propietario_identificacion": "1089386615",
             "saldo_anterior_pie": 382338,
-            "abono_ultimo_mes": 250000,
             "conceptos": [{
+                "concepto": "INTERESES DE MORA",
+                "saldo_ant": 0,
+                "valor_mes": 1847,
+                "intereses_mes": 0,
+                "total_concepto": 1847,
+            }, {
                 "concepto": "APORTE CUOTA DE ADMINISTRACION",
                 "saldo_ant": 20000,
                 "valor_mes": 35000,
@@ -327,21 +342,27 @@ class CruceLoteSinteticoTests(unittest.TestCase):
                 unidad_dir="Bloque 25   APTO 103", ref_pago="25103",
                 propietario_nombre="MOLINA MONTES PAOLA ANDREA",
                 propietario_identificacion="1088316771",
-                saldo_anterior_pie=0, abono_ultimo_mes=70800,
+                saldo_anterior_pie=0,
             ),
         ]
         plan = cruzar_lote(invoices, conjunto, [u13, u15], periodo_anio=2026, periodo_mes=10)
         self.assertEqual(plan["resumen"]["nuestras"], 2)
         by_id = {u["inmueble_id"]: u for u in plan["unidades"]}
-        self.assertEqual(by_id[13]["abono"]["accion"], "INSERTAR_ABONO_MES_ANTERIOR")
-        self.assertEqual(by_id[13]["abono"]["monto"], 250000)
-        self.assertEqual(by_id[15]["abono"]["accion"], "INSERTAR_ABONO_CIERRE")
-        self.assertGreater(by_id[15]["abono"]["monto"], 70800)
-        self.assertTrue(by_id[15]["abono"]["alerta_fuerte"])
-        # Cuota oct de 25-103 se propone INSERT; no se bloquea la unidad
+        self.assertNotIn("abono", by_id[13])
+        self.assertNotIn("abono", by_id[15])
+        for u in plan["unidades"]:
+            self.assertNotIn("Abono", {c["concepto_erp"] for c in u["cargos"]})
+            self.assertNotIn("INTERESES DE MORA", {c.get("concepto_pdf") for c in u["cargos"]})
+        # 23-401 ya tiene octubre: NO_OP de la ordinaria; 25-103 inserta VALOR MES
+        ops13 = {c["operacion"] for c in by_id[13]["cargos"] if c["concepto_erp"] == "Expensa Ordinaria"}
+        self.assertEqual(ops13, {"NO_OP"})
         self.assertNotEqual(by_id[15]["estado"], "BLOQUEADO")
         ops15 = {c["operacion"] for c in by_id[15]["cargos"] if c["concepto_erp"] == "Expensa Ordinaria"}
         self.assertEqual(ops15, {"INSERT"})
+        self.assertEqual(
+            [c["valor_mes"] for c in by_id[15]["cargos"] if c["concepto_erp"] == "Expensa Ordinaria"],
+            [35000],
+        )
 
     def test_titular_discrepante_no_se_sobrescribe(self):
         conjunto = {"conjunto_id": 2, "conjunto_nombre": "MZ 2", "pj_nit": "901542561"}
@@ -358,7 +379,7 @@ class CruceLoteSinteticoTests(unittest.TestCase):
             unidad_dir="Bloque 34   APTO 103", ref_pago="34103",
             propietario_nombre="RESTREPO WILFER ALBERTO",
             propietario_identificacion="1087994460",
-            abono_ultimo_mes=0, saldo_anterior_pie=1000,
+            saldo_anterior_pie=1000,
         )
         plan = cruzar_lote([inv], conjunto, [u], periodo_anio=2026, periodo_mes=10)
         u0 = plan["unidades"][0]
@@ -401,17 +422,32 @@ class ParserPdfRealTests(unittest.TestCase):
     def test_23_401_y_25_103_en_el_pdf(self):
         by_ref = {i["ref_pago"]: i for i in self.invoices}
         a = by_ref["23401"]
-        self.assertEqual(a["abono_ultimo_mes"], 250000)
+        self.assertNotIn("abono_ultimo_mes", a)
+        self.assertNotIn("anticipos_pie", a)
+        self.assertNotIn("menos_anticipos", a)
         self.assertEqual(a["page"], 7)
         self.assertEqual(a["half"], "top")
+        cuota_a = next(c for c in a["conceptos"] if "ADMINISTRACION" in (c["concepto"] or ""))
+        self.assertEqual(cuota_a["valor_mes"], 35000)
         b = by_ref["25103"]
-        self.assertEqual(b["abono_ultimo_mes"], 70800)
+        self.assertNotIn("abono_ultimo_mes", b)
         self.assertEqual(b["saldo_anterior_pie"], 0)
         self.assertEqual(b["page"], 22)
         self.assertEqual(b["half"], "top")
         cuota = next(c for c in b["conceptos"] if "ADMINISTRACION" in (c["concepto"] or ""))
         self.assertEqual(cuota["valor_mes"], 35000)
         self.assertGreater(cuota["saldo_ant"] + cuota["valor_mes"] + cuota["intereses_mes"] - 0.01, -1)
+        cargos_a = cargos_desde_factura(a, [], 2026, 10)
+        cargos_b = cargos_desde_factura(b, [], 2026, 10)
+        for cargos in (cargos_a, cargos_b):
+            self.assertTrue(all(c["concepto_erp"] in {"Expensa Ordinaria", "Cuota Extraordinaria"} for c in cargos))
+            self.assertNotIn("Abono", {c["concepto_erp"] for c in cargos})
+        self.assertIn("Expensa Ordinaria", {c["concepto_erp"] for c in cargos_a})
+        self.assertEqual({c["concepto_erp"] for c in cargos_b}, {"Expensa Ordinaria"})
+        self.assertTrue(all(c["valor_mes"] == 35000 for c in cargos_b if c["concepto_erp"] == "Expensa Ordinaria"))
+        for inv in self.invoices:
+            self.assertNotIn("abono_ultimo_mes", inv)
+            self.assertNotIn("anticipos_pie", inv)
 
     def test_visor_recorta_media_pagina_no_entera(self):
         png_top = recortar_media_pagina_png(self.pdf, 7, "top")
@@ -466,6 +502,8 @@ class PreviewNoEscribeTests(unittest.TestCase):
         self.assertNotIn("UPDATE expensas_ph", cuerpo)
         self.assertIn("cruzar_lote", cuerpo)
         self.assertTrue(callable(preview_pdf))
+        src_full = Path(ROOT / "facturacion_mensual_service.py").read_text(encoding="utf-8")
+        self.assertNotIn("concepto == \"Abono\"", src_full)
 
 
 if __name__ == "__main__":

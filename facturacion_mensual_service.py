@@ -1,8 +1,9 @@
-"""Cargador de facturación mensual COLON: barreras B1–B5, B7 y regla de abonos.
+"""Cargador de facturación mensual COLON: barreras B1–B5 y B7.
 
 Pre-vista en memoria (0 escrituras). Aplicar solo al confirmar.
-No hay bandeja de abonos: `Abono último Mes` se imputa al mes inmediatamente
-anterior al período de la factura.
+De la factura solo se causa `VALOR MES` de cuota ordinaria, extraordinaria o
+multa. Nunca intereses de mora ni abonos/anticipos: el liquidador calcula la
+mora; los pagos no se imputan desde este PDF.
 """
 from __future__ import annotations
 
@@ -29,10 +30,6 @@ from certificados_deuda_repository import (
 from facturacion_mensual_parser import parse_facturacion_pdf, periodo_desde_facturas
 
 MAX_PDF_BYTES = 50 * 1024 * 1024
-
-# Alerta de desfase (caso 25-103): saldo PDF 0 o muy menor vs capital Neon.
-RATIO_SALDO_MUY_MENOR = 0.25
-DESFASE_MIN_ABSOLUTO = 100_000.0
 
 _CACHE_TTL_S = 1800
 _CACHE_MAX = 6
@@ -189,6 +186,13 @@ def clasificar_cargo_mes_recibo(concepto_pdf: str) -> dict:
             "requiere_confirmacion": False,
             "motivo": "El interés lo calcula el liquidador con la tasa oficial Superfinanciera",
         }
+    if any(k in tokens for k in ("ABONO", "ABONOS", "ANTICIPO", "ANTICIPOS", "ADELANTO", "PAGO", "PAGOS")):
+        return {
+            "accion": "IGNORAR_SIEMPRE",
+            "concepto_erp": None,
+            "requiere_confirmacion": False,
+            "motivo": "Este cargador no imputa abonos ni anticipos; los pagos no salen de la factura",
+        }
     if (
         ("CUOTA" in tokens or "APORTE" in tokens or "EXPENSA" in tokens)
         and ("ADMINISTRACION" in tokens or "ADMON" in tokens)
@@ -223,23 +227,6 @@ def clasificar_cargo_mes_recibo(concepto_pdf: str) -> dict:
     }
 
 
-def capital_neto_antes(expensas: list[dict], anio: int, mes: int) -> float:
-    """Capital vivo en Neon antes del mes de la factura (ord + ext + gastos − abonos)."""
-    cap = 0.0
-    for e in expensas or []:
-        y = int(e.get("periodo_anio") or 0)
-        m = int(e.get("periodo_mes") or 0)
-        if (y, m) >= (anio, mes):
-            continue
-        concepto = str(e.get("concepto") or "")
-        val = _money(e.get("valor_capital"))
-        if concepto in ("Expensa Ordinaria", "Cuota Extraordinaria", "Gastos"):
-            cap += val
-        elif concepto == "Abono":
-            cap -= val
-    return round(cap, 2)
-
-
 def ultima_ordinaria(expensas: list[dict]) -> Optional[tuple[int, int, float]]:
     mejor = None
     for e in expensas or []:
@@ -249,163 +236,6 @@ def ultima_ordinaria(expensas: list[dict]) -> Optional[tuple[int, int, float]]:
         if mejor is None or (y, m) > (mejor[0], mejor[1]):
             mejor = (y, m, _money(e.get("valor_capital")))
     return mejor
-
-
-def hay_abono_igual(expensas: list[dict], anio: int, mes: int, monto: float) -> bool:
-    for e in expensas or []:
-        if str(e.get("concepto") or "") != "Abono":
-            continue
-        if int(e.get("periodo_anio") or 0) != anio:
-            continue
-        if int(e.get("periodo_mes") or 0) != mes:
-            continue
-        if abs(_money(e.get("valor_capital")) - _money(monto)) < 0.01:
-            return True
-    return False
-
-
-def abono_del_periodo(expensas: list[dict], anio: int, mes: int) -> Optional[float]:
-    for e in expensas or []:
-        if str(e.get("concepto") or "") != "Abono":
-            continue
-        if int(e.get("periodo_anio") or 0) == anio and int(e.get("periodo_mes") or 0) == mes:
-            return _money(e.get("valor_capital"))
-    return None
-
-
-def decidir_abono(
-    *,
-    abono_ultimo_mes: float,
-    saldo_anterior_pdf: float,
-    capital_neon: float,
-    expensas: list[dict],
-    periodo_anio: int,
-    periodo_mes: int,
-) -> dict:
-    """Regla 3 (reemplaza bandeja B6).
-
-    `Abono último Mes` de la factura de período M se imputa como Abono del
-    mes M-1 (fecha de período YYYY-MM del mes previo). No hay bandeja.
-
-    Idempotencia: si ya existe Abono mismo inmueble+periodo+monto, no duplica.
-
-    Desfase crítico (25-103): Saldo Anterior del PDF es 0 o muy menor y Neon
-    tiene capital histórico grande. NO se inserta solo el último abono (dejaría
-    cientos de miles inventados). Se propone un abono de cierre =
-    capital Neon − saldo ant. PDF, con alerta fuerte. El mes de la cuota
-    sigue aplicándose si la unidad es elegible.
-    """
-    abono_pdf = _money(abono_ultimo_mes)
-    saldo_pdf = _money(saldo_anterior_pdf)
-    capital = _money(capital_neon)
-    prev_a, prev_m = mes_anterior(periodo_anio, periodo_mes)
-    periodo_abono = f"{prev_a}-{prev_m:02d}"
-    desfase = round(capital - saldo_pdf, 2)
-
-    umbral_muy_menor = max(capital * RATIO_SALDO_MUY_MENOR, 0.0)
-    desfase_min = max(abono_pdf * 1.5, DESFASE_MIN_ABSOLUTO)
-    desfase_critico = (
-        capital > 0
-        and saldo_pdf <= umbral_muy_menor
-        and desfase > desfase_min
-    )
-
-    if desfase_critico:
-        if hay_abono_igual(expensas, prev_a, prev_m, desfase):
-            return {
-                "accion": "NO_OP_YA_EXISTE",
-                "monto": desfase,
-                "periodo_anio": prev_a,
-                "periodo_mes": prev_m,
-                "periodo": periodo_abono,
-                "alerta_fuerte": True,
-                "motivo": (
-                    f"Ya hay un abono de ${desfase:,.0f} en {periodo_abono}. "
-                    f"No se duplica. La factura trae saldo anterior ${saldo_pdf:,.0f} "
-                    f"y Neon tenía capital ${capital:,.0f}; el último abono del PDF "
-                    f"(${abono_pdf:,.0f}) no cubre el desfase."
-                ),
-            }
-        existente = abono_del_periodo(expensas, prev_a, prev_m)
-        if existente is not None and abs(existente - desfase) >= 0.01:
-            return {
-                "accion": "BLOQUEAR_ABONO",
-                "monto": desfase,
-                "periodo_anio": prev_a,
-                "periodo_mes": prev_m,
-                "periodo": periodo_abono,
-                "alerta_fuerte": True,
-                "motivo": (
-                    f"ALERTA CRÍTICA: la factura dice saldo anterior ${saldo_pdf:,.0f} "
-                    f"pero Neon tiene capital ${capital:,.0f}. No se inserta solo el "
-                    f"último abono de ${abono_pdf:,.0f} (dejaría ${desfase - abono_pdf:,.0f} "
-                    f"inventados). Ya existe un abono distinto (${existente:,.0f}) en "
-                    f"{periodo_abono}; no se pisa. Revise la unidad antes de cobrar."
-                ),
-            }
-        return {
-            "accion": "INSERTAR_ABONO_CIERRE",
-            "monto": desfase,
-            "periodo_anio": prev_a,
-            "periodo_mes": prev_m,
-            "periodo": periodo_abono,
-            "alerta_fuerte": True,
-            "motivo": (
-                f"ALERTA CRÍTICA ({periodo_abono}): saldo anterior en la factura "
-                f"${saldo_pdf:,.0f} y Neon tiene capital histórico ${capital:,.0f}. "
-                f"No se registra solo el último abono de ${abono_pdf:,.0f}. "
-                f"Se registrará un abono de cierre de ${desfase:,.0f} "
-                f"(capital Neon − saldo ant. PDF) en {periodo_abono}."
-            ),
-        }
-
-    if abono_pdf <= 0:
-        return {
-            "accion": "NINGUNO",
-            "monto": 0.0,
-            "periodo_anio": prev_a,
-            "periodo_mes": prev_m,
-            "periodo": periodo_abono,
-            "alerta_fuerte": False,
-            "motivo": "",
-        }
-
-    if hay_abono_igual(expensas, prev_a, prev_m, abono_pdf):
-        return {
-            "accion": "NO_OP_YA_EXISTE",
-            "monto": abono_pdf,
-            "periodo_anio": prev_a,
-            "periodo_mes": prev_m,
-            "periodo": periodo_abono,
-            "alerta_fuerte": False,
-            "motivo": f"Ya existe un Abono de ${abono_pdf:,.0f} en {periodo_abono}; no se duplica.",
-        }
-    existente = abono_del_periodo(expensas, prev_a, prev_m)
-    if existente is not None and abs(existente - abono_pdf) >= 0.01:
-        return {
-            "accion": "BLOQUEAR_ABONO",
-            "monto": abono_pdf,
-            "periodo_anio": prev_a,
-            "periodo_mes": prev_m,
-            "periodo": periodo_abono,
-            "alerta_fuerte": False,
-            "motivo": (
-                f"Ya hay un abono de ${existente:,.0f} en {periodo_abono}; "
-                f"la factura trae ${abono_pdf:,.0f}. No se pisa ni se duplica."
-            ),
-        }
-    return {
-        "accion": "INSERTAR_ABONO_MES_ANTERIOR",
-        "monto": abono_pdf,
-        "periodo_anio": prev_a,
-        "periodo_mes": prev_m,
-        "periodo": periodo_abono,
-        "alerta_fuerte": False,
-        "motivo": (
-            f"Abono último Mes ${abono_pdf:,.0f} se registra como Abono de "
-            f"{periodo_abono} (mes inmediatamente anterior a la factura)."
-        ),
-    }
 
 
 def evaluar_elegibilidad(
@@ -453,15 +283,21 @@ def evaluar_elegibilidad(
     return bloqueos
 
 
+_CONCEPTOS_CAUSABLES = frozenset({"Expensa Ordinaria", "Cuota Extraordinaria"})
+
+
 def cargos_desde_factura(inv: dict, expensas: list[dict], anio: int, mes: int) -> list[dict]:
-    """Solo VALOR MES > 0. SALDO ANT. e INTERESES se ignoran para insertar."""
+    """Solo VALOR MES > 0 de cuota ordinaria, extraordinaria o multa.
+
+    Nunca intereses de mora ni abonos/anticipos.
+    """
     cargos: list[dict] = []
     for c in inv.get("conceptos") or []:
         valor_mes = _money(c.get("valor_mes"))
         if valor_mes <= 0:
             continue
         clasif = clasificar_cargo_mes_recibo(str(c.get("concepto") or ""))
-        if not clasif.get("concepto_erp"):
+        if clasif.get("concepto_erp") not in _CONCEPTOS_CAUSABLES:
             continue
         actual = None
         for e in expensas or []:
@@ -545,24 +381,8 @@ def evaluar_unidad(
                         f"oficial del mes es ${cg['valor_mes']:,.0f}."
                     )
 
-    cap = capital_neto_antes(expensas, periodo_anio, periodo_mes)
-    propuesta_abono = decidir_abono(
-        abono_ultimo_mes=_money(inv.get("abono_ultimo_mes")),
-        saldo_anterior_pdf=_money(inv.get("saldo_anterior_pie")),
-        capital_neon=cap,
-        expensas=expensas,
-        periodo_anio=periodo_anio,
-        periodo_mes=periodo_mes,
-    )
-    if propuesta_abono.get("motivo") and propuesta_abono.get("accion") != "NINGUNO":
-        alertas.append(propuesta_abono["motivo"])
-    if propuesta_abono.get("accion") == "BLOQUEAR_ABONO" and propuesta_abono.get("alerta_fuerte"):
-        bloqueos.append(propuesta_abono["motivo"])
-
     if bloqueos:
         estado = "BLOQUEADO"
-    elif propuesta_abono.get("alerta_fuerte") or any("DISCREPANCIA" in a for a in alertas):
-        estado = "APLICABLE_CON_ALERTA"
     elif alertas:
         estado = "APLICABLE_CON_ALERTA"
     else:
@@ -585,10 +405,6 @@ def evaluar_unidad(
         "bloqueos": bloqueos,
         "alertas": alertas,
         "cargos": cargos,
-        "abono": propuesta_abono,
-        "capital_neon_antes": cap,
-        "saldo_anterior_pdf": _money(inv.get("saldo_anterior_pie")),
-        "abono_ultimo_mes_pdf": _money(inv.get("abono_ultimo_mes")),
         "ref_pago": inv.get("ref_pago"),
     }
 
@@ -791,6 +607,8 @@ def preview_pdf(pdf_bytes: bytes, filename: str = "") -> dict:
 
 
 def _upsert_expensa(cur, *, inmueble_id, obligation_id, concepto, anio, mes, valor) -> str:
+    if str(concepto or "") not in _CONCEPTOS_CAUSABLES:
+        return "OMITIDO_NO_CAUSABLE"
     cur.execute(
         """
         SELECT id, valor_capital FROM expensas_ph
@@ -815,7 +633,6 @@ def _upsert_expensa(cur, *, inmueble_id, obligation_id, concepto, anio, mes, val
         )
         return "UPDATE"
     f_venc = liquidador.fecha_vencimiento_fin_mes(anio, mes).isoformat()
-    estado = "Pagado" if concepto == "Abono" else "En Mora"
     cur.execute(
         """
         INSERT INTO expensas_ph
@@ -823,7 +640,7 @@ def _upsert_expensa(cur, *, inmueble_id, obligation_id, concepto, anio, mes, val
              valor_capital, fecha_vencimiento, estado)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (inmueble_id, obligation_id, concepto, mes, anio, _money(valor), f_venc, estado),
+        (inmueble_id, obligation_id, concepto, mes, anio, _money(valor), f_venc, "En Mora"),
     )
     return "INSERT"
 
@@ -875,18 +692,6 @@ def aplicar_lote(lote_id: str, *, usuario_id: str = "", confirmar_sanciones: Opt
                             valor=cargo["valor_mes"],
                         )
                         ops.append({**cargo, "aplicado": hecho})
-                    abono = u.get("abono") or {}
-                    if abono.get("accion") in ("INSERTAR_ABONO_MES_ANTERIOR", "INSERTAR_ABONO_CIERRE"):
-                        hecho = _upsert_expensa(
-                            cur,
-                            inmueble_id=inm_id,
-                            obligation_id=ob_id,
-                            concepto="Abono",
-                            anio=int(abono["periodo_anio"]),
-                            mes=int(abono["periodo_mes"]),
-                            valor=abono["monto"],
-                        )
-                        ops.append({"concepto_erp": "Abono", "aplicado": hecho, **abono})
                     aplicadas.append({"inmueble_id": inm_id, "torre_apto": u["torre_apto"], "ops": ops})
 
                 detalle = {

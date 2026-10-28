@@ -13,10 +13,10 @@
         <p class="font-bold">Pre-vista primero, escribir después</p>
         <p class="mt-1">
             Sube el PDF de Recibo de Cobro Mensual (COLON, 2 facturas por página).
-            El sistema lee solo la columna <strong>VALOR MES</strong> y no toca Neon hasta que pulse
+            El sistema lee solo la columna <strong>VALOR MES</strong> de cuota ordinaria,
+            extraordinaria o multa, y no toca Neon hasta que pulse
             <strong>Confirmar y actualizar cuotas</strong>.
-            El abono del pie de factura se registra como abono del mes inmediatamente anterior
-            (la factura de octubre → abono de septiembre). No hay bandeja de conciliación.
+            No se extraen ni se cargan intereses de mora ni abonos: la mora la calcula el liquidador.
         </p>
     </div>
 
@@ -41,7 +41,6 @@
 
     <div id="encabezado" class="hidden bg-white rounded-xl shadow-sm border border-slate-200 p-6"></div>
     <div id="tabla-listas" class="hidden"></div>
-    <div id="tabla-abonos" class="hidden"></div>
     <div id="tabla-bloqueadas" class="hidden"></div>
 </div>
 
@@ -97,7 +96,6 @@
         <td class="p-3 font-mono text-sm">${u.torre_apto || ""}<div class="text-xs text-slate-400">#${u.factura_no || ""} · ${u.radicado || ""}</div></td>
         <td class="p-3 text-sm">${u.titular_neon || ""}<div class="text-xs text-slate-500">PDF: ${u.titular_pdf || ""}</div></td>
         <td class="p-3 text-sm">${cargosHtml(u.cargos)}</td>
-        <td class="p-3 text-sm">${(u.abono && u.abono.accion !== "NINGUNO") ? (u.abono.periodo + " · " + money(u.abono.monto) + "<div class='text-xs'>" + (u.abono.accion || "") + "</div>") : "—"}</td>
         <td class="p-3">${alertas || "—"}</td>
         <td class="p-3">${filaBotonVer(u)}</td>
       </tr>`;
@@ -108,8 +106,8 @@
       <table class="w-full text-left">
         <thead class="bg-slate-50 text-xs uppercase text-slate-500">
           <tr>
-            <th class="p-3">Unidad</th><th class="p-3">Titular</th><th class="p-3">Cuota del mes</th>
-            <th class="p-3">Abono mes anterior</th><th class="p-3">Alertas</th><th class="p-3">PDF</th>
+            <th class="p-3">Unidad</th><th class="p-3">Titular</th><th class="p-3">Cuota del mes (VALOR MES)</th>
+            <th class="p-3">Alertas</th><th class="p-3">PDF</th>
           </tr>
         </thead>
         <tbody>${body}</tbody>
@@ -135,20 +133,10 @@
     const unidades = prev.unidades || [];
     const listas = unidades.filter(u => u.estado !== "BLOQUEADO");
     const bloqueadas = unidades.filter(u => u.estado === "BLOQUEADO");
-    const conAbono = listas.filter(u => u.abono && u.abono.accion && u.abono.accion !== "NINGUNO");
 
     const tListas = document.getElementById("tabla-listas");
     tListas.classList.remove("hidden");
     tListas.innerHTML = renderTabla("Unidades listas para el mes", listas, "border-slate-200");
-
-    const tAb = document.getElementById("tabla-abonos");
-    if (conAbono.length) {
-      tAb.classList.remove("hidden");
-      tAb.innerHTML = renderTabla("Abonos del mes anterior (se registran al confirmar)", conAbono, "border-amber-300");
-    } else {
-      tAb.classList.add("hidden");
-      tAb.innerHTML = "";
-    }
 
     const tBl = document.getElementById("tabla-bloqueadas");
     if (bloqueadas.length) {
@@ -186,7 +174,7 @@
 
   document.getElementById("btn-aplicar").addEventListener("click", async () => {
     if (!loteId) return;
-    if (!confirm("¿Confirmar y escribir en Neon las cuotas y abonos de esta pre-vista?")) return;
+    if (!confirm("¿Confirmar y escribir en Neon solo las cuotas del mes (VALOR MES) de esta pre-vista?")) return;
     const sanciones = [...document.querySelectorAll(".sancion-ok:checked")].map(el => el.dataset.inm);
     const fd = new FormData();
     fd.append("lote_id", loteId);
