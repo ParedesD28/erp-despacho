@@ -736,6 +736,18 @@ def _crear_router_agenda() -> APIRouter:
                     if not v:
                         raise HTTPException(status_code=404, detail="Vencimiento no encontrado")
                     cur.execute("UPDATE vencimientos SET estado=%s WHERE id=%s", (estado, vencimiento_id))
+                    if str(estado or "").strip().upper() == ESTADO_COMPLETADO.upper():
+                        try:
+                            import tareas_service
+
+                            state = getattr(request, "state", None)
+                            tareas_service.completar_tareas_de_vencimiento(
+                                cur,
+                                vencimiento_id,
+                                usuario_id=getattr(state, "user_id", None) if state is not None else None,
+                            )
+                        except Exception as exc:
+                            print(f"[AGENDA] sync tareas vencimiento {vencimiento_id}: {exc!r}", flush=True)
                     _audit(cur,request,accion,"VENCIMIENTO",vencimiento_id,v["radicado_interno"],None,None,v["inmueble_id"],v["titulo"])
             return main._redirect("/vencimientos", mensaje=mensaje)
         finally:

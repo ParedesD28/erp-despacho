@@ -64,6 +64,116 @@
   </section>
   {% endif %}
 
+  {% set lista_tareas = tareas_proceso if tareas_proceso is defined else [] %}
+  {% set asignables = usuarios_tareas if usuarios_tareas is defined else (abogados if abogados is defined else []) %}
+  {% set perms_exp = request.state.permisos if request is defined and request.state is defined and request.state.permisos is defined else [] %}
+  {% set puede_editar_tareas = 'accion.editar' in perms_exp %}
+  <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+      <div>
+        <h2 class="text-sm font-black text-slate-900">Tareas</h2>
+        <p class="text-[11px] text-slate-500 mt-0.5">Plazos de la Parte y encargos del expediente. Completar un plazo cierra el vencimiento.</p>
+      </div>
+      {% if puede_editar_tareas %}
+      <button type="button" onclick="abrirModal('modal-nueva-tarea-exp')" class="px-3 py-2 rounded-xl bg-slate-900 text-white font-bold text-xs">＋ Nueva tarea</button>
+      {% endif %}
+    </div>
+    {% if lista_tareas %}
+    <ul class="space-y-2">
+      {% for t in lista_tareas %}
+      <li class="border rounded-xl p-3 bg-slate-50 flex flex-col md:flex-row md:items-start gap-2">
+        <div class="flex-1 min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-bold text-slate-900">{{ t.titulo }}</span>
+            <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded
+              {% if t.prioridad == 'Urgente' %}bg-rose-100 text-rose-800
+              {% elif t.prioridad == 'Alta' %}bg-amber-100 text-amber-800
+              {% elif t.prioridad == 'Baja' %}bg-slate-100 text-slate-600
+              {% else %}bg-sky-100 text-sky-800{% endif %}">{{ t.prioridad }}</span>
+            <span class="text-[9px] font-bold uppercase px-2 py-0.5 rounded
+              {% if t.estado == 'Completada' %}bg-emerald-100 text-emerald-800
+              {% elif t.estado == 'Cancelada' %}bg-slate-200 text-slate-600
+              {% elif t.estado == 'Bloqueada' %}bg-rose-100 text-rose-800
+              {% elif t.estado == 'En progreso' %}bg-indigo-100 text-indigo-800
+              {% else %}bg-amber-100 text-amber-800{% endif %}">{{ t.estado }}</span>
+            {% if t.es_automatica %}<span class="text-[9px] font-black uppercase text-indigo-700">plazo</span>{% endif %}
+          </div>
+          <p class="text-[11px] text-slate-500 mt-1">
+            {{ t.asignado_nombre or 'Sin asignar' }}
+            {% if t.fecha_vencimiento %} · vence {{ t.fecha_vencimiento }}{% endif %}
+            {% if t.origen %} · {{ t.origen }}{% endif %}
+          </p>
+          {% if t.descripcion %}<p class="text-xs text-slate-700 mt-1">{{ t.descripcion }}</p>{% endif %}
+        </div>
+        {% if puede_editar_tareas and t.estado not in ['Completada', 'Cancelada'] %}
+        <div class="flex flex-wrap gap-1 shrink-0">
+          <form method="POST" action="/tareas/{{ t.id }}/completar">
+            <input type="hidden" name="next" value="/expediente/{{ proceso.radicado_interno }}">
+            <button class="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-[10px] font-bold">Completar</button>
+          </form>
+          <form method="POST" action="/tareas/{{ t.id }}/reasignar" class="flex gap-1">
+            <input type="hidden" name="next" value="/expediente/{{ proceso.radicado_interno }}">
+            <select name="asignado_a" class="border rounded-lg text-[10px] px-1">
+              {% for u in asignables %}
+              <option value="{{ u.id }}" {% if t.asignado_a == u.id %}selected{% endif %}>{{ u.nombre }}</option>
+              {% endfor %}
+            </select>
+            <button class="px-2 py-1.5 rounded-lg border text-[10px] font-bold">Reasignar</button>
+          </form>
+        </div>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-sm text-slate-500">Aún no hay tareas en este expediente.</p>
+    {% endif %}
+  </section>
+
+  {% if puede_editar_tareas %}
+  <div id="modal-nueva-tarea-exp" class="hidden fixed inset-0 bg-slate-950/60 z-[60] p-4 overflow-y-auto">
+    <div class="max-w-lg mx-auto bg-white rounded-3xl shadow-2xl my-16 overflow-hidden">
+      <div class="px-6 py-5 bg-slate-900 text-white flex items-center justify-between">
+        <div><div class="text-xs uppercase tracking-widest text-slate-400">Expediente</div><h2 class="text-xl font-black">Nueva tarea</h2></div>
+        <button type="button" onclick="cerrarModal('modal-nueva-tarea-exp')">✕</button>
+      </div>
+      <form method="POST" action="/tareas/nueva" class="p-6 space-y-3">
+        <input type="hidden" name="next" value="/expediente/{{ proceso.radicado_interno }}">
+        <input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}">
+        <label class="block text-[10px] uppercase font-bold text-slate-500">Título</label>
+        <input name="titulo" required class="w-full border rounded-xl p-3" placeholder="Qué hay que hacer">
+        <label class="block text-[10px] uppercase font-bold text-slate-500">Asignar a</label>
+        <select name="asignado_a" required class="w-full border rounded-xl p-3">
+          {% for u in asignables %}
+          <option value="{{ u.id }}" {% if proceso.abogado_id and u.id == proceso.abogado_id %}selected{% endif %}>{{ u.nombre }}</option>
+          {% endfor %}
+        </select>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[10px] uppercase font-bold text-slate-500">Prioridad</label>
+            <select name="prioridad" class="w-full border rounded-xl p-3">
+              <option>Baja</option>
+              <option selected>Media</option>
+              <option>Alta</option>
+              <option>Urgente</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[10px] uppercase font-bold text-slate-500">Vence</label>
+            <input type="date" name="fecha_vencimiento" class="w-full border rounded-xl p-3">
+          </div>
+        </div>
+        <label class="block text-[10px] uppercase font-bold text-slate-500">Descripción</label>
+        <textarea name="descripcion" rows="3" class="w-full border rounded-xl p-3"></textarea>
+        <div class="flex justify-end gap-2">
+          <button type="button" onclick="cerrarModal('modal-nueva-tarea-exp')" class="px-4 py-2 rounded-xl border font-bold">Cancelar</button>
+          <button class="px-5 py-2 rounded-xl bg-slate-900 text-white font-black">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
   {% if obligacion_principal %}
   <section class="bg-emerald-50 rounded-2xl border border-emerald-200 p-5">
     <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -151,6 +261,6 @@ function actualizarPreviewClaveEditor(){const b=stripCerosTokenEditor(document.g
 actualizarPreviewClaveEditor();
 function seleccionarContactoAgenda(valor){const id=String(valor||'').split(' - ')[0].trim();const p=contactosAgenda.find(x=>String(x.identificacion||'')===id)||contactosAgenda.find(x=>String(x.nombre||'').toLowerCase()===String(valor||'').toLowerCase());if(!p){document.getElementById('acuerdo-id-persona').value='';document.getElementById('acuerdo-persona-confirmada').textContent='';return}document.getElementById('acuerdo-id-persona').value=p.identificacion||'';document.getElementById('acuerdo-nombre-persona').value=p.nombre||'';document.getElementById('acuerdo-telefono-persona').value=p.telefono||'';document.getElementById('acuerdo-persona-confirmada').textContent=`Persona vinculada: ${p.nombre||''} · ${p.identificacion||''}`}
 function agregarMedida(){const w=document.getElementById('medidas-list');const r=document.createElement('div');r.className='flex gap-2 mb-2';r.innerHTML='<input name="medida" class="flex-1 border rounded-xl p-3"><button type="button" onclick="this.parentElement.remove()" class="px-3 rounded-xl border text-red-600">Quitar</button>';w.appendChild(r)}
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){cerrarEditor();cerrarModal('modal-inactivar');cerrarModal('act-modal');cerrarModal('agenda-modal')}})
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){cerrarEditor();cerrarModal('modal-inactivar');cerrarModal('act-modal');cerrarModal('agenda-modal');cerrarModal('modal-nueva-tarea-exp')}})
 </script>
 {% endblock %}

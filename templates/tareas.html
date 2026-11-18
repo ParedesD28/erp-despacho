@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block contenido %}
+{% set perms = request.state.permisos if request is defined and request.state is defined and request.state.permisos is defined else [] %}
+{% set puede_editar = 'accion.editar' in perms %}
+{% set g = grupos or {'vencidas': [], 'hoy': [], 'esta_semana': [], 'mas_adelante': [], 'cerradas': [], 'total_abiertas': 0} %}
+<div class="p-5 md:p-8 max-w-7xl mx-auto space-y-5">
+  <header class="bg-white rounded-2xl border border-slate-200 px-5 py-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <div class="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Despacho</div>
+      <h1 class="text-xl font-black text-slate-900 mt-0.5">
+        {% if nombre_visto %}Tareas de {{ nombre_visto }}{% else %}Mis Tareas{% endif %}
+      </h1>
+      <p class="text-xs text-slate-500 mt-1">
+        {{ g.total_abiertas or 0 }} abierta{{ 's' if (g.total_abiertas or 0) != 1 else '' }}.
+        Los plazos de la Parte se crean solos y, al completar, cierran el vencimiento.
+      </p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      {% if coordinador %}
+      <a href="/tareas" class="px-3 py-2 rounded-xl border text-xs font-bold {% if not nombre_visto %}bg-slate-900 text-white{% else %}bg-white text-slate-700{% endif %}">Las mías</a>
+      {% endif %}
+      {% if puede_editar %}
+      <button type="button" onclick="abrirModalTarea()" class="px-3.5 py-2 rounded-xl bg-slate-900 text-white font-bold text-xs">＋ Nueva tarea</button>
+      {% endif %}
+    </div>
+  </header>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+    {% set cols = [
+      ('vencidas', 'Vencidas', 'border-rose-200', 'border-rose-100 bg-rose-50/70', 'text-rose-900', 'text-rose-800', g.vencidas),
+      ('hoy', 'Hoy', 'border-amber-200', 'border-amber-100 bg-amber-50/70', 'text-amber-900', 'text-amber-800', g.hoy),
+      ('esta_semana', 'Esta semana', 'border-sky-200', 'border-sky-100 bg-sky-50/70', 'text-sky-900', 'text-sky-800', g.esta_semana),
+      ('mas_adelante', 'Más adelante', 'border-slate-200', 'border-slate-100 bg-slate-50/70', 'text-slate-900', 'text-slate-800', g.mas_adelante)
+    ] %}
+    {% for key, titulo, borde, cabeza, titulo_cls, badge_cls, items in cols %}
+    <section class="bg-white rounded-2xl border {{ borde }} shadow-sm flex flex-col min-h-[18rem]">
+      <div class="px-4 py-3 border-b {{ cabeza }} flex items-center justify-between">
+        <h2 class="text-sm font-black {{ titulo_cls }}">{{ titulo }}</h2>
+        <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border {{ badge_cls }}">{{ items|length }}</span>
+      </div>
+      <div class="p-3 space-y-2 flex-1 overflow-y-auto max-h-[32rem]">
+        {% for t in items %}
+        <article class="border rounded-xl p-3 bg-slate-50/80">
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <p class="text-sm font-bold text-slate-900 leading-snug">{{ t.titulo }}</p>
+            <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded
+              {% if t.prioridad == 'Urgente' %}bg-rose-100 text-rose-800
+              {% elif t.prioridad == 'Alta' %}bg-amber-100 text-amber-800
+              {% elif t.prioridad == 'Baja' %}bg-slate-100 text-slate-600
+              {% else %}bg-sky-100 text-sky-800{% endif %}">{{ t.prioridad }}</span>
+          </div>
+          <div class="mt-1 flex flex-wrap gap-2 text-[10px] text-slate-500">
+            {% if t.radicado_interno %}
+            <a href="/expediente/{{ t.radicado_interno }}" class="font-bold text-blue-700 hover:underline">{{ t.radicado_interno }}</a>
+            {% else %}
+            <span>Tarea libre</span>
+            {% endif %}
+            {% if t.fecha_vencimiento %}<span>vence {{ t.fecha_vencimiento }}</span>{% endif %}
+            <span>{{ t.estado }}</span>
+            {% if t.es_automatica %}<span class="font-bold text-indigo-700">plazo</span>{% endif %}
+          </div>
+          {% if puede_editar %}
+          <div class="mt-2 flex flex-wrap gap-1">
+            <form method="POST" action="/tareas/{{ t.id }}/completar">
+              <input type="hidden" name="next" value="/tareas{% if ver_id and ver_id != usuario_id %}?asignado={{ ver_id }}{% endif %}">
+              <button class="px-2 py-1 rounded-lg bg-emerald-600 text-white text-[10px] font-bold">Completar</button>
+            </form>
+            <form method="POST" action="/tareas/{{ t.id }}/estado" class="flex gap-1">
+              <input type="hidden" name="next" value="/tareas{% if ver_id and ver_id != usuario_id %}?asignado={{ ver_id }}{% endif %}">
+              <select name="estado" class="border rounded-lg text-[10px] px-1 py-1" onchange="this.form.submit()">
+                {% for e in estados %}
+                <option value="{{ e }}" {% if t.estado == e %}selected{% endif %}>{{ e }}</option>
+                {% endfor %}
+              </select>
+            </form>
+          </div>
+          {% if coordinador and usuarios %}
+          <form method="POST" action="/tareas/{{ t.id }}/reasignar" class="mt-1 flex gap-1">
+            <input type="hidden" name="next" value="/tareas{% if ver_id and ver_id != usuario_id %}?asignado={{ ver_id }}{% endif %}">
+            <select name="asignado_a" class="flex-1 border rounded-lg text-[10px] px-1 py-1">
+              {% for u in usuarios %}
+              <option value="{{ u.id }}" {% if t.asignado_a == u.id %}selected{% endif %}>{{ u.nombre }}</option>
+              {% endfor %}
+            </select>
+            <button class="px-2 py-1 rounded-lg border text-[10px] font-bold">Reasignar</button>
+          </form>
+          {% endif %}
+          {% endif %}
+        </article>
+        {% else %}
+        <p class="text-xs text-slate-400 text-center py-8">Nada aquí.</p>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+
+  {% if coordinador %}
+  <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+    <h2 class="text-sm font-black mb-3">Carga por abogado</h2>
+    {% if carga %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-[10px] uppercase tracking-wider text-slate-400 text-left border-b">
+            <th class="py-2 pr-3">Abogado</th>
+            <th class="py-2 pr-3">Abiertas</th>
+            <th class="py-2 pr-3">Vencidas</th>
+            <th class="py-2 pr-3">Urgentes</th>
+            <th class="py-2 pr-3">Altas</th>
+            <th class="py-2"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in carga %}
+          <tr class="border-b border-slate-100">
+            <td class="py-2 pr-3 font-bold">{{ c.nombre }}</td>
+            <td class="py-2 pr-3">{{ c.abiertas }}</td>
+            <td class="py-2 pr-3 {% if c.vencidas %}text-rose-700 font-bold{% endif %}">{{ c.vencidas }}</td>
+            <td class="py-2 pr-3 {% if c.urgentes %}text-rose-700 font-bold{% endif %}">{{ c.urgentes }}</td>
+            <td class="py-2 pr-3">{{ c.altas }}</td>
+            <td class="py-2">
+              <a href="/tareas?asignado={{ c.id }}" class="text-[11px] font-bold text-blue-700 hover:underline">Ver tareas</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-sm text-slate-500">No hay usuarios activos para mostrar carga.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if g.cerradas %}
+  <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+    <h2 class="text-sm font-black mb-3">Cerradas recientes</h2>
+    <ul class="space-y-2">
+      {% for t in g.cerradas[:12] %}
+      <li class="text-xs text-slate-600 flex flex-wrap gap-2">
+        <span class="px-1.5 py-0.5 rounded bg-slate-100 font-bold">{{ t.estado }}</span>
+        <span class="font-semibold">{{ t.titulo }}</span>
+        {% if t.radicado_interno %}<a class="text-blue-700 font-bold" href="/expediente/{{ t.radicado_interno }}">{{ t.radicado_interno }}</a>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</div>
+
+{% if puede_editar %}
+<div id="modal-nueva-tarea" class="hidden fixed inset-0 bg-slate-950/60 z-50 p-4 overflow-y-auto">
+  <div class="max-w-lg mx-auto bg-white rounded-3xl shadow-2xl my-10 overflow-hidden">
+    <div class="px-6 py-5 bg-slate-900 text-white flex justify-between">
+      <div>
+        <div class="text-xs uppercase tracking-widest text-slate-400">Asignador</div>
+        <h2 class="text-xl font-black">Nueva tarea</h2>
+      </div>
+      <button type="button" onclick="cerrarModalTarea()">✕</button>
+    </div>
+    <form method="POST" action="/tareas/nueva" class="p-6 space-y-3">
+      <input type="hidden" name="next" value="/tareas">
+      <label class="block text-[10px] uppercase font-bold text-slate-500">Título</label>
+      <input name="titulo" required class="w-full border rounded-xl p-3" placeholder="Qué hay que hacer">
+      <label class="block text-[10px] uppercase font-bold text-slate-500">Asignar a</label>
+      <select name="asignado_a" required class="w-full border rounded-xl p-3">
+        {% for u in usuarios %}
+        <option value="{{ u.id }}" {% if u.id == usuario_id %}selected{% endif %}>{{ u.nombre }}</option>
+        {% endfor %}
+      </select>
+      <label class="block text-[10px] uppercase font-bold text-slate-500">Expediente (opcional)</label>
+      <input name="radicado_interno" class="w-full border rounded-xl p-3" placeholder="EXP-0001 — vacío = tarea libre">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-[10px] uppercase font-bold text-slate-500">Prioridad</label>
+          <select name="prioridad" class="w-full border rounded-xl p-3">
+            {% for p in prioridades %}
+            <option value="{{ p }}" {% if p == 'Media' %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase font-bold text-slate-500">Vence</label>
+          <input type="date" name="fecha_vencimiento" class="w-full border rounded-xl p-3">
+        </div>
+      </div>
+      <label class="block text-[10px] uppercase font-bold text-slate-500">Descripción</label>
+      <textarea name="descripcion" rows="3" class="w-full border rounded-xl p-3" placeholder="Detalle (opcional)"></textarea>
+      <div class="flex justify-end gap-2 pt-2">
+        <button type="button" onclick="cerrarModalTarea()" class="px-4 py-2 rounded-xl border font-bold">Cancelar</button>
+        <button class="px-5 py-2 rounded-xl bg-slate-900 text-white font-black">Guardar</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script>
+function abrirModalTarea(){const e=document.getElementById('modal-nueva-tarea');if(!e)return;e.classList.remove('hidden');document.body.classList.add('overflow-hidden')}
+function cerrarModalTarea(){const e=document.getElementById('modal-nueva-tarea');if(e)e.classList.add('hidden');document.body.classList.remove('overflow-hidden')}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')cerrarModalTarea()});
+</script>
+{% endif %}
+{% endblock %}

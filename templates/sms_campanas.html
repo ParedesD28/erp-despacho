@@ -36,6 +36,7 @@
         {% endif %}
         {% if 'nav.expedientes' in perms or perms|length == 0 %}
         <a class="nav-link" href="/expedientes">Expedientes</a>
+        <a class="nav-link" href="/tareas">Mis Tareas</a>
         {% endif %}
         {% set ver_crm = 'nav.cobro.crm' in perms or perms|length == 0 %}
         {% set ver_acuerdos = 'nav.cobro.acuerdos' in perms or perms|length == 0 %}

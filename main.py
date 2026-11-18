@@ -84,6 +84,7 @@ import usuarios_router
 import portal_ph_router
 import sync_rama_router
 import facturacion_mensual_router
+import tareas_router
 
 app = FastAPI(title="Gestión Judicial ERP", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
@@ -115,6 +116,7 @@ app.include_router(certificados_deuda_router.router)
 app.include_router(usuarios_router.router)
 app.include_router(portal_ph_router.router)
 app.include_router(facturacion_mensual_router.router)
+app.include_router(tareas_router.router)
 
 # Configuración global de observabilidad y captura de excepciones
 observability.install_exception_handling(app)
@@ -1120,6 +1122,15 @@ def detalle_expediente(request: Request, radicado: str):
                             (radicado,),
                         )
                     alertas_expediente = rows_as_dicts(cur)
+                tareas_proceso = []
+                usuarios_tareas = []
+                try:
+                    import tareas_service as _tareas_svc
+
+                    tareas_proceso = _tareas_svc.listar_tareas_proceso(cur, radicado)
+                    usuarios_tareas = _tareas_svc.listar_usuarios_asignables(cur)
+                except Exception as exc:
+                    print(f"[EXPEDIENTE] tareas {radicado}: {exc!r}", flush=True)
                 contactos_opts = expedientes_service._contact_options(cur)
                 abogados_opts = expedientes_service._get_abogados(cur)
                 obligaciones = obligaciones_service.obtener_obligaciones_proceso(cur, radicado)
@@ -1157,6 +1168,8 @@ def detalle_expediente(request: Request, radicado: str):
                         "totales_reloj": (timeline.get("totales") or {"despacho": 0, "firma": 0}),
                         "etapas_actuacion": expedientes_service.CANONICAL_STAGES,
                         "alertas_expediente": alertas_expediente,
+                        "tareas_proceso": tareas_proceso,
+                        "usuarios_tareas": usuarios_tareas,
                         "acuerdos_crm": acuerdos,
                         "audit_ediciones": audit,
                         "conjuntos": conjuntos,
