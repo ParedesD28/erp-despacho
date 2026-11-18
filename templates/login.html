@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Acceso Restringido - Despacho Digital</title>
+    <link rel="icon" href="/static/img/marca-despacho.svg" type="image/svg+xml">
     
     <!-- 1. EL PINTOR ENTRA PRIMERO (Usando servidor alternativo JSDelivr anti-bloqueos) -->
     <script src="https://cdn.jsdelivr.net/npm/tailwindcss-cdn@3.4.10/tailwindcss.js"></script>
@@ -14,9 +15,11 @@
         
         <!-- Header decorativo Institucional -->
         <div class="bg-slate-800 px-8 py-8 text-center border-b-4 border-teal-500">
-            <div class="bg-slate-700 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 shadow-inner">
-                <i data-lucide="scale" class="w-8 h-8 text-teal-400"></i>
-            </div>
+            <img src="/static/img/marca-despacho.svg"
+                 alt="Despacho Digital"
+                 width="64"
+                 height="64"
+                 class="w-16 h-16 mx-auto mb-4 rounded-2xl shadow-inner">
             <h1 class="text-2xl font-bold text-white tracking-wide">Despacho Digital</h1>
             <p class="text-slate-400 text-sm mt-2">Acceso exclusivo para equipo jurídico</p>
         </div>
@@ -63,7 +66,7 @@
     </div>
 
     <!-- 2. LOS ÍCONOS ENTRAN AL FINAL (Diferidos) -->
-    <script src="https://unpkg.com/lucide@latest" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script>
         // Le damos una orden estricta al navegador: 
         // "Espera a que todo cargue, dale 50 milisegundos a Tailwind para pintar, y luego sí pon los íconos".
