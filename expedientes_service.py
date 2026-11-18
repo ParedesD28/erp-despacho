@@ -214,6 +214,65 @@ def eliminar_actuacion(cur, radicado, actuacion_id):
     return True
 
 
+def actualizar_actuacion(
+    cur,
+    radicado,
+    actuacion_id,
+    *,
+    fecha=None,
+    etapa=None,
+    descripcion=None,
+    tipificacion=None,
+):
+    """Edita una actuación manual y espeja en actuaciones_proceso.
+
+    Misma validación de etapa que el alta. Recalcula procesos.etapa_actual.
+    False si no existe en ese radicado.
+    """
+    if not _table_exists(cur, "actuaciones"):
+        raise RuntimeError("No existe la tabla actuaciones")
+    try:
+        aid = int(actuacion_id)
+    except (TypeError, ValueError):
+        return False
+    etapa_norm = etapas_procesales.normalizar_etapa(etapa) or etapas_procesales.ETAPA_NEUTRA
+    act_cols = _cols(cur, "actuaciones")
+    payload = {
+        "fecha": fecha or date.today(),
+        "etapa": etapa_norm,
+        "descripcion": (str(descripcion).strip() if descripcion else "") or "Actuación registrada",
+        "tipificacion_sugerida": (str(tipificacion).strip() if tipificacion else "") or None,
+    }
+    use = [c for c in ("fecha", "etapa", "descripcion") if c in act_cols]
+    if "tipificacion_sugerida" in act_cols and payload["tipificacion_sugerida"]:
+        use.append("tipificacion_sugerida")
+    if "id" not in act_cols or "radicado_interno" not in act_cols or "etapa" not in use:
+        raise RuntimeError("La tabla actuaciones no contiene columnas compatibles")
+    cur.execute(
+        f"UPDATE actuaciones SET {', '.join(f'{c}=%s' for c in use)} WHERE id=%s AND radicado_interno=%s",
+        [payload[c] for c in use] + [aid, radicado],
+    )
+    if cur.rowcount == 0:
+        return False
+    if _table_exists(cur, "actuaciones_proceso"):
+        try:
+            import desviaciones_procesales_service as dps
+
+            dps.actualizar_espejo_manual(
+                cur,
+                actuacion_id=aid,
+                radicado=radicado,
+                fecha=payload.get("fecha"),
+                etapa=etapa_norm,
+                descripcion=payload.get("descripcion"),
+                tipificacion=payload.get("tipificacion_sugerida"),
+            )
+        except Exception as exc:
+            print(f"[ACTUACION] dual-write/desviación al editar {radicado}: {exc!r}", flush=True)
+    _sync_stage(cur, radicado)
+    return True
+
+
 def _parse_money(value, default=None):
     text = str(value or "").strip().replace("$", "").replace(" ", "")
     if not text:

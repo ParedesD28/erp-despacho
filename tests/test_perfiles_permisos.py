@@ -67,6 +67,9 @@ class PermisosUnitTests(unittest.TestCase):
 
     def test_guards_rutas_sensibles(self):
         consulta = permisos.permisos_de_perfil(permisos.PERFIL_CONSULTA)
+        self.assertTrue(permisos.denegar_acceso(consulta, "POST", "/actuacion/nueva"))
+        self.assertTrue(permisos.denegar_acceso(consulta, "POST", "/actuacion/editar"))
+        self.assertTrue(permisos.denegar_acceso(consulta, "POST", "/actuacion/eliminar"))
         self.assertTrue(permisos.denegar_acceso(consulta, "GET", "/sms"))
         self.assertTrue(permisos.denegar_acceso(consulta, "GET", "/cartas-cobro"))
         self.assertTrue(permisos.denegar_acceso(consulta, "GET", "/admin/usuarios"))
@@ -81,10 +84,15 @@ class PermisosUnitTests(unittest.TestCase):
         self.assertTrue(permisos.denegar_acceso(auxiliar, "POST", "/acuerdos/eliminar"))
         self.assertTrue(permisos.denegar_acceso(auxiliar, "GET", "/supervision-agente"))
         self.assertTrue(permisos.denegar_acceso(auxiliar, "GET", "/admin/usuarios"))
+        self.assertFalse(permisos.denegar_acceso(auxiliar, "POST", "/actuacion/nueva"))
+        self.assertFalse(permisos.denegar_acceso(auxiliar, "POST", "/actuacion/editar"))
+        self.assertTrue(permisos.denegar_acceso(auxiliar, "POST", "/actuacion/eliminar"))
 
         abogado = permisos.permisos_de_perfil(permisos.PERFIL_ABOGADO)
         self.assertFalse(permisos.denegar_acceso(abogado, "GET", "/tareas"))
         self.assertFalse(permisos.denegar_acceso(abogado, "POST", "/tareas/nueva"))
+        self.assertFalse(permisos.denegar_acceso(abogado, "POST", "/actuacion/editar"))
+        self.assertFalse(permisos.denegar_acceso(abogado, "POST", "/actuacion/eliminar"))
 
         admin = permisos.permisos_de_perfil(permisos.PERFIL_ADMIN)
         self.assertFalse(permisos.denegar_acceso(admin, "GET", "/admin/usuarios"))

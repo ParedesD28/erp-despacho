@@ -646,6 +646,71 @@ def dual_write_manual(
     return new_id
 
 
+def actualizar_espejo_manual(
+    cur,
+    *,
+    actuacion_id: Any,
+    radicado: str,
+    fecha: Any,
+    etapa: Any,
+    descripcion: Any,
+    tipificacion: Any = None,
+) -> Optional[int]:
+    """Actualiza el espejo en actuaciones_proceso (manual o migración) sin duplicar.
+
+    Si no hay fila, cae a dual_write_manual (inserta `manual:{id}`).
+    """
+    if not _table_exists(cur, "actuaciones_proceso"):
+        return None
+    cols = _cols(cur, "actuaciones_proceso")
+    if "content_hash" not in cols or "radicado_interno" not in cols:
+        return None
+    try:
+        aid = int(actuacion_id)
+    except (TypeError, ValueError):
+        return None
+    hashes = (f"manual:{aid}", f"migracion:{aid}")
+    payload = {
+        "fecha_actuacion": _parse_date(fecha),
+        "etapa_asociada": etapa,
+        "descripcion": (str(descripcion).strip() if descripcion else "") or None,
+        "tipo_actuacion": (str(tipificacion).strip() if tipificacion else "") or None,
+    }
+    set_cols = [c for c in ("fecha_actuacion", "etapa_asociada", "descripcion", "tipo_actuacion") if c in cols]
+    set_cols = [c for c in set_cols if payload[c] is not None]
+    if set_cols:
+        where_manual = ""
+        params: list[Any] = [payload[c] for c in set_cols]
+        params.extend([radicado, hashes[0], hashes[1]])
+        if "es_manual" in cols:
+            where_manual = " AND COALESCE(es_manual, FALSE) = TRUE"
+        cur.execute(
+            f"""
+            UPDATE actuaciones_proceso
+               SET {', '.join(f'{c}=%s' for c in set_cols)}
+             WHERE radicado_interno=%s
+               AND content_hash IN (%s, %s)
+               {where_manual}
+         RETURNING id
+            """,
+            params,
+        )
+        got = cur.fetchone()
+        if got:
+            new_id = int(first_value(got, "id"))
+            procesar_actuacion(cur, new_id)
+            return new_id
+    return dual_write_manual(
+        cur,
+        actuacion_id=aid,
+        radicado=radicado,
+        fecha=fecha,
+        etapa=etapa,
+        descripcion=descripcion,
+        tipificacion=tipificacion,
+    )
+
+
 def etapas_unificadas(cur, radicado: str) -> list[Any]:
     """Etapas de `actuaciones` + `actuaciones_proceso.etapa_asociada`."""
     valores: list[Any] = []
@@ -704,17 +769,26 @@ def timeline_unificada(cur, radicado: str, *, hoy: Optional[date] = None) -> dic
                 eventos.append(_evento_desde_manual(r, hoy=hoy))
 
     eventos = _dedup_timeline(eventos)
-    eventos.sort(key=lambda e: (_parse_date(e.get("fecha")) or date.min, int(e.get("id") or 0)))
     tramos = construir_tramos(eventos, hoy=hoy)
     abiertos = [t for t in tramos if t.get("abierto")]
     abierto = abiertos[-1] if abiertos else None
     totales = _totales_reloj(tramos)
+    ordenar_eventos_memoria(eventos)
     return {
         "eventos": eventos,
         "tramos": tramos,
         "abierto": abierto,
         "totales": totales,
     }
+
+
+def ordenar_eventos_memoria(eventos: list[dict]) -> list[dict]:
+    """Memoria: más reciente primero. Misma fecha → id mayor. Mutates `eventos`."""
+    eventos.sort(
+        key=lambda e: (_parse_date(e.get("fecha")) or date.min, int(e.get("id") or 0)),
+        reverse=True,
+    )
+    return eventos
 
 
 def _evento_desde_ap(r: dict, *, hoy: date) -> dict:

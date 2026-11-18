@@ -58,6 +58,16 @@ class FakeCursor:
             antes = len(self.actuaciones)
             self.actuaciones = [a for a in self.actuaciones if a["id"] != params[0]]
             self.rowcount = antes - len(self.actuaciones)
+        elif s.startswith("UPDATE actuaciones SET"):
+            set_part = s.split("SET", 1)[1].split("WHERE", 1)[0]
+            cols = [p.split("=")[0].strip() for p in set_part.split(",")]
+            aid, rad = params[len(cols)], params[len(cols) + 1]
+            hits = [a for a in self.actuaciones if a["id"] == aid and a.get("radicado_interno") == rad]
+            self.rowcount = 0
+            if hits:
+                for i, col in enumerate(cols):
+                    hits[0][col] = params[i]
+                self.rowcount = 1
         else:
             raise AssertionError(f"SQL inesperado: {s}")
 
@@ -190,6 +200,65 @@ class ServicioSincronizacionTests(unittest.TestCase):
         self.assertTrue(expedientes_service.eliminar_actuacion(cur, "EXP-1", id_alta))
         self.assertEqual(cur.proceso["etapa_actual"], E3)
         self.assertFalse(expedientes_service.eliminar_actuacion(cur, "EXP-1", 999))
+
+    def test_actualizar_cambia_campos_y_recalcula(self):
+        cur = FakeCursor(etapa_actual=E1)
+        id_baja = self.registrar(cur, E3, "2026-02-01")
+        id_alta = self.registrar(cur, E5, "2026-03-01")
+        self.assertEqual(cur.proceso["etapa_actual"], E5)
+        self.assertTrue(
+            expedientes_service.actualizar_actuacion(
+                cur,
+                "EXP-1",
+                id_alta,
+                fecha="2026-04-01",
+                etapa=E4,
+                descripcion="Texto corregido",
+            )
+        )
+        actualizada = next(a for a in cur.actuaciones if a["id"] == id_alta)
+        self.assertEqual(actualizada["etapa"], E4)
+        self.assertEqual(actualizada["descripcion"], "Texto corregido")
+        self.assertEqual(actualizada["fecha"], "2026-04-01")
+        self.assertEqual(cur.proceso["etapa_actual"], E4)
+        self.assertEqual(next(a for a in cur.actuaciones if a["id"] == id_baja)["etapa"], E3)
+
+    def test_actualizar_inexistente_no_toca(self):
+        cur = FakeCursor(etapa_actual=E1)
+        self.registrar(cur, E3, "2026-02-01")
+        antes = list(cur.actuaciones)
+        etapa = cur.proceso["etapa_actual"]
+        self.assertFalse(
+            expedientes_service.actualizar_actuacion(
+                cur, "EXP-1", 999, fecha="2026-04-01", etapa=E5, descripcion="x"
+            )
+        )
+        self.assertEqual(cur.actuaciones, antes)
+        self.assertEqual(cur.proceso["etapa_actual"], etapa)
+
+    def test_actualizar_etapa_invalida_no_escribe(self):
+        cur = FakeCursor(etapa_actual=E1)
+        aid = self.registrar(cur, E3, "2026-02-01")
+        with self.assertRaises(ep.EtapaInvalidaError):
+            expedientes_service.actualizar_actuacion(
+                cur, "EXP-1", aid, fecha="2026-04-01", etapa="Etapa inventada", descripcion="x"
+            )
+        self.assertEqual(cur.actuaciones[0]["etapa"], E3)
+        self.assertEqual(cur.proceso["etapa_actual"], E3)
+
+    def test_eliminar_sigue_funcionando_despues_de_editar(self):
+        cur = FakeCursor(etapa_actual=E1)
+        id_baja = self.registrar(cur, E3, "2026-02-01")
+        id_alta = self.registrar(cur, E5, "2026-03-01")
+        self.assertTrue(
+            expedientes_service.actualizar_actuacion(
+                cur, "EXP-1", id_alta, fecha="2026-03-15", etapa=E4, descripcion="editada"
+            )
+        )
+        self.assertEqual(cur.proceso["etapa_actual"], E4)
+        self.assertTrue(expedientes_service.eliminar_actuacion(cur, "EXP-1", id_alta))
+        self.assertEqual([a["id"] for a in cur.actuaciones], [id_baja])
+        self.assertEqual(cur.proceso["etapa_actual"], E3)
 
 
 class ReconciliacionTests(unittest.TestCase):
