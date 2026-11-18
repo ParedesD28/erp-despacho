@@ -1070,6 +1070,18 @@ def detalle_expediente(request: Request, radicado: str):
                 demandantes = expedientes_service._get_demandantes(cur, proceso)
                 demandados = expedientes_service._get_demandados(cur, radicado)
                 actuaciones = expedientes_service._get_actuaciones(cur, radicado)
+                timeline = {"eventos": actuaciones, "tramos": [], "abierto": None, "totales": {"despacho": 0, "firma": 0}}
+                reloj = {"duenio": "—", "dias": None, "semaforo": None, "totales": timeline["totales"], "nos_toca": False}
+                try:
+                    import desviaciones_procesales_service as dps
+
+                    dps.procesar_pendientes(cur, radicado)
+                    timeline = dps.timeline_unificada(cur, radicado)
+                    reloj = dps.reloj_abierto(timeline)
+                    if timeline.get("eventos"):
+                        actuaciones = timeline["eventos"]
+                except Exception as exc:
+                    print(f"[EXPEDIENTE] timeline/desviaciones {radicado}: {exc!r}", flush=True)
                 import sync_procesos_service
 
                 alertas_expediente = []
@@ -1137,6 +1149,10 @@ def detalle_expediente(request: Request, radicado: str):
                         "contactos": contactos_opts,
                         "abogados": abogados_opts,
                         "actuaciones": actuaciones,
+                        "timeline": timeline.get("eventos") or actuaciones,
+                        "tramos_reloj": timeline.get("tramos") or [],
+                        "reloj": reloj,
+                        "totales_reloj": (timeline.get("totales") or {"despacho": 0, "firma": 0}),
                         "etapas_actuacion": expedientes_service.CANONICAL_STAGES,
                         "alertas_expediente": alertas_expediente,
                         "acuerdos_crm": acuerdos,
@@ -2927,6 +2943,20 @@ async def exportar_bolsa_global_json(
             "Content-Disposition": 'attachment; filename="bolsa_global_capital_limpio.json"',
         },
     )
+
+
+@app.get("/informes/desviaciones.xlsx")
+def descargar_excel_desviaciones():
+    conn = db.get_connection()
+    try:
+        output = exportaciones.generar_informe_desviaciones_excel(conn)
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=informe_desviaciones_procesales.xlsx"},
+        )
+    finally:
+        conn.release()
 
 
 @app.get("/descargar-excel")

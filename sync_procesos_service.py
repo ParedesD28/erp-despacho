@@ -207,7 +207,24 @@ def _insertar_actuacion(cur, row: dict) -> Optional[int]:
     got = cur.fetchone()
     if not got:
         return None
-    return int(first_value(got, "id"))
+    new_id = int(first_value(got, "id"))
+    _procesar_desviacion_segura(cur, new_id)
+    return new_id
+
+
+def _procesar_desviacion_segura(cur, actuacion_id: Optional[int]) -> None:
+    """Best-effort: plazos/desviación. Nunca tumba el sync."""
+    if not actuacion_id:
+        return
+    try:
+        import desviaciones_procesales_service as dps
+
+        dps.procesar_actuacion(cur, actuacion_id)
+    except Exception as exc:
+        log_msg(
+            "⚠️ [SYNC RAMA]",
+            f"Desviación actuación {actuacion_id}: {type(exc).__name__}: {exc}",
+        )
 
 
 def _actualizar_drive_actuacion(
@@ -480,6 +497,16 @@ async def sincronizar_un_expediente(
         )
         alertas += 1
         _marcar_requiere_revision(cur, radicado_interno)
+
+    try:
+        import desviaciones_procesales_service as dps
+
+        dps.procesar_pendientes(cur, radicado_interno)
+    except Exception as exc:
+        log_msg(
+            "⚠️ [SYNC RAMA]",
+            f"Desviaciones pendientes {radicado_interno}: {type(exc).__name__}: {exc}",
+        )
 
     return {
         "radicado_interno": radicado_interno,

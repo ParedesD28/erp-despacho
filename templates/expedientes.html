@@ -42,6 +42,11 @@
                 <option value="PREJURIDICO">Prejurídico</option>
                 <option value="JURIDICO">Jurídico</option>
             </select>
+            <select id="filtro-reloj" onchange="filtrarTodo()" class="border border-slate-300 rounded-lg px-4 py-2.5 bg-white text-sm font-bold text-slate-700">
+                <option value="">Reloj: todos</option>
+                <option value="PARTE">Nos toca (Abogado)</option>
+                <option value="JUZGADO">Espera juzgado</option>
+            </select>
             <div class="relative w-full md:w-80">
                 <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <i data-lucide="filter" class="w-4 h-4 text-slate-400"></i>
@@ -59,12 +64,13 @@
                         <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider first:rounded-tl-xl">Expediente</th>
                         <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Cartera</th>
                         <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Demandante</th>
-                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider last:rounded-tr-xl">Demandado</th>
+                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider">Demandado</th>
+                        <th class="px-6 py-4 text-xs font-bold text-slate-300 uppercase tracking-wider last:rounded-tr-xl">Reloj</th>
                     </tr>
                 </thead>
                 <tbody id="cuerpo-tabla">
                 {% for p in procesos %}
-                    <tr onclick="window.location.href='/expediente/{{ p.radicado_interno }}'" class="fila-proceso fila-expediente cursor-pointer {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}bg-rose-50/60{% else %}bg-white{% endif %}" data-cartera="{{ (p.tipo_cartera or 'JURIDICO')|upper }}" data-estado="{{ (p.estado or 'ACTIVO')|upper }}" data-demandante-id="{{ p.demandante_identificacion or '' }}" data-demandado-id="{{ p.demandado_identificacion or '' }}">
+                    <tr onclick="window.location.href='/expediente/{{ p.radicado_interno }}'" class="fila-proceso fila-expediente cursor-pointer {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}bg-rose-50/60{% else %}bg-white{% endif %}" data-cartera="{{ (p.tipo_cartera or 'JURIDICO')|upper }}" data-estado="{{ (p.estado or 'ACTIVO')|upper }}" data-reloj="{{ (p.reloj_responsable or '')|upper }}" data-demandante-id="{{ p.demandante_identificacion or '' }}" data-demandado-id="{{ p.demandado_identificacion or '' }}">
                         <td class="px-6 py-5 border-y-2 border-l-[3px] border-slate-300 border-l-blue-600 rounded-l-xl align-top">
                             <div class="font-bold text-blue-600">{{ p.radicado_interno }}</div>
                             {% if (p.estado or 'Activo')|upper == 'INACTIVO' %}<span class="inline-flex mt-1 items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">Inactivo</span>{% endif %}
@@ -82,10 +88,21 @@
                             <div class="font-bold uppercase">{{ p.demandante_nombre or 'SIN DEMANDANTE' }}</div>
                             {% if p.demandante_identificacion %}<div class="text-[10px] font-mono font-normal text-slate-400 mt-0.5">CC {{ p.demandante_identificacion }}</div>{% endif %}
                         </td>
-                        <td class="px-6 py-5 border-y-2 border-r-2 border-slate-300 rounded-r-xl align-top text-sm text-slate-700">
+                        <td class="px-6 py-5 border-y-2 border-slate-300 align-top text-sm text-slate-700">
                             <div class="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">Demandado</div>
                             <div class="font-bold uppercase">{{ p.demandado_nombre or 'SIN DEMANDADO' }}</div>
                             {% if p.demandado_identificacion %}<div class="text-[10px] font-mono font-normal text-slate-400 mt-0.5">CC {{ p.demandado_identificacion }}</div>{% endif %}
+                        </td>
+                        <td class="px-6 py-5 border-y-2 border-r-2 border-slate-300 rounded-r-xl align-top text-sm text-slate-700">
+                            {% if (p.tipo_cartera or 'JURIDICO')|upper == 'PREJURIDICO' %}
+                                <span class="text-[10px] text-slate-400">—</span>
+                            {% elif p.reloj_duenio %}
+                                <div class="font-black {% if p.reloj_responsable == 'Parte' %}text-amber-700{% else %}text-sky-700{% endif %}">{{ p.reloj_duenio }}</div>
+                                <div class="text-xs text-slate-500 mt-1">{% if p.reloj_dias != '' and p.reloj_dias is not none %}{{ p.reloj_dias }} d{% endif %}{% if p.reloj_fecha %} · {{ p.reloj_fecha }}{% endif %}</div>
+                                {% if p.reloj_vence %}<div class="text-[10px] text-amber-700 mt-1">vence {{ p.reloj_vence }}</div>{% endif %}
+                            {% else %}
+                                <span class="text-[10px] text-slate-400">Sin dato</span>
+                            {% endif %}
                         </td>
                     </tr>
                 {% endfor %}
@@ -125,6 +142,7 @@
     const inputTabla = document.getElementById('input-tabla');
     const filtroEstado = document.getElementById('filtro-estado');
     const filtroCartera = document.getElementById('filtro-cartera');
+    const filtroReloj = document.getElementById('filtro-reloj');
     const filas = document.querySelectorAll('.fila-proceso');
     const mensajeVacio = document.getElementById('mensaje-vacio');
 
@@ -159,6 +177,7 @@
         inputTabla.value = '';
         filtroEstado.value = 'ACTIVOS';
         filtroCartera.value = '';
+        if (filtroReloj) filtroReloj.value = '';
         vistaBusqueda.classList.add('hidden');
         vistaTabla.classList.remove('hidden');
         vistaTabla.classList.add('flex');
@@ -173,6 +192,7 @@
         inputPrincipal.value = '';
         inputTabla.value = '';
         filtroCartera.value = '';
+        if (filtroReloj) filtroReloj.value = '';
         inputPrincipal.focus();
     }
 
@@ -180,6 +200,7 @@
         const busqueda = normalizar(inputTabla.value);
         const estado = (filtroEstado.value || 'ACTIVOS').toUpperCase();
         const cartera = (filtroCartera.value || '').toUpperCase();
+        const reloj = ((filtroReloj && filtroReloj.value) || '').toUpperCase();
         let visibles = 0;
 
         filas.forEach(fila => {
@@ -190,7 +211,8 @@
             const coincideTexto = textoCoincide(contenido, busqueda);
             const coincideCartera = !cartera || tipo === cartera;
             const coincideEstado = estado === 'TODOS' || (estado === 'INACTIVOS' ? estadoFila === 'INACTIVO' : estadoFila !== 'INACTIVO');
-            const visible = coincideTexto && coincideCartera && coincideEstado;
+            const coincideReloj = !reloj || (fila.dataset.reloj || '') === reloj;
+            const visible = coincideTexto && coincideCartera && coincideEstado && coincideReloj;
             fila.style.display = visible ? '' : 'none';
             if (visible) visibles++;
         });

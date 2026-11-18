@@ -137,7 +137,15 @@ def _sync_stage(cur, radicado):
     # Serializa recálculos concurrentes del mismo proceso.
     cur.execute("SELECT 1 FROM procesos WHERE radicado_interno=%s FOR UPDATE", (radicado,))
     cur.execute("SELECT etapa FROM actuaciones WHERE radicado_interno=%s", (radicado,))
-    stage = etapas_procesales.calcular_etapa(_row_value(r, "etapa", _row_value(r, 0)) for r in cur.fetchall())
+    valores = [_row_value(r, "etapa", _row_value(r, 0)) for r in cur.fetchall()]
+    # Ranking unificado: también etapa_asociada del sync Rama (sin romper calcular_etapa).
+    if _table_exists(cur, "actuaciones_proceso") and "etapa_asociada" in _cols(cur, "actuaciones_proceso"):
+        cur.execute(
+            "SELECT etapa_asociada FROM actuaciones_proceso WHERE radicado_interno=%s",
+            (radicado,),
+        )
+        valores.extend(_row_value(r, "etapa_asociada", _row_value(r, 0)) for r in cur.fetchall())
+    stage = etapas_procesales.calcular_etapa(valores)
     if not stage:
         return None
     cur.execute(
@@ -177,8 +185,24 @@ def registrar_actuacion(cur, radicado, *, fecha=None, etapa=None, descripcion=No
     nuevo = cur.fetchone() if returning else None
     if returning and nuevo is None:
         return None
+    nuevo_id = _row_value(nuevo, "id", _row_value(nuevo, 0)) if nuevo is not None else True
+    if nuevo_id and _table_exists(cur, "actuaciones_proceso"):
+        try:
+            import desviaciones_procesales_service as dps
+
+            dps.dual_write_manual(
+                cur,
+                actuacion_id=nuevo_id,
+                radicado=radicado,
+                fecha=payload.get("fecha"),
+                etapa=etapa_norm,
+                descripcion=payload.get("descripcion"),
+                tipificacion=payload.get("tipificacion_sugerida"),
+            )
+        except Exception as exc:
+            print(f"[ACTUACION] dual-write/desviación {radicado}: {exc!r}", flush=True)
     _sync_stage(cur, radicado)
-    return _row_value(nuevo, "id", _row_value(nuevo, 0)) if nuevo is not None else True
+    return nuevo_id if nuevo is not None else True
 
 
 def eliminar_actuacion(cur, radicado, actuacion_id):
@@ -759,6 +783,63 @@ def _get_demandados(cur, radicado):
     return [dict(r) for r in cur.fetchall()]
 
 
+def _adjuntar_reloj_listado(cur, lista):
+    """Dueño actual y días del tramo abierto (jurídico). No rompe si falta esquema."""
+    if not lista or not _table_exists(cur, "actuaciones_proceso"):
+        return
+    ap_cols = _cols(cur, "actuaciones_proceso")
+    if "responsable" not in ap_cols or "fecha_actuacion" not in ap_cols:
+        return
+    from datetime import date as _date
+
+    import plazos_procesales as pp
+
+    rads = [
+        str(d.get("radicado_interno") or "")
+        for d in lista
+        if str(d.get("tipo_cartera") or "").upper() == "JURIDICO" and d.get("radicado_interno")
+    ]
+    if not rads:
+        return
+    extra_fin = ", fin_termino_esperado" if "fin_termino_esperado" in ap_cols else ""
+    extra_fin2 = ", fin_termino" if "fin_termino" in ap_cols else ""
+    cur.execute(
+        f"""
+        SELECT DISTINCT ON (radicado_interno)
+            radicado_interno, responsable, fecha_actuacion
+            {extra_fin}{extra_fin2}
+        FROM actuaciones_proceso
+        WHERE radicado_interno = ANY(%s)
+        ORDER BY radicado_interno, fecha_actuacion DESC NULLS LAST, id DESC
+        """,
+        (rads,),
+    )
+    por = {str(r["radicado_interno"]): dict(r) for r in cur.fetchall()}
+    hoy = _date.today()
+    for d in lista:
+        row = por.get(str(d.get("radicado_interno") or ""))
+        if not row:
+            continue
+        responsable = row.get("responsable")
+        fecha = row.get("fecha_actuacion")
+        d["reloj_responsable"] = responsable or ""
+        d["reloj_duenio"] = pp.etiqueta_reloj(responsable) if responsable else ""
+        d["reloj_fecha"] = fecha.isoformat() if hasattr(fecha, "isoformat") else str(fecha or "")
+        try:
+            import desviaciones_procesales_service as dps
+
+            d["reloj_dias"] = dps.dias_habiles_entre(fecha, hoy) if fecha else ""
+            d["reloj_semaforo"] = dps.semaforo_dias(responsable, d["reloj_dias"]) if d["reloj_dias"] != "" else ""
+        except Exception:
+            d["reloj_dias"] = ""
+            d["reloj_semaforo"] = ""
+        fin = row.get("fin_termino_esperado") or row.get("fin_termino")
+        if responsable == pp.RESPONSABLE_PARTE and fin:
+            d["reloj_vence"] = fin.isoformat() if hasattr(fin, "isoformat") else str(fin)
+        else:
+            d["reloj_vence"] = ""
+
+
 def _get_actuaciones(cur, radicado):
     if not _table_exists(cur, "actuaciones"):
         return []
@@ -912,6 +993,7 @@ def cargar_procesos_general_sin_duplicados(estado_filtro: str = "ACTIVOS"):
                         if v is None:
                             d[k] = ""
                     lista.append(d)
+                _adjuntar_reloj_listado(cur, lista)
                 print(
                     f"[{time.strftime('%H:%M:%S')} UTC] 📂 [EXPEDIENTES] "
                     f"{len(lista)} registros cargados exitosamente "

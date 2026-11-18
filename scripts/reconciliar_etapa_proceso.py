@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Reconcilia procesos.etapa_actual con las etapas de actuaciones.etapa.
+"""Reconcilia procesos.etapa_actual con las etapas de actuaciones.etapa
+y actuaciones_proceso.etapa_asociada (ranking unificado).
 
 Regla (etapas_procesales.calcular_etapa): etapa = la de mayor rango entre las
 actuaciones del proceso; "Terminación del Proceso" siempre prevalece. Las
@@ -89,6 +90,24 @@ def _cargar(cur) -> tuple[list[dict], list[dict]]:
     ]
     cur.execute("SELECT radicado_interno, etapa FROM actuaciones")
     actuaciones = [{"radicado_interno": r[0], "etapa": r[1]} for r in cur.fetchall()]
+    cur.execute(
+        """
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='actuaciones_proceso'
+          AND column_name='etapa_asociada'
+        LIMIT 1
+        """
+    )
+    if cur.fetchone():
+        cur.execute(
+            """
+            SELECT radicado_interno, etapa_asociada
+            FROM actuaciones_proceso
+            WHERE etapa_asociada IS NOT NULL AND length(trim(etapa_asociada)) > 0
+            """
+        )
+        for r in cur.fetchall():
+            actuaciones.append({"radicado_interno": r[0], "etapa": r[1]})
     return procesos, actuaciones
 
 
