@@ -1,9 +1,11 @@
 """Aplica la corrección de 5 cuotas distorsionadas si hay TEST_DATABASE_URL."""
 from __future__ import annotations
 
+import calendar
 import os
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,12 +62,16 @@ class AplicarCorreccionEnBdTest(unittest.TestCase):
                 (12, 9, 45000),
             ]
             for inm, mes, val in filas:
+                venc = date(2026, mes, calendar.monthrange(2026, mes)[1])
                 cur.execute(
                     """
-                    INSERT INTO expensas_ph (inmueble_id, concepto, periodo_mes, periodo_anio, valor_capital)
-                    VALUES (%s, 'Expensa Ordinaria', %s, 2026, %s)
+                    INSERT INTO expensas_ph (
+                        inmueble_id, concepto, periodo_mes, periodo_anio,
+                        valor_capital, fecha_vencimiento
+                    )
+                    VALUES (%s, 'Expensa Ordinaria', %s, 2026, %s, %s)
                     """,
-                    (inm, mes, val),
+                    (inm, mes, val, venc),
                 )
         self.conn.commit()
 
