@@ -1048,7 +1048,9 @@ def ver_expedientes(request: Request, estado: str = "ACTIVOS"):
     estado_filtro = str(estado or "ACTIVOS").strip().upper()
     if estado_filtro not in {"ACTIVOS", "INACTIVOS", "TODOS"}:
         estado_filtro = "ACTIVOS"
-    procesos_lista = expedientes_service.cargar_procesos_general_sin_duplicados(estado_filtro)
+    # El combo Activos/Inactivos/Todos filtra en el navegador. Si solo se
+    # pintan ACTIVOS, elegir Inactivos deja la tabla vacía.
+    procesos_lista = expedientes_service.cargar_procesos_general_sin_duplicados("TODOS")
     return render_template(
         "expedientes.html",
         {"request": request, "procesos": procesos_lista, "estado_filtro": estado_filtro},
