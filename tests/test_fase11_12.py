@@ -146,6 +146,17 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertIn("procesos no-VERBAL sin obligación canónica", source)
         self.assertIn("20260919_fase15_completar_obligaciones_ejecutivos_historicos", source)
 
+    def test_migracion_completa_no_verbal_sin_obligacion(self):
+        sql = (
+            ROOT / "migrations" / "20261118_completar_obligaciones_no_verbal.sql"
+        ).read_text(encoding="utf-8")
+        self.assertIn("NOT EXISTS", sql)
+        self.assertIn("proceso_obligaciones", sql)
+        self.assertIn("obligacion_partes", sql)
+        self.assertIn("'OTRO'", sql)
+        self.assertIn("'CUOTAS_ADMINISTRACION'", sql)
+        self.assertIn("ON CONFLICT", sql)
+
     def test_bot_liquidar_usa_realdictcursor(self):
         """Evita TypeError al indexar ob['fuente_saldo'] / ob['id'] en /api/bot/liquidar."""
         source = (ROOT / "bot_api.py").read_text(encoding="utf-8")
