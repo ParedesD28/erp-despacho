@@ -124,6 +124,7 @@ _ESCRITURA = [
     ("POST", "/liquidador"),
     ("POST", "/alertas-seguimiento/3/leer"),
     ("POST", "/actuacion/nueva"),
+    ("POST", "/actuacion/editar"),
     ("POST", "/crear_expediente_completo"),
     ("POST", "/crm/guardar"),
     ("POST", "/contactos/guardar"),

@@ -1598,6 +1598,43 @@ def eliminar_actuacion(actuacion_id: int, radicado_interno: str):
         conn.release()
 
 
+@app.post("/actuacion/editar")
+async def editar_actuacion(request: Request):
+    form = await request.form()
+    radicado = str(form.get("radicado_interno") or "").strip()
+    try:
+        actuacion_id = int(form.get("actuacion_id") or 0)
+    except (TypeError, ValueError):
+        actuacion_id = 0
+    if not radicado:
+        return _redirect("/expedientes", error="Radicado+interno+requerido")
+    if not actuacion_id:
+        return _redirect(f"/expediente/{radicado}", error="Actuación+no+válida")
+    conn = db.get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                if not expedientes_service.actualizar_actuacion(
+                    cur,
+                    radicado,
+                    actuacion_id,
+                    fecha=form.get("fecha") or date.today(),
+                    etapa=form.get("etapa"),
+                    descripcion=form.get("descripcion") or form.get("sub_etapa"),
+                    tipificacion=form.get("sub_etapa"),
+                ):
+                    raise ValueError("Actuación no encontrada")
+        return _redirect(f"/expediente/{radicado}", mensaje="Actuación+actualizada")
+    except ValueError as exc:
+        print(f"[ACTUACION] Validación editando {radicado}: {exc!r}", flush=True)
+        return _redirect(f"/expediente/{radicado}", error=str(exc))
+    except Exception as exc:
+        print(f"[ACTUACION] Error editando {radicado}: {exc!r}", flush=True)
+        return _redirect(f"/expediente/{radicado}", error="No+fue+posible+editar+la+actuación")
+    finally:
+        conn.release()
+
+
 # ==============================================================================
 # CRM (GESTIÓN EXTRAJUDICIAL Y ANULACIÓN AUDITABLE)
 # ==============================================================================

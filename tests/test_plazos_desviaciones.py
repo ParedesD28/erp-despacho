@@ -134,6 +134,93 @@ class RelojTramosTests(unittest.TestCase):
         self.assertTrue(tramos[-1]["dias"] >= 1)
 
 
+class MemoriaOrdenRecienteTests(unittest.TestCase):
+    def test_ordenar_mas_reciente_primero(self):
+        eventos = [
+            {"id": 1, "fecha": date(2026, 2, 10), "descripcion": "Presentación"},
+            {"id": 2, "fecha": date(2026, 3, 2), "descripcion": "Admisión"},
+            {"id": 3, "fecha": date(2026, 3, 2), "descripcion": "Más nueva del mismo día"},
+        ]
+        out = dps.ordenar_eventos_memoria(list(eventos))
+        self.assertEqual(
+            [e["descripcion"] for e in out],
+            ["Más nueva del mismo día", "Admisión", "Presentación"],
+        )
+
+    def test_timeline_eventos_reciente_primero_reloj_sigue_cronologico(self):
+        cur = _TimelineCursor(
+            [
+                {
+                    "id": 1,
+                    "fecha_actuacion": date(2026, 2, 10),
+                    "etapa_asociada": "1. Presentación de la demanda",
+                    "descripcion": "Se presenta demanda",
+                    "tipo_actuacion": "Demanda",
+                    "responsable": pp.RESPONSABLE_JUZGADO,
+                    "es_manual": True,
+                    "origen": "manual",
+                    "content_hash": "manual:1",
+                },
+                {
+                    "id": 2,
+                    "fecha_actuacion": date(2026, 3, 2),
+                    "etapa_asociada": "3. Admisión",
+                    "descripcion": "Se admite la demanda",
+                    "tipo_actuacion": "Auto",
+                    "responsable": pp.RESPONSABLE_PARTE,
+                    "es_manual": True,
+                    "origen": "manual",
+                    "content_hash": "manual:2",
+                },
+            ]
+        )
+        tl = dps.timeline_unificada(cur, "EXP-0003", hoy=date(2026, 3, 4))
+        self.assertEqual(
+            [e["descripcion"] for e in tl["eventos"]],
+            ["Se admite la demanda", "Se presenta demanda"],
+        )
+        self.assertEqual(tl["tramos"][0]["duenio"], "Despacho")
+        self.assertTrue(tl["tramos"][-1]["abierto"])
+        self.assertEqual(tl["tramos"][-1]["duenio"], "Abogado")
+        reloj = dps.reloj_abierto(tl)
+        self.assertEqual(reloj["duenio"], "Abogado")
+
+
+class _TimelineCursor:
+    def __init__(self, filas):
+        self.filas = list(filas)
+        self._res = []
+
+    def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        self._res = []
+        if "information_schema.tables" in s:
+            self._res = [(1,)]
+            return
+        if "information_schema.columns" in s:
+            cols = [
+                "id",
+                "fecha_actuacion",
+                "tipo_actuacion",
+                "descripcion",
+                "etapa_asociada",
+                "responsable",
+                "es_manual",
+                "origen",
+                "content_hash",
+            ]
+            self._res = [(c,) for c in cols]
+            return
+        if "FROM actuaciones_proceso" in s and s.startswith("SELECT"):
+            self._res = [dict(r) for r in self.filas]
+
+    def fetchone(self):
+        return self._res[0] if self._res else None
+
+    def fetchall(self):
+        return list(self._res)
+
+
 class RankingUnificadoPuroTests(unittest.TestCase):
     def test_calcular_etapa_no_cambia_con_union(self):
         valores = [ep.ETAPAS_PROCESALES[0], ep.ETAPAS_PROCESALES[4], ep.ETAPA_NEUTRA]
