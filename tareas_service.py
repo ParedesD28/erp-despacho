@@ -145,8 +145,6 @@ def _registrar_historial(
     valor_anterior: Any = None,
     valor_nuevo: Any = None,
 ) -> None:
-    if not _table_exists(cur, "tareas_historial"):
-        return
     cur.execute(
         """
         INSERT INTO tareas_historial (
@@ -184,10 +182,7 @@ def _marcar_vencimiento(
     estado: str,
 ) -> None:
     vid = _int_id(vencimiento_id)
-    if vid is None or not _table_exists(cur, "vencimientos"):
-        return
-    cols = _cols(cur, "vencimientos")
-    if "estado" not in cols:
+    if vid is None:
         return
     cur.execute(
         "UPDATE vencimientos SET estado=%s WHERE id=%s",
@@ -414,32 +409,23 @@ def _tarea_abierta_de_plazo(
     return _row_as_dict(cur, cur.fetchone())
 
 
-def obtener_tarea(cur, tarea_id: Any) -> Optional[dict]:
+def _cargar_tarea(cur, tarea_id: Any) -> Optional[dict]:
+    """Fila de tareas sin historial, comentarios ni information_schema."""
     tid = _int_id(tarea_id)
-    if tid is None or not _table_exists(cur, "tareas"):
+    if tid is None:
         return None
-    join_abogados = _table_exists(cur, "abogados")
-    if join_abogados:
-        cur.execute(
-            """
-            SELECT t.*,
-                   aa.nombre AS asignado_nombre,
-                   ac.nombre AS creador_nombre
-            FROM tareas t
-            LEFT JOIN abogados aa ON aa.id = t.asignado_a
-            LEFT JOIN abogados ac ON ac.id = t.creado_por
-            WHERE t.id=%s
-            """,
-            (tid,),
-        )
-    else:
-        cur.execute("SELECT t.* FROM tareas t WHERE t.id=%s", (tid,))
-    rows = rows_as_dicts(cur)
-    if not rows:
+    cur.execute("SELECT t.* FROM tareas t WHERE t.id=%s", (tid,))
+    return _row_as_dict(cur, cur.fetchone())
+
+
+def obtener_tarea(cur, tarea_id: Any, *, detalle: bool = True) -> Optional[dict]:
+    tarea = _cargar_tarea(cur, tarea_id)
+    if not tarea:
         return None
-    tarea = rows[0]
-    tarea["historial"] = _listar_historial(cur, tid)
-    tarea["comentarios"] = _listar_comentarios(cur, tid)
+    if detalle:
+        tid = int(tarea["id"])
+        tarea["historial"] = _listar_historial(cur, tid)
+        tarea["comentarios"] = _listar_comentarios(cur, tid)
     return tarea
 
 
@@ -504,7 +490,7 @@ def reasignar_tarea(
     asignado_a: Any,
     usuario_id: Any = None,
 ) -> dict:
-    tarea = obtener_tarea(cur, tarea_id)
+    tarea = _cargar_tarea(cur, tarea_id)
     if not tarea:
         raise TareasError("Tarea no encontrada")
     nuevo = _int_id(asignado_a)
@@ -530,7 +516,8 @@ def reasignar_tarea(
         valor_anterior=anterior,
         valor_nuevo=nuevo,
     )
-    return obtener_tarea(cur, tarea["id"]) or tarea
+    tarea["asignado_a"] = nuevo
+    return tarea
 
 
 def cambiar_estado(
@@ -548,7 +535,7 @@ def cambiar_estado(
         return completar_tarea(
             cur, tarea_id, usuario_id=usuario_id, sync_vencimiento=sync_vencimiento
         )
-    tarea = obtener_tarea(cur, tarea_id)
+    tarea = _cargar_tarea(cur, tarea_id)
     if not tarea:
         raise TareasError("Tarea no encontrada")
     anterior = str(tarea.get("estado") or "")
@@ -559,6 +546,7 @@ def cambiar_estado(
     params: list[Any] = [nuevo]
     if nuevo in ESTADOS_ABIERTOS and anterior == "Completada":
         extra = ", fecha_completada=NULL"
+        tarea["fecha_completada"] = None
         if sync_vencimiento and tarea.get("vencimiento_id"):
             _marcar_vencimiento(cur, tarea.get("vencimiento_id"), ESTADO_PENDIENTE)
     params.append(tid)
@@ -575,7 +563,8 @@ def cambiar_estado(
         valor_anterior=anterior,
         valor_nuevo=nuevo,
     )
-    return obtener_tarea(cur, tid) or tarea
+    tarea["estado"] = nuevo
+    return tarea
 
 
 def completar_tarea(
@@ -585,7 +574,7 @@ def completar_tarea(
     usuario_id: Any = None,
     sync_vencimiento: bool = True,
 ) -> dict:
-    tarea = obtener_tarea(cur, tarea_id)
+    tarea = _cargar_tarea(cur, tarea_id)
     if not tarea:
         raise TareasError("Tarea no encontrada")
     if str(tarea.get("estado") or "") == "Completada":
@@ -611,7 +600,9 @@ def completar_tarea(
     )
     if sync_vencimiento and tarea.get("vencimiento_id"):
         _marcar_vencimiento(cur, tarea.get("vencimiento_id"), ESTADO_COMPLETADO)
-    return obtener_tarea(cur, tid) or tarea
+    tarea["estado"] = "Completada"
+    tarea["fecha_completada"] = ahora
+    return tarea
 
 
 def completar_tareas_de_vencimiento(
@@ -622,7 +613,7 @@ def completar_tareas_de_vencimiento(
 ) -> int:
     """Al completar el vencimiento, cierra las tareas abiertas ligadas (sin reescribir estado)."""
     vid = _int_id(vencimiento_id)
-    if vid is None or not _table_exists(cur, "tareas"):
+    if vid is None:
         return 0
     cur.execute(
         f"""
@@ -631,7 +622,14 @@ def completar_tareas_de_vencimiento(
         """,
         (vid,),
     )
-    ids = [_int_id(first_value(r, "id")) for r in cur.fetchall()]
+    ids = []
+    while True:
+        row = cur.fetchone()
+        if not row:
+            break
+        tid = _int_id(first_value(row, "id"))
+        if tid is not None:
+            ids.append(tid)
     n = 0
     for tid in ids:
         if tid is None:

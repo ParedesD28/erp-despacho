@@ -107,7 +107,7 @@
         </div>
         {% if puede_editar_tareas and t.estado not in ['Completada', 'Cancelada'] %}
         <div class="flex flex-wrap gap-1 shrink-0">
-          <form method="POST" action="/tareas/{{ t.id }}/completar">
+          <form method="POST" action="/tareas/{{ t.id }}/completar" onsubmit="var b=this.querySelector('button'); if(b){b.disabled=true; b.textContent='Completando…';}">
             <input type="hidden" name="next" value="/expediente/{{ proceso.radicado_interno }}">
             <button class="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-[10px] font-bold">Completar</button>
           </form>

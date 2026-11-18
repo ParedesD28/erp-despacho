@@ -61,7 +61,7 @@
           </div>
           {% if puede_editar %}
           <div class="mt-2 flex flex-wrap gap-1">
-            <form method="POST" action="/tareas/{{ t.id }}/completar">
+            <form method="POST" action="/tareas/{{ t.id }}/completar" onsubmit="var b=this.querySelector('button'); if(b){b.disabled=true; b.textContent='Completando…';}">
               <input type="hidden" name="next" value="/tareas{% if ver_id and ver_id != usuario_id %}?asignado={{ ver_id }}{% endif %}">
               <button class="px-2 py-1 rounded-lg bg-emerald-600 text-white text-[10px] font-bold">Completar</button>
             </form>
