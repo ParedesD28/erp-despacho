@@ -12,6 +12,7 @@ PERFIL_ADMIN = "ADMIN"
 PERFIL_ABOGADO = "ABOGADO"
 PERFIL_AUXILIAR = "AUXILIAR_COBRO"
 PERFIL_CONSULTA = "CONSULTA"
+PERFIL_CLIENTE = "CLIENTE"
 PERFIL_CLIENTE_PH = "CLIENTE_PH"
 
 # Perfil interno (nunca asignable ni guardado en BD): usuario sin perfil válido.
@@ -23,14 +24,17 @@ PERFILES_HUMANOS = (
     PERFIL_ABOGADO,
     PERFIL_AUXILIAR,
     PERFIL_CONSULTA,
+    PERFIL_CLIENTE,
     PERFIL_CLIENTE_PH,
 )
+PERFILES_CLIENTE = frozenset({PERFIL_CLIENTE, PERFIL_CLIENTE_PH})
 
 PERFIL_NOMBRES = {
     PERFIL_ADMIN: "Administrador",
     PERFIL_ABOGADO: "Abogado",
     PERFIL_AUXILIAR: "Auxiliar de cobro",
     PERFIL_CONSULTA: "Solo consulta",
+    PERFIL_CLIENTE: "Cliente",
     PERFIL_CLIENTE_PH: "Cliente PH",
     PERFIL_SIN_ACCESO: "Sin perfil (bloqueado)",
 }
@@ -40,12 +44,14 @@ PERFIL_DESCRIPCIONES = {
     PERFIL_ABOGADO: "Expedientes, cartera, cobro completo, acuerdos, cartas y SMS.",
     PERFIL_AUXILIAR: "Seguimiento diario de cobro (CRM, SMS, cartas, vencimientos); sin borrar lo crítico ni administrar usuarios.",
     PERFIL_CONSULTA: "Ver cartera e informes; no editar ni enviar SMS/cartas.",
-    PERFIL_CLIENTE_PH: "Portal PH: solo unidades (torre/apto + demandados) de los conjuntos que el Admin le habilite.",
+    PERFIL_CLIENTE: "Ver expedientes y actuaciones; no editar, inactivar ni crear tareas.",
+    PERFIL_CLIENTE_PH: "Portal PH y lectura del expediente (actuaciones); no editar ni crear tareas.",
 }
 
 # Permisos atómicos
 NAV_DASHBOARD = "nav.dashboard"
 NAV_EXPEDIENTES = "nav.expedientes"
+NAV_EXPEDIENTE_VER = "nav.expediente.ver"
 NAV_COBRO_CRM = "nav.cobro.crm"
 NAV_COBRO_ACUERDOS = "nav.cobro.acuerdos"
 NAV_COBRO_VENCIMIENTOS = "nav.cobro.vencimientos"
@@ -69,6 +75,7 @@ TODOS_LOS_PERMISOS = frozenset(
     {
         NAV_DASHBOARD,
         NAV_EXPEDIENTES,
+        NAV_EXPEDIENTE_VER,
         NAV_COBRO_CRM,
         NAV_COBRO_ACUERDOS,
         NAV_COBRO_VENCIMIENTOS,
@@ -128,8 +135,13 @@ PERMISOS_POR_PERFIL: dict[str, frozenset[str]] = {
             NAV_CONJUNTOS,
         }
     ),
-    PERFIL_CLIENTE_PH: frozenset({NAV_PORTAL_PH}),
+    PERFIL_CLIENTE: frozenset({NAV_EXPEDIENTE_VER}),
+    PERFIL_CLIENTE_PH: frozenset({NAV_PORTAL_PH, NAV_EXPEDIENTE_VER}),
 }
+
+
+def es_perfil_cliente(codigo: Optional[str]) -> bool:
+    return normalizar_perfil(codigo) in PERFILES_CLIENTE
 
 
 def perfil_valido(codigo: Optional[str]) -> bool:
@@ -261,9 +273,25 @@ def _regla_para_ruta(ruta: str) -> Optional[tuple[str, str]]:
 
 def home_path_para_perfil(codigo: Optional[str]) -> str:
     """Destino post-login / al denegar acceso según perfil."""
-    if normalizar_perfil(codigo) == PERFIL_CLIENTE_PH:
+    codigo_n = normalizar_perfil(codigo)
+    if codigo_n == PERFIL_CLIENTE_PH:
         return "/portal-ph"
+    if codigo_n == PERFIL_CLIENTE:
+        return "/expedientes"
     return "/dashboard"
+
+
+def es_ruta_expediente_lectura(method: str, path: str) -> bool:
+    """GET del listado o del detalle. No docs, tareas, actuaciones ni mutaciones."""
+    if (method or "GET").upper() != "GET":
+        return False
+    ruta = (path or "/").split("?", 1)[0]
+    if ruta.startswith("/expediente-docs"):
+        return False
+    if ruta == "/expedientes" or ruta.startswith("/expedientes/"):
+        return True
+    return ruta == "/expediente" or ruta.startswith("/expediente/")
+
 
 # Acciones fuertes por método+ruta exacta o prefijo.
 _WRITE_RULES: tuple[tuple[str, str, str], ...] = (
@@ -314,4 +342,14 @@ def denegar_acceso(permisos: Optional[Iterable[str]], method: str, path: str) ->
         return False
     if requerido == PERMISO_DENEGADO:
         return True
-    return not tiene_permiso(permisos, requerido)
+    if tiene_permiso(permisos, requerido):
+        return False
+    # CLIENTE / CLIENTE PH: ver expediente (listado y detalle), sin el resto
+    # de nav.expedientes (tareas, PDFs, alertas, docs).
+    if (
+        requerido == NAV_EXPEDIENTES
+        and es_ruta_expediente_lectura(method, path)
+        and tiene_permiso(permisos, NAV_EXPEDIENTE_VER)
+    ):
+        return False
+    return True

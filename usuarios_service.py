@@ -378,6 +378,8 @@ def listar_perfiles(conn=None) -> list[dict]:
                     WHEN 'ABOGADO' THEN 2
                     WHEN 'AUXILIAR_COBRO' THEN 3
                     WHEN 'CONSULTA' THEN 4
+                    WHEN 'CLIENTE' THEN 5
+                    WHEN 'CLIENTE_PH' THEN 6
                     ELSE 9
                   END
                 """

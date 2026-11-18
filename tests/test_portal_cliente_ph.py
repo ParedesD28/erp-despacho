@@ -23,7 +23,7 @@ import portal_ph_service
 class ClientePhPermisosTests(unittest.TestCase):
     def test_perfil_cliente_ph_solo_portal(self):
         p = permisos.permisos_de_perfil(permisos.PERFIL_CLIENTE_PH)
-        self.assertEqual(p, frozenset({permisos.NAV_PORTAL_PH}))
+        self.assertEqual(p, frozenset({permisos.NAV_PORTAL_PH, permisos.NAV_EXPEDIENTE_VER}))
         self.assertNotIn(permisos.NAV_EXPEDIENTES, p)
         self.assertNotIn(permisos.ACCION_EDITAR, p)
         self.assertNotIn(permisos.NAV_ADMIN_USUARIOS, p)
@@ -34,10 +34,12 @@ class ClientePhPermisosTests(unittest.TestCase):
     def test_guards_portal_y_resto(self):
         cliente = permisos.permisos_de_perfil(permisos.PERFIL_CLIENTE_PH)
         self.assertFalse(permisos.denegar_acceso(cliente, "GET", "/portal-ph"))
-        self.assertTrue(permisos.denegar_acceso(cliente, "GET", "/expedientes"))
+        self.assertFalse(permisos.denegar_acceso(cliente, "GET", "/expedientes"))
+        self.assertFalse(permisos.denegar_acceso(cliente, "GET", "/expediente/EXP-0003"))
         self.assertTrue(permisos.denegar_acceso(cliente, "GET", "/dashboard"))
         self.assertTrue(permisos.denegar_acceso(cliente, "GET", "/admin/usuarios"))
         self.assertTrue(permisos.denegar_acceso(cliente, "POST", "/portal-ph"))
+        self.assertTrue(permisos.denegar_acceso(cliente, "POST", "/expediente/estado"))
 
     def test_home_path(self):
         self.assertEqual(
