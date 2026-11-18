@@ -757,6 +757,96 @@ def listar_tareas_proceso(cur, radicado: str) -> list[dict]:
     return rows_as_dicts(cur)
 
 
+MAX_CHIPS_COMPLETADAS = 3
+
+
+def _chip_tarea_completada(tarea: dict) -> dict:
+    fecha = _parse_date(tarea.get("fecha_completada")) or _parse_date(
+        tarea.get("fecha_vencimiento")
+    )
+    titulo = " ".join(str(tarea.get("titulo") or "Tarea").split()) or "Tarea"
+    return {
+        "id": tarea.get("id"),
+        "titulo": titulo,
+        "asignado_nombre": str(tarea.get("asignado_nombre") or "").strip(),
+        "fecha": fecha.isoformat() if fecha else "",
+    }
+
+
+def adjuntar_tareas_completadas_a_timeline(
+    eventos: Optional[list[dict]],
+    tareas: Optional[Iterable[dict]],
+    *,
+    max_por_actuacion: int = MAX_CHIPS_COMPLETADAS,
+) -> list[dict]:
+    """Pone tareas Completadas a la derecha de cada actuación de la memoria.
+
+    Primero `tarea.actuacion_id` = `actuaciones_proceso.id`. Si no hay id,
+    se pega por la misma fecha (último evento de ese día). No toca el Reloj.
+    """
+    eventos = list(eventos or [])
+    for evento in eventos:
+        evento["tareas_completadas"] = []
+        evento["tareas_completadas_extra"] = 0
+    if not eventos:
+        return eventos
+
+    completadas = [
+        t for t in (tareas or []) if str(t.get("estado") or "") == "Completada"
+    ]
+    if not completadas:
+        return eventos
+
+    por_id: dict[int, list[dict]] = {}
+    sin_id: list[dict] = []
+    for tarea in completadas:
+        aid = _int_id(tarea.get("actuacion_id"))
+        if aid is None:
+            sin_id.append(tarea)
+        else:
+            por_id.setdefault(aid, []).append(tarea)
+
+    fechas: dict[str, list[dict]] = {}
+    eventos_por_id: dict[int, dict] = {}
+    for evento in eventos:
+        eid = _int_id(evento.get("id"))
+        if eid is not None:
+            eventos_por_id[eid] = evento
+        fecha = _parse_date(evento.get("fecha"))
+        if fecha is not None:
+            fechas.setdefault(fecha.isoformat(), []).append(evento)
+
+    for tarea in sin_id:
+        fecha = _parse_date(tarea.get("fecha_completada")) or _parse_date(
+            tarea.get("fecha_vencimiento")
+        )
+        if fecha is None:
+            continue
+        candidatos = fechas.get(fecha.isoformat()) or []
+        if not candidatos:
+            continue
+        destino = candidatos[-1]
+        eid = _int_id(destino.get("id"))
+        if eid is None:
+            continue
+        por_id.setdefault(eid, []).append(tarea)
+
+    limite = max(1, int(max_por_actuacion or MAX_CHIPS_COMPLETADAS))
+    for eid, filas in por_id.items():
+        evento = eventos_por_id.get(eid)
+        if evento is None:
+            continue
+        filas = sorted(
+            filas,
+            key=lambda t: str(t.get("fecha_completada") or t.get("id") or ""),
+            reverse=True,
+        )
+        extra = len(filas) - limite
+        evento["tareas_completadas"] = [_chip_tarea_completada(t) for t in filas[:limite]]
+        evento["tareas_completadas_extra"] = extra if extra > 0 else 0
+    return eventos
+
+
 def listar_tareas_asignado(cur, usuario_id: Any) -> list[dict]:
     uid = _int_id(usuario_id)
     if uid is None or not _table_exists(cur, "tareas"):

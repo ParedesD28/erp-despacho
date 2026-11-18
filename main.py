@@ -1129,6 +1129,10 @@ def detalle_expediente(request: Request, radicado: str):
 
                     tareas_proceso = _tareas_svc.listar_tareas_proceso(cur, radicado)
                     usuarios_tareas = _tareas_svc.listar_usuarios_asignables(cur)
+                    eventos_tl = timeline.get("eventos") or actuaciones
+                    _tareas_svc.adjuntar_tareas_completadas_a_timeline(
+                        eventos_tl, tareas_proceso
+                    )
                 except Exception as exc:
                     print(f"[EXPEDIENTE] tareas {radicado}: {exc!r}", flush=True)
                 contactos_opts = expedientes_service._contact_options(cur)

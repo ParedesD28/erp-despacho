@@ -587,6 +587,146 @@ class PlazoCreaTareaTests(unittest.TestCase):
         self.assertEqual(len(store.tareas), 1)
 
 
+class TimelineTareasCompletadasTests(unittest.TestCase):
+    def test_pega_por_actuacion_id_y_omite_pendientes(self):
+        eventos = [
+            {"id": 10, "fecha": date(2026, 3, 2), "descripcion": "Inadmite"},
+            {"id": 11, "fecha": date(2026, 3, 10), "descripcion": "Auto"},
+        ]
+        tareas = [
+            {
+                "id": 1,
+                "estado": "Completada",
+                "actuacion_id": 10,
+                "titulo": "Subsanar demanda",
+                "asignado_nombre": "Ana",
+                "fecha_completada": date(2026, 3, 8),
+            },
+            {
+                "id": 2,
+                "estado": "Pendiente",
+                "actuacion_id": 10,
+                "titulo": "Aún no",
+                "fecha_completada": None,
+            },
+            {
+                "id": 3,
+                "estado": "Completada",
+                "actuacion_id": 11,
+                "titulo": "Notificar",
+                "asignado_nombre": "Luis",
+                "fecha_completada": "2026-03-12",
+            },
+        ]
+        out = ts.adjuntar_tareas_completadas_a_timeline(eventos, tareas)
+        self.assertEqual([c["titulo"] for c in out[0]["tareas_completadas"]], ["Subsanar demanda"])
+        self.assertEqual(out[0]["tareas_completadas"][0]["fecha"], "2026-03-08")
+        self.assertEqual(out[0]["tareas_completadas"][0]["asignado_nombre"], "Ana")
+        self.assertEqual([c["titulo"] for c in out[1]["tareas_completadas"]], ["Notificar"])
+        self.assertEqual(out[0]["tareas_completadas_extra"], 0)
+
+    def test_sin_actuacion_id_pega_por_fecha_sin_duplicar_en_otras(self):
+        eventos = [
+            {"id": 1, "fecha": date(2026, 1, 5), "descripcion": "Demanda"},
+            {"id": 2, "fecha": date(2026, 2, 1), "descripcion": "Reparto"},
+            {"id": 3, "fecha": date(2026, 2, 1), "descripcion": "Auto mismo día"},
+        ]
+        tareas = [
+            {
+                "id": 9,
+                "estado": "Completada",
+                "actuacion_id": None,
+                "titulo": "Radicar poder",
+                "fecha_completada": date(2026, 2, 1),
+            },
+            {
+                "id": 10,
+                "estado": "Completada",
+                "actuacion_id": None,
+                "titulo": "Sin fecha ni vínculo",
+                "fecha_completada": None,
+                "fecha_vencimiento": None,
+            },
+            {
+                "id": 11,
+                "estado": "Completada",
+                "actuacion_id": 99,
+                "titulo": "De otra actuación",
+                "fecha_completada": date(2026, 1, 5),
+            },
+        ]
+        out = ts.adjuntar_tareas_completadas_a_timeline(eventos, tareas)
+        self.assertEqual(out[0]["tareas_completadas"], [])
+        self.assertEqual(out[1]["tareas_completadas"], [])
+        self.assertEqual([c["titulo"] for c in out[2]["tareas_completadas"]], ["Radicar poder"])
+
+    def test_render_memoria_pone_chips_antes_del_reloj(self):
+        detalle = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8")
+        start = detalle.index('<section class="grid grid-cols-1 lg:grid-cols-3 gap-5 pb-10">')
+        aside_start = detalle.index('<aside class="space-y-5">', start)
+        aside_end = detalle.index("</aside>", aside_start) + len("</aside>")
+        end = detalle.index("</section>", aside_end) + len("</section>")
+        eventos = [
+            {
+                "id": 101,
+                "fecha": date(2025, 11, 4),
+                "etapa": "DEMANDA",
+                "descripcion": "Demanda",
+                "responsable": "Juzgado",
+                "origen": "manual",
+            }
+        ]
+        tareas = [
+            {
+                "id": 1,
+                "estado": "Completada",
+                "actuacion_id": 101,
+                "titulo": "Radicar demanda",
+                "asignado_nombre": "Ana",
+                "fecha_completada": date(2025, 11, 4),
+            }
+        ]
+        ts.adjuntar_tareas_completadas_a_timeline(eventos, tareas)
+
+        class _Proc:
+            radicado_interno = "EXP-0089"
+            medidas_cautelares = ""
+
+        html = Environment().from_string(detalle[start:end]).render(
+            timeline=eventos,
+            actuaciones=eventos,
+            proceso=_Proc(),
+            totales_reloj={"despacho": 1, "firma": 0},
+            reloj={"duenio": "Juzgado", "dias": 2},
+            acuerdos_crm=[],
+        )
+        memoria, reloj = html.split("Reloj Parte vs Juzgado", 1)
+        self.assertIn("Radicar demanda", memoria)
+        self.assertIn("data-tareas-hechas", memoria)
+        self.assertNotIn("data-tareas-hechas", reloj)
+        self.assertLess(memoria.index("2025-11-04"), memoria.index("Radicar demanda"))
+
+    def test_limita_chips_y_cuenta_las_demas(self):
+        eventos = [{"id": 4, "fecha": date(2026, 4, 1)}]
+        tareas = [
+            {
+                "id": i,
+                "estado": "Completada",
+                "actuacion_id": 4,
+                "titulo": f"Tarea {i}",
+                "fecha_completada": date(2026, 4, i),
+            }
+            for i in range(1, 6)
+        ]
+        out = ts.adjuntar_tareas_completadas_a_timeline(eventos, tareas)
+        self.assertEqual(len(out[0]["tareas_completadas"]), 3)
+        self.assertEqual(out[0]["tareas_completadas_extra"], 2)
+        self.assertEqual(
+            [c["titulo"] for c in out[0]["tareas_completadas"]],
+            ["Tarea 5", "Tarea 4", "Tarea 3"],
+        )
+
+
 class TemplatesTareasTests(unittest.TestCase):
     def test_mis_tareas_compila(self):
         base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
@@ -599,6 +739,23 @@ class TemplatesTareasTests(unittest.TestCase):
         self.assertIn(">Tareas<", detalle)
         self.assertIn("/tareas/nueva", detalle)
         self.assertNotIn("CRM de tareas", detalle)
+
+    def test_memoria_tiene_chips_hechas_fuera_de_reloj_y_crm(self):
+        detalle = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8")
+        memoria, resto = detalle.split("Memoria del expediente", 1)
+        memoria = resto.split("Reloj Parte vs Juzgado", 1)[0]
+        reloj = resto.split("Reloj Parte vs Juzgado", 1)[1].split(">CRM<", 1)[0]
+        crm = resto.split(">CRM<", 1)[1]
+        self.assertIn("data-tareas-hechas", memoria)
+        self.assertIn("tareas_completadas", memoria)
+        self.assertIn("sm:flex-row sm:items-start", memoria)
+        self.assertIn(">Hechas<", memoria)
+        self.assertNotIn("data-tareas-hechas", reloj)
+        self.assertNotIn("tareas_completadas", reloj)
+        self.assertNotIn("data-tareas-hechas", crm)
+        self.assertNotIn("tareas_completadas", crm)
+        src = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("adjuntar_tareas_completadas_a_timeline", src)
 
     def test_completar_deshabilita_boton_al_enviar(self):
         tareas = (ROOT / "templates" / "tareas.html").read_text(encoding="utf-8")

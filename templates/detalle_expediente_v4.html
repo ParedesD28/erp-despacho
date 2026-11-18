@@ -201,7 +201,67 @@
     <div class="bg-white rounded-2xl border border-slate-200 p-4"><div class="text-[9px] uppercase text-slate-400 font-bold">Abogado</div><div class="font-black mt-1 text-sm">{{ proceso.abogado_asignado or 'Sin asignar' }}</div></div>
   </section>
   <section class="grid grid-cols-1 lg:grid-cols-3 gap-5 pb-10">
-    <section class="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm p-6"><div class="flex items-center justify-between gap-3 mb-6 border-b border-slate-100 pb-4"><h2 class="text-lg font-black">Memoria del expediente</h2><button type="button" onclick="document.getElementById('act-modal').classList.remove('hidden')" class="px-3.5 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">＋ Actuación</button></div><div class="relative border-l-2 border-slate-200 ml-4 space-y-6">{% set items = timeline if timeline is defined else actuaciones %}{% for a in items %}<div class="relative pl-7"><div class="absolute -left-[8px] top-1 w-3.5 h-3.5 rounded-full {% if a.responsable == 'Parte' %}bg-amber-500{% elif a.responsable == 'Juzgado' %}bg-sky-500{% else %}bg-blue-500{% endif %} ring-4 ring-white"></div><div class="bg-slate-50 border rounded-xl p-4"><div class="flex flex-wrap justify-between gap-2"><span class="px-2 py-1 bg-blue-100 text-blue-700 rounded text-[9px] font-bold uppercase">{{ a.etapa or a.tipo or 'Actuación' }}</span><span class="text-[10px] text-slate-500 bg-white border px-2 py-1 rounded">{{ a.fecha }}{% if a.origen %} · {{ a.origen }}{% elif a.usuario %} · {{ a.usuario }}{% endif %}</span></div>{% if a.responsable %}<div class="mt-2 flex flex-wrap items-center gap-2"><span class="px-2 py-0.5 rounded text-[9px] font-black uppercase {% if a.responsable == 'Parte' %}bg-amber-100 text-amber-800{% else %}bg-sky-100 text-sky-800{% endif %}">{{ a.responsable_reloj or a.responsable }}</span>{% if a.semaforo %}<span class="w-2.5 h-2.5 rounded-full inline-block {% if a.semaforo == 'rojo' %}bg-red-500{% elif a.semaforo == 'amarillo' %}bg-amber-400{% else %}bg-emerald-500{% endif %}" title="{{ a.semaforo }}"></span>{% endif %}{% if a.desviacion_dias is not none %}<span class="text-[10px] text-slate-600">{{ a.desviacion_dias }} d</span>{% endif %}{% if a.responsable == 'Parte' and a.dias_restantes is not none %}<span class="text-[10px] font-bold {% if a.dias_restantes < 0 %}text-red-600{% else %}text-slate-600{% endif %}">{% if a.dias_restantes < 0 %}vencido {{ -a.dias_restantes }} d{% else %}{{ a.dias_restantes }} d restantes{% endif %}</span>{% endif %}{% if a.fin_termino_esperado or a.fin_termino %}<span class="text-[10px] text-slate-500">vence {{ a.fin_termino_esperado or a.fin_termino }}</span>{% endif %}</div>{% endif %}<p class="mt-2 text-sm text-slate-700">{{ a.descripcion }}</p>{% if a.drive_url %}<a href="{{ a.drive_url }}" target="_blank" rel="noopener noreferrer" class="inline-block mt-2 text-[10px] font-bold text-blue-700 hover:underline">PDF Drive ↗</a>{% endif %}{% if a.es_manual and a.actuacion_id %}<form method="POST" action="/actuacion/eliminar" class="mt-3" onsubmit="return confirm('¿Eliminar esta actuación?');"><input type="hidden" name="actuacion_id" value="{{ a.actuacion_id }}"><input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}"><button class="text-[10px] font-bold text-red-600">Eliminar</button></form>{% elif a.id and not a.origen %}<form method="POST" action="/actuacion/eliminar" class="mt-3" onsubmit="return confirm('¿Eliminar esta actuación?');"><input type="hidden" name="actuacion_id" value="{{ a.id }}"><input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}"><button class="text-[10px] font-bold text-red-600">Eliminar</button></form>{% endif %}</div></div>{% else %}<div class="p-6 border-2 border-dashed rounded-xl text-center text-slate-400 text-sm">No hay actuaciones procesales registradas.</div>{% endfor %}</div></section>
+    <section class="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+      <div class="flex items-center justify-between gap-3 mb-6 border-b border-slate-100 pb-4">
+        <h2 class="text-lg font-black">Memoria del expediente</h2>
+        <button type="button" onclick="document.getElementById('act-modal').classList.remove('hidden')" class="px-3.5 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">＋ Actuación</button>
+      </div>
+      <div class="relative border-l-2 border-slate-200 ml-4 space-y-6">
+        {% set items = timeline if timeline is defined else actuaciones %}
+        {% for a in items %}
+        <div class="relative pl-7">
+          <div class="absolute -left-[8px] top-1 w-3.5 h-3.5 rounded-full {% if a.responsable == 'Parte' %}bg-amber-500{% elif a.responsable == 'Juzgado' %}bg-sky-500{% else %}bg-blue-500{% endif %} ring-4 ring-white"></div>
+          <div class="flex flex-col sm:flex-row sm:items-start gap-2">
+            <div class="flex-1 min-w-0 bg-slate-50 border rounded-xl p-4">
+              <div class="flex flex-wrap justify-between gap-2">
+                <span class="px-2 py-1 bg-blue-100 text-blue-700 rounded text-[9px] font-bold uppercase">{{ a.etapa or a.tipo or 'Actuación' }}</span>
+                <span class="text-[10px] text-slate-500 bg-white border px-2 py-1 rounded">{{ a.fecha }}{% if a.origen %} · {{ a.origen }}{% elif a.usuario %} · {{ a.usuario }}{% endif %}</span>
+              </div>
+              {% if a.responsable %}
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <span class="px-2 py-0.5 rounded text-[9px] font-black uppercase {% if a.responsable == 'Parte' %}bg-amber-100 text-amber-800{% else %}bg-sky-100 text-sky-800{% endif %}">{{ a.responsable_reloj or a.responsable }}</span>
+                {% if a.semaforo %}<span class="w-2.5 h-2.5 rounded-full inline-block {% if a.semaforo == 'rojo' %}bg-red-500{% elif a.semaforo == 'amarillo' %}bg-amber-400{% else %}bg-emerald-500{% endif %}" title="{{ a.semaforo }}"></span>{% endif %}
+                {% if a.desviacion_dias is not none %}<span class="text-[10px] text-slate-600">{{ a.desviacion_dias }} d</span>{% endif %}
+                {% if a.responsable == 'Parte' and a.dias_restantes is not none %}<span class="text-[10px] font-bold {% if a.dias_restantes < 0 %}text-red-600{% else %}text-slate-600{% endif %}">{% if a.dias_restantes < 0 %}vencido {{ -a.dias_restantes }} d{% else %}{{ a.dias_restantes }} d restantes{% endif %}</span>{% endif %}
+                {% if a.fin_termino_esperado or a.fin_termino %}<span class="text-[10px] text-slate-500">vence {{ a.fin_termino_esperado or a.fin_termino }}</span>{% endif %}
+              </div>
+              {% endif %}
+              <p class="mt-2 text-sm text-slate-700">{{ a.descripcion }}</p>
+              {% if a.drive_url %}<a href="{{ a.drive_url }}" target="_blank" rel="noopener noreferrer" class="inline-block mt-2 text-[10px] font-bold text-blue-700 hover:underline">PDF Drive ↗</a>{% endif %}
+              {% if a.es_manual and a.actuacion_id %}
+              <form method="POST" action="/actuacion/eliminar" class="mt-3" onsubmit="return confirm('¿Eliminar esta actuación?');">
+                <input type="hidden" name="actuacion_id" value="{{ a.actuacion_id }}">
+                <input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}">
+                <button class="text-[10px] font-bold text-red-600">Eliminar</button>
+              </form>
+              {% elif a.id and not a.origen %}
+              <form method="POST" action="/actuacion/eliminar" class="mt-3" onsubmit="return confirm('¿Eliminar esta actuación?');">
+                <input type="hidden" name="actuacion_id" value="{{ a.id }}">
+                <input type="hidden" name="radicado_interno" value="{{ proceso.radicado_interno }}">
+                <button class="text-[10px] font-bold text-red-600">Eliminar</button>
+              </form>
+              {% endif %}
+            </div>
+            {% set hechas = a.tareas_completadas if a.tareas_completadas is defined else [] %}
+            {% if hechas %}
+            <aside class="w-full sm:w-48 shrink-0 space-y-1.5" data-tareas-hechas>
+              <p class="text-[9px] font-black uppercase tracking-widest text-emerald-800 px-0.5">Hechas</p>
+              {% for t in hechas %}
+              <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5">
+                <p class="text-[11px] font-semibold text-slate-800 leading-snug line-clamp-2">{{ t.titulo }}</p>
+                <p class="text-[9px] text-emerald-800 font-bold mt-0.5"><span class="uppercase">Hecha</span>{% if t.fecha %} · {{ t.fecha }}{% endif %}{% if t.asignado_nombre %} · {{ t.asignado_nombre }}{% endif %}</p>
+              </div>
+              {% endfor %}
+              {% if a.tareas_completadas_extra %}<p class="text-[9px] text-slate-500 px-0.5">+{{ a.tareas_completadas_extra }} más</p>{% endif %}
+            </aside>
+            {% endif %}
+          </div>
+        </div>
+        {% else %}
+        <div class="p-6 border-2 border-dashed rounded-xl text-center text-slate-400 text-sm">No hay actuaciones procesales registradas.</div>
+        {% endfor %}
+      </div>
+    </section>
     <aside class="space-y-5"><section class="bg-white rounded-2xl border border-slate-200 p-5"><h2 class="font-black mb-3">Reloj Parte vs Juzgado</h2><p class="text-[11px] text-slate-500 mb-3">Parte = Abogado / firma. Juzgado = Despacho judicial.</p><div class="grid grid-cols-2 gap-2">{% set tot = totales_reloj if totales_reloj is defined else {'despacho': 0, 'firma': 0} %}<div class="p-3 rounded-xl bg-sky-50 border border-sky-100"><div class="text-[9px] uppercase font-bold text-sky-700">Despacho</div><div class="text-lg font-black text-sky-900 mt-1">{{ tot.despacho or 0 }} d</div></div><div class="p-3 rounded-xl bg-amber-50 border border-amber-100"><div class="text-[9px] uppercase font-bold text-amber-700">Firma</div><div class="text-lg font-black text-amber-900 mt-1">{{ tot.firma or 0 }} d</div></div></div>{% if reloj and reloj.duenio %}<p class="text-xs text-slate-600 mt-3">Ahora: <span class="font-black">{{ reloj.duenio }}</span>{% if reloj.dias is not none %} · {{ reloj.dias }} días{% endif %}</p>{% endif %}</section><section class="bg-white rounded-2xl border border-slate-200 p-5"><h2 class="font-black mb-3">Medidas cautelares</h2>{% for m in (proceso.medidas_cautelares or '').split('\n') if m.strip %}<div class="p-3 bg-slate-50 border rounded-lg text-sm mb-2">{{ m }}</div>{% else %}<div class="text-sm text-slate-500">Sin medidas registradas.</div>{% endfor %}</section><section class="bg-white rounded-2xl border border-slate-200 p-5"><h2 class="font-black mb-3">CRM</h2>{% for a in acuerdos_crm %}<div class="border rounded-xl p-3 mb-2 bg-emerald-50 border-emerald-200"><div class="text-[9px] uppercase font-bold tracking-widest text-emerald-700">{{ a.tipo_contacto or 'Gestión CRM' }}</div><p class="text-sm text-slate-700 mt-1">{{ a.resumen }}</p>{% if a.promesa_pago_fecha %}<p class="text-[10px] text-slate-500 mt-1">Promesa: {{ a.promesa_pago_fecha }}</p>{% endif %}</div>{% else %}<div class="text-sm text-slate-500">Sin gestiones CRM recientes.</div>{% endfor %}</section></aside>
   </section>
   {% else %}
