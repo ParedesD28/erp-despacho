@@ -407,6 +407,44 @@ class TareasServicioTests(unittest.TestCase):
         self.assertEqual(done["estado"], "Completada")
         self.assertEqual(self.store.vencimientos[0]["estado"], ESTADO_COMPLETADO)
 
+    def test_completar_pocas_consultas_sin_information_schema(self):
+        self.store.vencimientos.append(
+            {
+                "id": 21,
+                "radicado_interno": "EXP-1",
+                "titulo": "Subsanar",
+                "fecha_vencimiento": date(2026, 3, 10),
+                "estado": ESTADO_PENDIENTE,
+            }
+        )
+        t = ts.crear_tarea_desde_plazo(
+            self.cur,
+            radicado="EXP-1",
+            actuacion_id=11,
+            vencimiento_id=21,
+            titulo="Recurso de apelación",
+            fecha=date(2026, 3, 10),
+            codigo_plazo="APELACION",
+        )
+        n0 = len(self.cur.statements)
+        done = ts.completar_tarea(self.cur, t["id"], usuario_id=7)
+        nuevos = self.cur.statements[n0:]
+        self.assertEqual(done["estado"], "Completada")
+        self.assertFalse(any("information_schema" in s for s in nuevos))
+        self.assertLessEqual(len(nuevos), 4)
+        self.assertEqual(sum(1 for s in nuevos if s.upper().startswith("UPDATE TAREAS")), 1)
+        self.assertEqual(
+            sum(1 for s in nuevos if s.upper().startswith("UPDATE VENCIMIENTOS")), 1
+        )
+        self.assertEqual(sum(1 for s in nuevos if "INSERT INTO tareas_historial" in s), 1)
+        n1 = len(self.cur.statements)
+        otra = ts.completar_tarea(self.cur, t["id"], usuario_id=7)
+        self.assertEqual(otra["estado"], "Completada")
+        self.assertEqual(len(self.cur.statements) - n1, 1)
+        self.assertFalse(
+            any("information_schema" in s for s in self.cur.statements[n1:])
+        )
+
     def test_automatica_no_se_borra(self):
         t = ts.crear_tarea_desde_plazo(
             self.cur,
@@ -562,6 +600,13 @@ class TemplatesTareasTests(unittest.TestCase):
         self.assertIn("/tareas/nueva", detalle)
         self.assertNotIn("CRM de tareas", detalle)
 
+    def test_completar_deshabilita_boton_al_enviar(self):
+        tareas = (ROOT / "templates" / "tareas.html").read_text(encoding="utf-8")
+        detalle = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8")
+        for html in (tareas, detalle):
+            self.assertIn("Completando…", html)
+            self.assertIn("b.disabled=true", html)
+
     def test_migracion_idempotente(self):
         sql = (ROOT / "migrations" / "20261118_asignador_tareas.sql").read_text(encoding="utf-8")
         self.assertIn("CREATE TABLE IF NOT EXISTS tareas", sql)
@@ -578,6 +623,16 @@ class PermisosTareasTests(unittest.TestCase):
 
         ph = permisos.permisos_de_perfil(permisos.PERFIL_CLIENTE_PH)
         self.assertTrue(permisos.denegar_acceso(ph, "GET", "/tareas"))
+
+    def test_handler_completar_es_corto_sin_sync_rama(self):
+        src = (ROOT / "tareas_router.py").read_text(encoding="utf-8")
+        bloque = src.split("@router.post(\"/tareas/{tarea_id}/completar\")", 1)[1]
+        bloque = bloque.split("@router.post", 1)[0]
+        self.assertIn("ts.completar_tarea(", bloque)
+        self.assertIn("status_code=303", src)
+        self.assertNotIn("sync_rama", bloque)
+        self.assertNotIn("procesar_pendientes", bloque)
+        self.assertNotIn("obtener_carga_trabajo", bloque)
 
 
 if __name__ == "__main__":
