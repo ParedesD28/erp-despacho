@@ -481,3 +481,42 @@ def generar_informe_ejecutivo_excel(conn):
         wb.properties.description = "Incluye expediente, actuaciones, gestiones CRM, contactos e inmuebles."
     output.seek(0)
     return output
+
+
+_DESVIACIONES_HEADERS = [
+    "radicado_interno",
+    "radicado_rama",
+    "etapa_actual",
+    "codigo_plazo",
+    "etapa_asociada",
+    "responsable",
+    "duenio",
+    "fecha_actuacion",
+    "fin_termino_esperado",
+    "fin_termino_real",
+    "desviacion_dias",
+    "desviacion_atribuible",
+    "justificacion",
+    "estado",
+]
+
+
+def generar_informe_desviaciones_excel(conn):
+    """Excel de plazos / desviaciones (Parte = Abogado, Juzgado = Despacho)."""
+    import desviaciones_procesales_service as dps
+
+    with conn.cursor() as cur:
+        filas = dps.listar_desviaciones_informe(cur)
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        pd.DataFrame(filas, columns=_DESVIACIONES_HEADERS).to_excel(
+            writer, index=False, sheet_name="Desviaciones"
+        )
+        wb = writer.book
+        _estilizar_workbook(wb)
+        wb.properties.title = "Informe de plazos y desviaciones"
+        wb.properties.subject = "Reloj Despacho vs Abogado y desviación de términos"
+        wb.properties.creator = "Gestión Judicial"
+    output.seek(0)
+    return output

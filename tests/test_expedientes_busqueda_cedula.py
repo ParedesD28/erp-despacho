@@ -163,10 +163,10 @@ class ExpedientesCargaIdentificacionesTests(unittest.TestCase):
         self.assertEqual(lista[0]["demandante_identificacion"], "800123456-1")
         self.assertEqual(lista[0]["demandado_identificacion"], "1.090.876.543")
 
-        sql = cur.execute.call_args[0][0]
-        self.assertIn("demandante_identificacion", sql)
-        self.assertIn("demandado_identificacion", sql)
-        self.assertIn("c.identificacion", sql)
+        sqls = " ".join(str(c[0][0]) for c in cur.execute.call_args_list)
+        self.assertIn("demandante_identificacion", sqls)
+        self.assertIn("demandado_identificacion", sqls)
+        self.assertIn("c.identificacion", sqls)
 
 
 if __name__ == "__main__":

@@ -20,9 +20,10 @@ _COLS = {
 class FakeCursor:
     """Cursor mínimo en memoria para procesos/actuaciones."""
 
-    def __init__(self, tipo_cartera="JURIDICO", etapa_actual=None, actuaciones=None):
+    def __init__(self, tipo_cartera="JURIDICO", etapa_actual=None, actuaciones=None, actuaciones_proceso=None):
         self.proceso = {"tipo_cartera": tipo_cartera, "etapa_actual": etapa_actual}
         self.actuaciones = list(actuaciones or [])
+        self.actuaciones_proceso = list(actuaciones_proceso or [])
         self._next = 1
         self._res = []
         self.rowcount = 0
@@ -31,12 +32,17 @@ class FakeCursor:
     def execute(self, sql, params=None):
         s = " ".join(sql.split())
         self._res = []
+        if "information_schema" in s:
+            self._res = []
+            return
         if s.startswith("SELECT tipo_cartera"):
             self._res = [(self.proceso["tipo_cartera"],)]
         elif "FOR UPDATE" in s:
             self._res = [(1,)]
         elif s.startswith("SELECT etapa FROM actuaciones"):
             self._res = [(a["etapa"],) for a in self.actuaciones]
+        elif s.startswith("SELECT etapa_asociada FROM actuaciones_proceso"):
+            self._res = [(a.get("etapa_asociada"),) for a in self.actuaciones_proceso]
         elif s.startswith("UPDATE procesos SET etapa_actual"):
             if self.proceso["etapa_actual"] != params[0]:
                 self.proceso["etapa_actual"] = params[0]
@@ -109,7 +115,7 @@ class ServicioSincronizacionTests(unittest.TestCase):
     def setUp(self):
         for target, new in (
             ("expedientes_service._cols", lambda cur, table: set(_COLS[table])),
-            ("expedientes_service._table_exists", lambda cur, table: True),
+            ("expedientes_service._table_exists", lambda cur, table: table in _COLS),
         ):
             p = patch(target, new)
             p.start()
@@ -165,6 +171,16 @@ class ServicioSincronizacionTests(unittest.TestCase):
         cur = FakeCursor(tipo_cartera="PREJURIDICO", etapa_actual=None)
         self.registrar(cur, E3)
         self.assertIsNone(cur.proceso["etapa_actual"])
+
+    def test_ranking_unificado_rama_gana_por_rango(self):
+        _COLS["actuaciones_proceso"] = {"id", "radicado_interno", "etapa_asociada"}
+        self.addCleanup(_COLS.pop, "actuaciones_proceso", None)
+        cur = FakeCursor(
+            etapa_actual=E1,
+            actuaciones_proceso=[{"etapa_asociada": E5}],
+        )
+        self.registrar(cur, E3)
+        self.assertEqual(cur.proceso["etapa_actual"], E5)
 
     def test_eliminar_recalcula(self):
         cur = FakeCursor(etapa_actual=E1)
