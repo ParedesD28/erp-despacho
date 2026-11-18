@@ -732,15 +732,33 @@ def listar_mis_tareas(
     return agrupar_por_vencimiento(filas, hoy=hoy)
 
 
-def listar_tareas_proceso(cur, radicado: str) -> list[dict]:
+def es_tarea_abierta(tarea: Any) -> bool:
+    return str((tarea or {}).get("estado") or "") in ESTADOS_ABIERTOS
+
+
+def filtrar_tareas_abiertas(tareas: Optional[Iterable[dict]]) -> list[dict]:
+    """Pendiente / En progreso / Bloqueada. Completada y Cancelada quedan fuera."""
+    return [t for t in (tareas or []) if es_tarea_abierta(t)]
+
+
+def listar_tareas_proceso(
+    cur, radicado: str, *, incluir_cerradas: bool = False
+) -> list[dict]:
+    """Tareas del expediente. Por defecto solo abiertas (bloque Tareas).
+
+    Pase incluir_cerradas=True para pegar Completadas en la Memoria.
+    """
     if not radicado or not _table_exists(cur, "tareas"):
         return []
     join = _table_exists(cur, "abogados")
     base = _select_tareas_join() if join else _select_tareas_plain()
+    filtro = "WHERE t.radicado_interno=%s"
+    if not incluir_cerradas:
+        filtro += f" AND {_sql_abierta('t')}"
     cur.execute(
         f"""
         {base}
-        WHERE t.radicado_interno=%s
+        {filtro}
         ORDER BY
             CASE WHEN t.estado IN ('Pendiente','En progreso','Bloqueada') THEN 0 ELSE 1 END,
             CASE t.prioridad

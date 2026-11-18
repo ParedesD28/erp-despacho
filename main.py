@@ -1127,11 +1127,14 @@ def detalle_expediente(request: Request, radicado: str):
                 try:
                     import tareas_service as _tareas_svc
 
-                    tareas_proceso = _tareas_svc.listar_tareas_proceso(cur, radicado)
+                    todas_tareas = _tareas_svc.listar_tareas_proceso(
+                        cur, radicado, incluir_cerradas=True
+                    )
+                    tareas_proceso = _tareas_svc.filtrar_tareas_abiertas(todas_tareas)
                     usuarios_tareas = _tareas_svc.listar_usuarios_asignables(cur)
                     eventos_tl = timeline.get("eventos") or actuaciones
                     _tareas_svc.adjuntar_tareas_completadas_a_timeline(
-                        eventos_tl, tareas_proceso
+                        eventos_tl, todas_tareas
                     )
                 except Exception as exc:
                     print(f"[EXPEDIENTE] tareas {radicado}: {exc!r}", flush=True)
