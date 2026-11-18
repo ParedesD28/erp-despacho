@@ -24,7 +24,7 @@ class PermisosUnitTests(unittest.TestCase):
     def test_perfiles_humanos_completos(self):
         self.assertEqual(
             set(permisos.PERFILES_HUMANOS),
-            {"ADMIN", "ABOGADO", "AUXILIAR_COBRO", "CONSULTA", "CLIENTE_PH"},
+            {"ADMIN", "ABOGADO", "AUXILIAR_COBRO", "CONSULTA", "CLIENTE", "CLIENTE_PH"},
         )
 
     def test_admin_tiene_todo_incluido_usuarios(self):
@@ -59,6 +59,15 @@ class PermisosUnitTests(unittest.TestCase):
         self.assertNotIn(permisos.ACCION_EDITAR, p)
         self.assertNotIn(permisos.ACCION_BORRAR, p)
 
+    def test_cliente_solo_ve_expediente(self):
+        p = permisos.permisos_de_perfil(permisos.PERFIL_CLIENTE)
+        self.assertEqual(p, frozenset({permisos.NAV_EXPEDIENTE_VER}))
+        self.assertTrue(permisos.es_perfil_cliente(permisos.PERFIL_CLIENTE))
+        self.assertTrue(permisos.es_perfil_cliente(permisos.PERFIL_CLIENTE_PH))
+        self.assertFalse(permisos.es_perfil_cliente(permisos.PERFIL_CONSULTA))
+        self.assertNotIn(permisos.ACCION_EDITAR, p)
+        self.assertNotIn(permisos.NAV_COBRO_CRM, p)
+
     def test_perfil_invalido_queda_bloqueado_no_admin(self):
         self.assertEqual(permisos.normalizar_perfil(" admin "), permisos.PERFIL_ADMIN)
         for valor in (None, "", "xyz", "SIN_ACCESO", "ADMIN;"):
@@ -78,6 +87,17 @@ class PermisosUnitTests(unittest.TestCase):
         self.assertFalse(permisos.denegar_acceso(consulta, "GET", "/tareas"))
         self.assertTrue(permisos.denegar_acceso(consulta, "POST", "/tareas/nueva"))
         self.assertTrue(permisos.denegar_acceso(consulta, "POST", "/crm"))
+
+        cliente = permisos.permisos_de_perfil(permisos.PERFIL_CLIENTE)
+        self.assertFalse(permisos.denegar_acceso(cliente, "GET", "/expediente/EXP-0003"))
+        self.assertFalse(permisos.denegar_acceso(cliente, "GET", "/expedientes"))
+        self.assertTrue(permisos.denegar_acceso(cliente, "GET", "/tareas"))
+        self.assertTrue(permisos.denegar_acceso(cliente, "GET", "/crm"))
+        self.assertTrue(permisos.denegar_acceso(cliente, "POST", "/actuacion/nueva"))
+        self.assertTrue(permisos.denegar_acceso(cliente, "POST", "/actuacion/editar"))
+        self.assertTrue(permisos.denegar_acceso(cliente, "POST", "/actuacion/eliminar"))
+        self.assertTrue(permisos.denegar_acceso(cliente, "POST", "/tareas/1/completar"))
+        self.assertTrue(permisos.denegar_acceso(cliente, "POST", "/expediente/estado"))
 
         auxiliar = permisos.permisos_de_perfil(permisos.PERFIL_AUXILIAR)
         self.assertFalse(permisos.denegar_acceso(auxiliar, "GET", "/sms"))

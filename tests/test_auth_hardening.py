@@ -179,7 +179,12 @@ class MatrizPorPerfilTests(unittest.TestCase):
         self.assertTrue(self._permitido("CLIENTE_PH", "GET", "/portal-ph"))
         self.assertTrue(self._permitido("CLIENTE_PH", "GET", "/logout"))
         self.assertTrue(self._permitido("CLIENTE_PH", "GET", "/static/css/app.css"))
-        for m, p in _LECTURA_OPERATIVA + _ESCRITURA + _SOLO_ADMIN + [
+        self.assertTrue(self._permitido("CLIENTE_PH", "GET", "/expedientes"))
+        self.assertTrue(self._permitido("CLIENTE_PH", "GET", "/expediente/EXP-0001"))
+        lectura_sin_expediente = [
+            x for x in _LECTURA_OPERATIVA if x[1] not in ("/expedientes", "/expediente/EXP-0001")
+        ]
+        for m, p in lectura_sin_expediente + _ESCRITURA + _SOLO_ADMIN + [
             ("GET", "/sms"), ("GET", "/supervision-agente"), ("POST", "/portal-ph"),
         ]:
             self.assertFalse(self._permitido("CLIENTE_PH", m, p), (m, p))
