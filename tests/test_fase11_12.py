@@ -102,6 +102,9 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertLess(base.index('id="nav-cobro"'), base.index('href="/informes"'))
         self.assertGreater(base.index('href="/cartas-cobro"'), base.index('id="nav-cobro"'))
         self.assertLess(base.index('href="/cartas-cobro"'), base.index('href="/informes"'))
+        self.assertLess(base.index('href="/expedientes"'), base.index('href="/tareas"'))
+        self.assertLess(base.index('href="/tareas"'), base.index('id="nav-cobro"'))
+        self.assertIn(">Mis Tareas<", base)
 
     def test_sms_nav_incluye_dropdown_cobro(self):
         sms = (ROOT / "templates" / "sms_campanas.html").read_text(encoding="utf-8")
@@ -109,6 +112,7 @@ class Fase11ContractsTests(unittest.TestCase):
         self.assertIn('href="/crm"', sms)
         self.assertIn('href="/cartas-cobro"', sms)
         self.assertIn('href="/sms"', sms)
+        self.assertIn('href="/tareas"', sms)
     def test_detalle_expediente_no_referencia_campos_legacy(self):
         detalle = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8").lower()
         for token in ("id_cliente", "id_demandado", "proceso.demandante", "proceso.demandado"):

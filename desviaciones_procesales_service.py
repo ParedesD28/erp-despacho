@@ -17,7 +17,7 @@ from dbrows import first_value, names_set, rows_as_dicts
 from observability import log_msg
 import etapas_procesales as ep
 import plazos_procesales as pp
-from vencimientos_estado import ESTADO_PENDIENTE
+from vencimientos_estado import ESTADO_COMPLETADO, ESTADO_PENDIENTE
 
 # Semáforo del tramo abierto (no es ley procesal; solo pinta).
 _AMBAR_PARTE_DIAS = 5
@@ -416,6 +416,7 @@ def _procesar_actuacion(cur, actuacion_id: Any, *, hoy: date) -> Optional[dict]:
             actuacion_id=aid,
             titulo=(plazo.nombre if plazo else "Término procesal"),
             fecha=fin_esperado,
+            codigo_plazo=codigo,
         )
 
     return {
@@ -487,18 +488,29 @@ def _upsert_desviacion(
     )
 
 
-def _crear_vencimiento_si_aplica(cur, *, radicado: str, actuacion_id: int, titulo: str, fecha: date) -> None:
+def _crear_vencimiento_si_aplica(
+    cur,
+    *,
+    radicado: str,
+    actuacion_id: int,
+    titulo: str,
+    fecha: date,
+    codigo_plazo: Any = None,
+) -> Optional[int]:
+    """Upsert del vencimiento de la Parte y de la tarea abierta del plazo."""
     if not radicado or not _table_exists(cur, "vencimientos"):
-        return
+        return None
     cols = _cols(cur, "vencimientos")
     needed = {"radicado_interno", "titulo", "fecha_vencimiento", "estado"}
     if not needed.issubset(cols):
-        return
+        return None
     marca = f"{_MARCA_VENCIMIENTO}{actuacion_id}"
+    venc_id: Optional[int] = None
+    estado_actual = ESTADO_PENDIENTE
     if "observaciones" in cols:
         cur.execute(
-            f"""
-            SELECT id FROM vencimientos
+            """
+            SELECT id, estado FROM vencimientos
             WHERE radicado_interno=%s
               AND observaciones LIKE %s
               AND COALESCE(anulado, FALSE)=FALSE
@@ -506,24 +518,60 @@ def _crear_vencimiento_si_aplica(cur, *, radicado: str, actuacion_id: int, titul
             """,
             (radicado, f"%{marca}%"),
         )
-        if cur.fetchone():
-            return
-    payload = {
-        "radicado_interno": radicado,
-        "titulo": (titulo or "Término procesal")[:200],
-        "fecha_vencimiento": fecha.isoformat(),
-        "estado": ESTADO_PENDIENTE,
-        "observaciones": marca,
-        "tipo": "PROCESAL",
-        "categoria": "TERMINO",
-        "anulado": False,
-        "valor": 0,
-    }
-    use = [c for c in payload if c in cols]
-    cur.execute(
-        f"INSERT INTO vencimientos ({', '.join(use)}) VALUES ({', '.join(['%s'] * len(use))})",
-        [payload[c] for c in use],
-    )
+        row = cur.fetchone()
+        if row:
+            if isinstance(row, dict):
+                venc_id = int(row.get("id"))
+                estado_actual = str(row.get("estado") or ESTADO_PENDIENTE)
+            else:
+                venc_id = int(row[0])
+                estado_actual = str(row[1] if len(row) > 1 and row[1] else ESTADO_PENDIENTE)
+            if str(estado_actual).strip().upper() != ESTADO_COMPLETADO.upper():
+                cur.execute(
+                    "UPDATE vencimientos SET fecha_vencimiento=%s, titulo=%s WHERE id=%s",
+                    (fecha.isoformat(), (titulo or "Término procesal")[:200], venc_id),
+                )
+    if venc_id is None:
+        payload = {
+            "radicado_interno": radicado,
+            "titulo": (titulo or "Término procesal")[:200],
+            "fecha_vencimiento": fecha.isoformat(),
+            "estado": ESTADO_PENDIENTE,
+            "observaciones": marca,
+            "tipo": "PROCESAL",
+            "categoria": "TERMINO",
+            "anulado": False,
+            "valor": 0,
+        }
+        use = [c for c in payload if c in cols]
+        cur.execute(
+            f"INSERT INTO vencimientos ({', '.join(use)}) VALUES ({', '.join(['%s'] * len(use))}) RETURNING id",
+            [payload[c] for c in use],
+        )
+        got = cur.fetchone()
+        if got:
+            venc_id = int(first_value(got, "id"))
+        estado_actual = ESTADO_PENDIENTE
+
+    if venc_id is not None and str(estado_actual or "").strip().upper() != ESTADO_COMPLETADO.upper():
+        try:
+            import tareas_service
+
+            tareas_service.crear_tarea_desde_plazo(
+                cur,
+                radicado=radicado,
+                actuacion_id=actuacion_id,
+                vencimiento_id=venc_id,
+                titulo=titulo or "Término procesal",
+                fecha=fecha,
+                codigo_plazo=codigo_plazo,
+            )
+        except Exception as exc:
+            log_msg(
+                "⚠️ [TAREAS]",
+                f"Hook plazo→tarea falló actuacion={actuacion_id}: {type(exc).__name__}: {exc}",
+            )
+    return venc_id
 
 
 def dual_write_manual(

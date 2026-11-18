@@ -72,6 +72,8 @@ class PermisosUnitTests(unittest.TestCase):
         self.assertTrue(permisos.denegar_acceso(consulta, "GET", "/admin/usuarios"))
         self.assertTrue(permisos.denegar_acceso(consulta, "GET", "/supervision-agente"))
         self.assertFalse(permisos.denegar_acceso(consulta, "GET", "/informes"))
+        self.assertFalse(permisos.denegar_acceso(consulta, "GET", "/tareas"))
+        self.assertTrue(permisos.denegar_acceso(consulta, "POST", "/tareas/nueva"))
         self.assertTrue(permisos.denegar_acceso(consulta, "POST", "/crm"))
 
         auxiliar = permisos.permisos_de_perfil(permisos.PERFIL_AUXILIAR)
@@ -80,9 +82,14 @@ class PermisosUnitTests(unittest.TestCase):
         self.assertTrue(permisos.denegar_acceso(auxiliar, "GET", "/supervision-agente"))
         self.assertTrue(permisos.denegar_acceso(auxiliar, "GET", "/admin/usuarios"))
 
+        abogado = permisos.permisos_de_perfil(permisos.PERFIL_ABOGADO)
+        self.assertFalse(permisos.denegar_acceso(abogado, "GET", "/tareas"))
+        self.assertFalse(permisos.denegar_acceso(abogado, "POST", "/tareas/nueva"))
+
         admin = permisos.permisos_de_perfil(permisos.PERFIL_ADMIN)
         self.assertFalse(permisos.denegar_acceso(admin, "GET", "/admin/usuarios"))
         self.assertFalse(permisos.denegar_acceso(admin, "POST", "/acuerdos/eliminar"))
+        self.assertFalse(permisos.denegar_acceso(admin, "POST", "/tareas/1/completar"))
 
 
 class UsuariosServiceLogicTests(unittest.TestCase):

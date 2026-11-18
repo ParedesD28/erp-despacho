@@ -211,7 +211,16 @@ class _MemCursor:
         elif "FROM vencimientos" in s and "SELECT id" in s:
             marca = str(params[1]) if params and len(params) > 1 else ""
             hits = [v for v in self.vencimientos if marca.strip("%") in str(v.get("observaciones") or "")]
-            self._res = [(v["id"],) for v in hits][:1]
+            self._res = [(v["id"], v.get("estado") or "Pendiente") for v in hits][:1]
+        elif s.startswith("UPDATE vencimientos"):
+            vid = params[-1] if params else None
+            for v in self.vencimientos:
+                if v.get("id") == vid:
+                    if "fecha_vencimiento" in s:
+                        v["fecha_vencimiento"] = params[0]
+                    if "titulo" in s and len(params) > 1:
+                        v["titulo"] = params[1]
+                    break
         elif s.startswith("INSERT INTO vencimientos"):
             vid = len(self.vencimientos) + 1
             cols = [c.strip() for c in s.split("(", 1)[1].split(")", 1)[0].split(",")]

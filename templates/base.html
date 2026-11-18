@@ -32,6 +32,7 @@
  {% endif %}
  {% if 'nav.expedientes' in perms or perms|length == 0 %}
  <a href="/expedientes" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if '/expedientes' in path %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="folder-open" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Expedientes</span></a>
+ <a href="/tareas" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if path == '/tareas' or path.startswith('/tareas/') %}bg-blue-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="check-square" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Mis Tareas</span></a>
  {% endif %}
  {% if 'nav.portal_ph' in perms %}
  <a href="/portal-ph" class="relative z-30 flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap {% if path.startswith('/portal-ph') %}bg-teal-600 text-white shadow-md{% else %}hover:bg-slate-800 hover:text-white{% endif %}"><i data-lucide="building" class="w-5 h-5 flex-shrink-0"></i><span class="ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">Unidades PH</span></a>
