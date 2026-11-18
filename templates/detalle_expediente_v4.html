@@ -65,6 +65,7 @@
   {% endif %}
 
   {% set lista_tareas = tareas_proceso if tareas_proceso is defined else [] %}
+  {% set lista_tareas = lista_tareas | rejectattr('estado', 'equalto', 'Completada') | rejectattr('estado', 'equalto', 'Cancelada') | list %}
   {% set asignables = usuarios_tareas if usuarios_tareas is defined else (abogados if abogados is defined else []) %}
   {% set perms_exp = request.state.permisos if request is defined and request.state is defined and request.state.permisos is defined else [] %}
   {% set puede_editar_tareas = 'accion.editar' in perms_exp %}
@@ -126,7 +127,7 @@
       {% endfor %}
     </ul>
     {% else %}
-    <p class="text-sm text-slate-500">Aún no hay tareas en este expediente.</p>
+    <p class="text-sm text-slate-500">No hay tareas pendientes.</p>
     {% endif %}
   </section>
 

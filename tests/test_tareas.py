@@ -243,7 +243,8 @@ class _Cur:
                 item["asignado_nombre"] = aa
                 item["creador_nombre"] = ac
                 rows.append(item)
-            if "t.estado IN ('Pendiente', 'En progreso', 'Bloqueada')" in s:
+            where_sql = s.split("ORDER BY", 1)[0] if "ORDER BY" in s.upper() else s
+            if "t.estado IN ('Pendiente', 'En progreso', 'Bloqueada')" in where_sql:
                 rows = [r for r in rows if r.get("estado") in ts.ESTADOS_ABIERTOS]
             keys = COLS["tareas"] + ["asignado_nombre", "creador_nombre"]
             self._res = [tuple(r.get(k) for k in keys) for r in rows]
@@ -498,6 +499,59 @@ class TareasServicioTests(unittest.TestCase):
         carga = ts.obtener_carga_trabajo(self.cur)
         self.assertTrue(any(c["id"] == 7 and c["abiertas"] >= 1 for c in carga))
 
+    def test_listar_proceso_muestra_pendientes_oculta_completadas(self):
+        pendiente = ts.crear_tarea_manual(
+            self.cur,
+            titulo="Contestar traslado",
+            asignado_a=7,
+            radicado_interno="EXP-0089",
+        )
+        en_curso = ts.crear_tarea_manual(
+            self.cur,
+            titulo="Revisar expediente",
+            asignado_a=7,
+            radicado_interno="EXP-0089",
+        )
+        ts.cambiar_estado(self.cur, en_curso["id"], estado="En progreso")
+        hecha = ts.crear_tarea_manual(
+            self.cur,
+            titulo="Gestión de medidas cautelares",
+            asignado_a=7,
+            radicado_interno="EXP-0089",
+        )
+        ts.completar_tarea(self.cur, hecha["id"])
+        cancelada = ts.crear_tarea_manual(
+            self.cur,
+            titulo="Liquidación del crédito / costas",
+            asignado_a=8,
+            radicado_interno="EXP-0089",
+        )
+        ts.cambiar_estado(self.cur, cancelada["id"], estado="Cancelada")
+        otra = ts.crear_tarea_manual(
+            self.cur, titulo="De otro expediente", asignado_a=7, radicado_interno="EXP-1"
+        )
+
+        lista = ts.listar_tareas_proceso(self.cur, "EXP-0089")
+        titulos = [t["titulo"] for t in lista]
+        self.assertEqual(set(titulos), {"Revisar expediente", "Contestar traslado"})
+        self.assertTrue(all(ts.es_tarea_abierta(t) for t in lista))
+        self.assertNotIn("Gestión de medidas cautelares", titulos)
+        self.assertNotIn("Liquidación del crédito / costas", titulos)
+        self.assertNotIn("De otro expediente", titulos)
+        self.assertNotIn(hecha["id"], [t["id"] for t in lista])
+        self.assertIn(pendiente["id"], [t["id"] for t in lista])
+
+        todas = ts.listar_tareas_proceso(
+            self.cur, "EXP-0089", incluir_cerradas=True
+        )
+        titulos_todas = [t["titulo"] for t in todas]
+        self.assertIn("Gestión de medidas cautelares", titulos_todas)
+        self.assertEqual(
+            [t["titulo"] for t in ts.filtrar_tareas_abiertas(todas)],
+            titulos,
+        )
+        self.assertEqual(otra["radicado_interno"], "EXP-1")
+
 
 def _as_date(value):
     if isinstance(value, date) and not isinstance(value, type(date.min)):
@@ -739,6 +793,101 @@ class TemplatesTareasTests(unittest.TestCase):
         self.assertIn(">Tareas<", detalle)
         self.assertIn("/tareas/nueva", detalle)
         self.assertNotIn("CRM de tareas", detalle)
+
+    def test_expediente_tareas_muestra_pendientes_oculta_completadas(self):
+        detalle = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8")
+        start = detalle.index("{% set lista_tareas = tareas_proceso")
+        end = detalle.index("{% if obligacion_principal %}", start)
+        bloque = detalle[start:end]
+        self.assertIn("rejectattr('estado', 'equalto', 'Completada')", bloque)
+        self.assertIn("rejectattr('estado', 'equalto', 'Cancelada')", bloque)
+
+        class _Proc:
+            radicado_interno = "EXP-0089"
+            abogado_id = 7
+
+        class _Req:
+            class state:
+                permisos = []
+
+        tareas = [
+            {
+                "id": 1,
+                "titulo": "Contestar traslado",
+                "estado": "Pendiente",
+                "prioridad": "Alta",
+                "asignado_nombre": "Ana",
+                "asignado_a": 7,
+                "fecha_vencimiento": "2026-03-20",
+                "origen": "manual",
+                "es_automatica": False,
+                "descripcion": "",
+            },
+            {
+                "id": 2,
+                "titulo": "Gestión de medidas cautelares",
+                "estado": "Completada",
+                "prioridad": "Alta",
+                "asignado_nombre": "Ana",
+                "asignado_a": 7,
+                "fecha_vencimiento": "2025-11-04",
+                "origen": "plazo",
+                "es_automatica": True,
+                "descripcion": "",
+            },
+            {
+                "id": 3,
+                "titulo": "Liquidación del crédito / costas",
+                "estado": "Completada",
+                "prioridad": "Media",
+                "asignado_nombre": "Luis",
+                "asignado_a": 8,
+                "fecha_vencimiento": "2026-01-15",
+                "origen": "plazo",
+                "es_automatica": True,
+                "descripcion": "",
+            },
+            {
+                "id": 4,
+                "titulo": "Revisar expediente",
+                "estado": "En progreso",
+                "prioridad": "Media",
+                "asignado_nombre": "Ana",
+                "asignado_a": 7,
+                "fecha_vencimiento": None,
+                "origen": "manual",
+                "es_automatica": False,
+                "descripcion": "",
+            },
+        ]
+        html = Environment().from_string(bloque).render(
+            tareas_proceso=tareas,
+            usuarios_tareas=[],
+            request=_Req(),
+            proceso=_Proc(),
+        )
+        self.assertIn("Contestar traslado", html)
+        self.assertIn("Revisar expediente", html)
+        self.assertNotIn("Gestión de medidas cautelares", html)
+        self.assertNotIn("Liquidación del crédito / costas", html)
+        self.assertNotIn("Completada", html)
+        self.assertIn("Pendiente", html)
+        self.assertIn("En progreso", html)
+
+        vacio = Environment().from_string(bloque).render(
+            tareas_proceso=[tareas[1], tareas[2]],
+            usuarios_tareas=[],
+            request=_Req(),
+            proceso=_Proc(),
+        )
+        self.assertIn("No hay tareas pendientes.", vacio)
+        self.assertNotIn("Gestión de medidas cautelares", vacio)
+
+        src = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("incluir_cerradas=True", src)
+        self.assertIn("filtrar_tareas_abiertas", src)
+        self.assertIn("adjuntar_tareas_completadas_a_timeline", src)
+        self.assertIn("todas_tareas", src)
 
     def test_memoria_tiene_chips_hechas_fuera_de_reloj_y_crm(self):
         detalle = (ROOT / "templates" / "detalle_expediente_v4.html").read_text(encoding="utf-8")
